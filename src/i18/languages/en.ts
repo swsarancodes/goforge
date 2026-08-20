@@ -1,0 +1,343 @@
+import { Language } from "../types";
+
+
+export const en = {
+
+    translation: {
+        sidebar: {
+            tables: "Tables",
+            relationships: "Relationships",
+            database: "Database",
+            documentation: "Docs"
+        },
+
+        color_picker: {
+            default_color: "Default color"
+        },
+        navbar: {
+            rename_db: "Rename database",
+            search: "Search",
+
+            command: "Type a command or search...",
+        },
+        db_controller: {
+            filter: "Filter",
+            add_table: "Add Table",
+            add_field: "Add Field",
+            add_index: "Add Index",
+            delete_table: "Delete Table",
+            duplicate: "Duplicate",
+            add_relationship: "Add Relationship",
+            show_code: "Show code",
+            fields: "Fields",
+            indexes: "Indexes",
+            note: "Note",
+            name: "Name",
+            type: "Type",
+            nullable: "Nullable",
+            select_fields: "Select fields",
+            unique: "Unique",
+            table_note: "Table note",
+            collapse: "Collapse All",
+            primary_key: "Primary Key",
+            foreign_key: "Foreign Key",
+
+            source_table: "Source Table",
+            referenced_table: "Referenced Table",
+
+            required: "Required",
+            select_table: "Select table",
+            select_field: "Select field",
+
+            empty_list: {
+                no_tables: "No Tables",
+                no_tables_description: "Create a Table to get started.",
+
+                no_relationships: "No Relationships",
+                no_relationships_description: "Create relationships to connect two tables"
+            },
+
+            cardinality: {
+                name: "Cardinality",
+                one_to_one: "One to One",
+                one_to_many: "One to Many",
+                many_to_one: "Many to One",
+                many_to_many: "Many to Many",
+
+            },
+            foreign_key_actions: {
+                title: "Foreign key Actions",
+                on_delete: "On Delete",
+                on_update: "On Update",
+                actions: {
+                    no_action: "No Action",
+                    cascade: "Cascade",
+                    set_null: "Set Null",
+                    set_default: "Set Default",
+                    restrict: "Restrict"
+                }
+            },
+            field_settings: {
+                title: "Field Setting",
+                unique: "Unique",
+                unsigned: "Unsigned",
+                numeric_setting: "Numeric Setting",
+                decimal_setting: "Decimal Setting",
+                zeroFill: "Zero Fill",
+                autoIncrement: "Auto Increment",
+                note: "Note",
+
+                delete_field: "Delete Field",
+                field_note: "Field note",
+                precision: "Precision",
+                text_setting: "Text Setting",
+                charset: "Charset",
+                collation: "Collation",
+                scale: "Scale",
+                max_length: "Max length",
+                integer_width: "Integer Width",
+                width: "width",
+                default_value: "Default value",
+                value: "Value",
+                length: "Length",
+                values: "Values",
+                type_enter: "Type and press enter",
+                precision_def: "Total digits allowed (before + after the decimal).",
+                scale_def: "Digits allowed after the decimal.",
+                no_default: "No Default value",
+                random_uuid: "Random UUID",
+                time_default_value: {
+                    no_value: "No value",
+                    custom: "Custom time",
+                    now: "Now"
+                },
+                errors: {
+                    max_length: "must be positive number, no decimals.",
+                    integer_default_value: "Invalid default value for Integer",
+                    precision: "Precision must be positive number, no decimals.",
+                    scale: "Scale must be positive number, no decimals.",
+                    scale_max_value: "Scale must be ≤ precision."
+
+                },
+                pick_value: "Pick value"
+            },
+            delete: "Delete",
+
+            index_setting: "Index Setting",
+            table_actions: "Table Actions",
+            actions: "Actions",
+            delete_index: "Delete Index",
+            index_name: "Index name",
+            create_relationship: "Create Relationship",
+            relationship_error: "To create a relationship, the primary key and foreign key must be of the same type.",
+
+            invalid_relationship: {
+                title: "Invalid Relationship",
+                description: "The source key type does not match the referenced key type. Please ensure both keys have the same data type."
+            },
+            circular_dependency: {
+                title: "Circular Dependency Detected",
+                toast_description: "A circular reference between tables was found. Check the diagram on the left and remove one of the relationships to fix it.",
+                description: "Your schema contains a circular foreign key relationship between tables. To fix it",
+                suggestion: "remove one of the relationships listed below that are causing the cycle.",
+                remove_relationship: "Remove relationship"
+            }
+        },
+        table: {
+            double_click: "Double click to edit",
+            overlapping_tables: "Overlapping Tables",
+            show_more: "Show more",
+            show_less: "Show less"
+        },
+        control_buttons: {
+            redo: "Redo",
+            undo: "Undo",
+            zoom_in: "Zoom In",
+            zoom_out: "Zoom Out",
+            adjust_positions: "Adjust Positions",
+            show_all: "Show all"
+        },
+        menu: {
+            file: "File",
+            new: "New",
+            open: "Open",
+            save: "Save",
+            import: "Import",
+            json: ".json",
+            dbml: ".dbml",
+            mysql: "MySql",
+            postgresql: "Postgresql",
+            export_sql: "Export SQL",
+            generic: "Generic",
+            export_orm_models: "Export ORM Models",
+            connect_live_database: "Connect Live Database",
+            push_live_changes: "Push Changes to Live Database",
+            delete_project: "Delete Project",
+            edit: "Edit",
+            undo: "Undo",
+            redo: "Redo",
+            clear: "Clear",
+            view: "View",
+            hide_controller: "Hide Controller",
+            show_controller: "Show Controller",
+            cardinality_style: "Cardinality style",
+            hidden: "Hidden",
+            numeric: "Numeric",
+            symbolic: "Symbolic",
+            theme: "Theme",
+            light: "Light",
+            dark: "Dark",
+
+            system: "System",
+            help: "Help",
+            show_docs: "Show Docs",
+            join_discord: "Join Discord",
+        },
+
+        modals: {
+            close: "Close",
+            create: "Create",
+            save: "Save",
+            back: "Back",
+            loading: "Loading...",
+            pick_database: "Pick your Database.",
+            create_database_header: "Every database offers distinct features and functionalities.",
+            db_name: "Database name",
+            db_name_error: "Please provide a Database name",
+            continue: "Continue",
+            open: "Open",
+            open_database: "Open Database",
+            open_database_header: "Open a database by selecting one from the list.",
+            delete_database: "Delete Database",
+            delete_database_content: "This action is irreversible and will permanently remove the diagram.",
+            delete: "Delete",
+            empty_diagram: "Empty diagram",
+            create_and_import: "Create and import",
+            import_database: {
+                title: "Import your Database",
+                import: "Import",
+                view_docs: "View Docs",
+                import_options: "Would you like to import using :",
+                import_error: "SQL Parsing Error",
+                import_error_description: "We couldn't import your SQL because it contains invalid syntax.",
+                import_warning: "SQL Parsing Warning",
+                import_warning_description: "Some elements couldn't be processed due to unsupported or incomplete declarations.",
+            },
+            open_database_table: {
+                dialect: "Dialect",
+                name: "Name",
+                created_at: "Created at",
+                tables: "Tables"
+            },
+            export_sql: "Export SQL",
+            export_sql_header: "Export your database diagram in SQL Code",
+            connect_live_database: {
+                title: "Connect to a Live Database",
+                new_title: "New Connection",
+                description: "Connect to a real PostgreSQL database to load its schema onto the canvas and push changes back to it.",
+                test: "Test",
+                add_connection: "+ Add Connection",
+                no_connections: "No saved connections yet.",
+                name: "Connection name",
+                host: "Host",
+                port: "Port",
+                username: "Username",
+                password: "Password",
+                database: "Database name",
+                ssl_mode: "SSL Mode",
+                form_error: "Please fill in all required fields.",
+            },
+            push_live_changes: {
+                title: "Push Changes to Live Database",
+                description: "Review the SQL that will run against the connected database before applying it.",
+                preview_loading: "Generating SQL diff...",
+                no_changes: "No schema changes detected - the live database already matches the canvas.",
+                validating: "Validating against the live database...",
+                valid: "This SQL was validated against the live database (dry-run, no changes made yet).",
+                invalid: "This SQL failed validation against the live database:",
+                apply: "Run Against Live Database",
+                applying: "Applying...",
+                success: "Changes applied successfully.",
+            },
+        },
+        clipboard: {
+            copy: "Copy",
+            copied: "Copied"
+        },
+
+        connection_status: {
+            online: "Online",
+            offline: "Offline",
+            saving: "Saving",
+            saved: "Saved",
+            last_synced: "Last synced",
+            min_ago: "min ago",
+            hour_ago: "hour ago",
+            just_now: "Just now"
+        },
+        import: {
+            instructions: "Instructions",
+            install: "Install",
+            run_command: "Run the following command in your terminal.",
+            example: "Example",
+            copy_code: "Copy the content of .sql file in code section below.",
+            pg_admin: {
+                "step1": "Open <bold>Pg Admin</bold>.",
+                "step2": "Right-click your database and select <bold>Backup</bold> from the context menu.",
+                "step3": "Name your <code>.sql</code> file, set Format to <bold>Plain</bold>, and choose <bold>Encoding: UTF8.</bold>",
+                "step4": "Make sure <bold>Only schema</bold> is checked and <bold>Only data</bold> is unchecked in the <bold>Data Options tab</bold>.",
+                "step5": "Click <bold>Backup</bold> to export the file, then copy its content into the code editor section below."
+            },
+            workbench: {
+                "step1": "Open <bold>MySQL Workbench</bold> and <bold>connect</bold> to your MySQL server.",
+                "step2": "In the top menu, go to <bold>Server > Data Export</bold>.",
+                "step3": "In the <bold>Export Options</bold>, choose <bold>Dump Structure Only</bold>.",
+                "step4": "Check <bold>Export to Self-Contained File</bold>, then choose a location and enter a name for the output <code>.sql</code> file.",
+                "step5": "Click <bold>Start Export</bold> to begin the export process. Then, copy its content into the code editor section below."
+
+            },
+            heidisql: {
+                "step1": "<bold>Open HeidiSQL</bold> and connect to your server.",
+                "step2": "In the <bold>left sidebar, right-click</bold> on the database you want to export.",
+                "step3": "Choose <bold>Export database as SQL</bold> from the context menu.",
+                "step4": "Select <bold>No data</bold> and make sure <bold>Create</bold> is checked to export the table structure only.",
+                "step5": "Click the <bold>Export</bold> button, and finally copy the content of the <code>.sql</code> file into the <bold>code editor</bold> below."
+
+            },
+            dbbrowser: {
+                step1: "Launch <bold>DB Browser for SQLite</bold>.",
+                step2: "Click <bold>File > Open Database</bold> and select your <code>.sqlite</code> or <code>.db</code> file.",
+                step3: "Go to <bold>File > Export > Database to SQL file</bold> from the top menu.",
+                step4: "In the dialog, choose <bold>Export schema only</bold> and click <bold>Save</bold>.",
+                step5: "Finally, copy the contents of the <code>.sql</code> file into the <bold>code editor</bold> below."
+
+            },
+
+            ssms: {
+                "step1": "Open <bold>SQL Server Management Studio (SSMS)</bold>.",
+                "step2": "Right-click your database, then select <bold>Tasks → Generate Scripts</bold> from the context menu.",
+                "step3": "In the <bold>Choose Objects</bold> step, select <bold>Choose specific database objects</bold>, then check all tables.",
+                "step4": "In the <bold>Set Scripting Options</bold> step, select <bold>Save to file</bold> and choose where to save the <code>.sql</code> file.",
+                "step5": "Complete the wizard, then open the generated <code>.sql</code> file and copy its contents into the <bold>code editor</bold> below."
+            },
+            sqldeveloper: {
+                "step1": "Open <bold>Oracle SQL Developer</bold> and connect to your database.",
+                "step2": "From the top menu, go to <bold>Tools → Database Export</bold>.",
+                "step3": "In the export dialog, select your connection, then make sure only <bold>Pretty Print</bold> and <bold>Terminator</bold> are checked, and <bold>Export Data</bold> is unchecked to ensure schema-only export.",
+                "step4": "Choose where to save the export file, then continue to the next step.",
+                "step5": "Under <bold>Standard Object Types</bold>, check only <bold>Tables</bold>, <bold>Indexes</bold>, <bold>Constraints</bold>, and <bold>Referential Constraints</bold>. Leave all other options unchecked.",
+                "step6": "Complete the wizard, then open the generated <code>.sql</code> file and copy its contents into the <bold>code editor</bold> below."
+            }
+
+
+        }
+
+    }
+
+}
+
+export const enLanguage: Language = {
+    name: "English",
+    nativeName: 'English',
+    code: 'en',
+} 

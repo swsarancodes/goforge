@@ -1,0 +1,84 @@
+
+
+import { useCallback, useContext, useState } from "react"
+import { ModalContext, Modals } from "./modal-contxet"
+
+import CreateRelationshipModal from "@/features/database/modals/create-relationship-modal";
+import { CreateDatabaseModal } from "@/features/database/modals/create-database-modal";
+import OpenDatabaseModal from "@/features/database/modals/open-database-modal";
+import DeleteDatabaseModal from "@/features/database/modals/delete-database-modal";
+import ImportDatabaseModal from "@/features/database/modals/import-database";
+import ExportSqlModal from "@/features/database/modals/export-sql-modal";
+import ConnectLiveDatabaseModal from "@/features/database/modals/connect-live-database-modal";
+import PushLiveChangesModal from "@/features/database/modals/push-live-changes-modal";
+import { useDisclosure } from "@/hooks/use-disclosure";
+
+
+interface Props { children: React.ReactNode }
+interface CurrentModalProps {
+    modal: Modals,
+    props?: any,
+
+}
+
+export const ModalProvider: React.FC<Props> = ({ children }) => {
+
+    const [currentModal, setCurrentModal] = useState<CurrentModalProps | undefined>(undefined);
+    const { isOpen, onOpen, onClose } = useDisclosure();
+    const open = useCallback((modal: Modals, props?: any) => {
+ 
+        setCurrentModal({
+            modal,
+            props
+        });
+        onOpen();
+    }, []);
+
+    const onOpenChange = (isOpen: boolean) => {
+        if (!isOpen) {
+            onClose();
+            setCurrentModal(undefined);
+        }
+    }
+
+    return (
+        <ModalContext.Provider value={{
+            open
+        }}
+        >
+            {
+                currentModal ? (
+                    currentModal.modal == Modals.CREATE_RELATIONSHIP &&
+                    <CreateRelationshipModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    currentModal.modal == Modals.CREATE_DATABASE &&
+                    <CreateDatabaseModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    currentModal.modal == Modals.OPEN_DATABASE &&
+                    <OpenDatabaseModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    currentModal.modal == Modals.DELETE_DATABASE &&
+                    <DeleteDatabaseModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    (currentModal.modal == Modals.IMPORT_DATABASE ) &&
+                    <ImportDatabaseModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} /> 
+                     ||
+                    (currentModal.modal == Modals.EXPORT_SQL ) &&
+                    <ExportSqlModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    (currentModal.modal == Modals.CONNECT_LIVE_DATABASE ) &&
+                    <ConnectLiveDatabaseModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    (currentModal.modal == Modals.PUSH_LIVE_CHANGES ) &&
+                    <PushLiveChangesModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                ) : undefined
+
+}
+            {children}
+        </ModalContext.Provider>
+    )
+}
+
+
+export const useModal = () => useContext(ModalContext);
+
