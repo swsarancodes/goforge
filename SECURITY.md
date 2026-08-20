@@ -1,7 +1,7 @@
 # Security Policy
 
 ## Supported Versions
-We currently provide security updates for the latest stable release of StackRender.
+We currently provide security updates for the latest stable release of GoForge.
 
 | Version       | Supported          |
 | ------------- | ------------------ |
@@ -9,9 +9,8 @@ We currently provide security updates for the latest stable release of StackRend
 | Older         | ❌                 |
 
 ## Reporting a Vulnerability
-If you discover a security vulnerability in StackRender, please report it to us directly.
+If you discover a security vulnerability in GoForge, please report it to us directly.
 
-- Email: contact@stackrender.io  
 - GitHub Security Advisory: Use the "Report a vulnerability" option in the repository's Security tab.
 
 When reporting, please include:

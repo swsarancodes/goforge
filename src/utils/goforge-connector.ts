@@ -14,7 +14,7 @@ enum CheckpointMode {
 
 const USER_ID_STORAGE_KEY = 'ps_user_id';
 
-export class StackRenderConnector implements PowerSyncBackendConnector {
+export class GoForgeConnector implements PowerSyncBackendConnector {
     readonly config: DemoConfig;
     readonly userId: string;
 
@@ -52,9 +52,9 @@ export class StackRenderConnector implements PowerSyncBackendConnector {
     }
 
     async uploadData(database: AbstractPowerSyncDatabase): Promise<void> {
-        
+
         const transaction = await database.getNextCrudTransaction();
-         
+
         if (!transaction) {
             return;
         }
@@ -64,10 +64,10 @@ export class StackRenderConnector implements PowerSyncBackendConnector {
         }
 
         try {
- 
+
             let batch: any[] = [];
             for (let operation of transaction.crud) {
-    
+
                 if (operation.op != UpdateType.DELETE && Object.keys(operation.opData as any).length == 0)
                     continue
 
@@ -79,7 +79,7 @@ export class StackRenderConnector implements PowerSyncBackendConnector {
                 };
                 batch.push(payload);
             }
-        
+
             if (batch.length > 0) {
 
                 const response = await fetch(`${this.config.backendUrl}/api/data`, {
@@ -100,11 +100,11 @@ export class StackRenderConnector implements PowerSyncBackendConnector {
                     ? await this.getCheckpoint(this._clientId)
                     : undefined
             );
- 
+
             localStorage.setItem("last_upload_at", new Date().toISOString());
             window.dispatchEvent(new StorageEvent("storage", { key: "lastUploadAt"  }));
-    
-        } catch (ex: any) { 
+
+        } catch (ex: any) {
             throw ex;
         }
     }

@@ -3,8 +3,8 @@ import { PowerSyncDatabase } from '@powersync/web';
 import { PowerSyncContext, usePowerSync } from "@powersync/react";
 import { createContext, Suspense, useContext, useEffect, useState } from 'react';
 import { AppSchema, drizzleSchema } from '@/lib/schemas/app-schema';
-import { StackRenderConnector } from '@/utils/stackrender-connector';
- 
+import { GoForgeConnector } from '@/utils/goforge-connector';
+
 import { PowerSyncSQLiteDatabase, wrapPowerSyncWithDrizzle } from '@powersync/drizzle-driver';
 import { seedDataTypes } from '@/lib/data_types/seed_datatypes';
 
@@ -12,7 +12,7 @@ import { seedDataTypes } from '@/lib/data_types/seed_datatypes';
 
 export const powerSyncDb = new PowerSyncDatabase({
     database: {
-        dbFilename: 'stackrender.sqlite',
+        dbFilename: 'goforge.sqlite',
     },
     schema: AppSchema,
 });
@@ -21,7 +21,7 @@ export const db: PowerSyncSQLiteDatabase<typeof drizzleSchema> = wrapPowerSyncWi
     schema: drizzleSchema,
 });
 
-const ConnectorContext = createContext<StackRenderConnector | null>(null);
+const ConnectorContext = createContext<GoForgeConnector | null>(null);
 export const useConnector = () => useContext(ConnectorContext);
 
 interface SyncProviderProps {

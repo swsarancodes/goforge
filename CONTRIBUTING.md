@@ -1,6 +1,6 @@
-# Contributing to StackRender
+# Contributing to GoForge
 
-We appreciate your interest in contributing to StackRender. Your contributions, whether small or significant, help make the project better for everyone.
+We appreciate your interest in contributing to GoForge. Your contributions, whether small or significant, help make the project better for everyone.
 
 ## Ways to Contribute
 
@@ -17,7 +17,7 @@ To contribute code or documentation:
 
 ### 2. Reporting Bugs
 If you find a bug:
-- Check the [GitHub Issues](https://github.com/stackrender/stackrender/issues) to see if it has already been reported.
+- Check the [GitHub Issues](https://github.com/swsarancodes/goforge/issues) to see if it has already been reported.
 - If not, open a **new bug report** and include:
   - Steps to reproduce the problem.
   - Expected and actual results.
@@ -27,10 +27,9 @@ If you find a bug:
 If you have an idea for improvement:
 - Open a **feature request** in the issues section.
 - Describe the feature and explain why it would be useful.
-- You may also discuss ideas with the community on [Discord](https://discord.gg/4dv26jR4Pj).
 
 ## License Agreement
 By contributing, you agree that your work will be licensed under the **GNU Affero General Public License v3.0**.
 
 ## Questions or Support
-If you have questions about the contribution process, open a discussion on GitHub or reach out on our [Discord](https://discord.gg/4dv26jR4Pj).
+If you have questions about the contribution process, open a discussion on GitHub.

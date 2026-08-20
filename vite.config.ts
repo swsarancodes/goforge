@@ -9,7 +9,7 @@ export default defineConfig({
   server : {
     port : 3000,
     proxy: {
-      // stackrender-api (live database connections) - runs separately via
+      // goforge-api (live database connections) - runs separately via
       // `npm run dev` in server/, defaults to :4000.
       '/api': 'http://localhost:4000'
     }

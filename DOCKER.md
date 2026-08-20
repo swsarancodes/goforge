@@ -1,22 +1,22 @@
 # Docker Deployment Guide
 
-This guide explains how to run StackRender using Docker.
+This guide explains how to run GoForge using Docker.
 
 ## Quick Start
 
 ### Using Docker Compose (Recommended)
 
-The easiest way to run StackRender:
+The easiest way to run GoForge:
 
 ```bash
-export STACKRENDER_MASTER_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")
+export GOFORGE_MASTER_KEY=$(node -e "console.log(require('crypto').randomBytes(32).toString('base64'))")
 docker compose up -d
 ```
 
 The application will be available at `http://localhost:8080`
 
-`STACKRENDER_MASTER_KEY` encrypts saved live-database-connection passwords for the
-`stackrender-api` service (see [Live Database Connections](#live-database-connections)
+`GOFORGE_MASTER_KEY` encrypts saved live-database-connection passwords for the
+`goforge-api` service (see [Live Database Connections](#live-database-connections)
 below) - generate it once and keep it stable across restarts, otherwise previously
 saved connections become undecryptable.
 
@@ -31,20 +31,20 @@ docker compose down
 Build the image:
 
 ```bash
-docker build -t stackrender .
+docker build -t goforge .
 ```
 
 Run the container:
 
 ```bash
-docker run -d -p 8080:80 --name stackrender stackrender
+docker run -d -p 8080:80 --name goforge goforge
 ```
 
 Stop and remove the container:
 
 ```bash
-docker stop stackrender
-docker rm stackrender
+docker stop goforge
+docker rm goforge
 ```
 
 ## Configuration
@@ -61,7 +61,7 @@ ports:
 Or when using Docker CLI:
 
 ```bash
-docker run -d -p YOUR_PORT:80 --name stackrender stackrender
+docker run -d -p YOUR_PORT:80 --name goforge goforge
 ```
 
 ### Health Check
@@ -99,13 +99,13 @@ The application uses a custom Nginx configuration (`nginx.conf`) that:
 
 ## Live Database Connections
 
-`docker-compose.yml` also runs a second service, `stackrender-api` (built from
+`docker-compose.yml` also runs a second service, `goforge-api` (built from
 `server/`), which lets the app connect to a real PostgreSQL database, introspect its
 schema, and push schema changes back to it. Nginx proxies `/api/*` to this service, so
 no extra port needs to be exposed on the host. It stores saved connections (host,
 port, username, encrypted password) in its own SQLite file, persisted via the
 `./server/data` volume mount - back that directory up if you rely on saved
-connections. There is no key-rotation tooling: if `STACKRENDER_MASTER_KEY` changes,
+connections. There is no key-rotation tooling: if `GOFORGE_MASTER_KEY` changes,
 existing saved passwords can no longer be decrypted and must be re-entered.
 
 ## Troubleshooting
@@ -133,7 +133,7 @@ The Dockerfile raises the Node heap (`NODE_OPTIONS=--max-old-space-size`) for th
 Check the logs:
 
 ```bash
-docker logs stackrender
+docker logs goforge
 ```
 
 Or with Docker Compose:
@@ -147,7 +147,7 @@ docker compose logs
 If port 8080 is already in use, you can change it in `docker-compose.yml` or use a different port with Docker CLI:
 
 ```bash
-docker run -d -p 8081:80 --name stackrender stackrender
+docker run -d -p 8081:80 --name goforge goforge
 ```
 
 ## Development
@@ -167,13 +167,13 @@ For production deployments:
 
 1. Build the image:
    ```bash
-   docker build -t stackrender:production .
+   docker build -t goforge:production .
    ```
 
 2. Push to your container registry:
    ```bash
-   docker tag stackrender:production your-registry/stackrender:latest
-   docker push your-registry/stackrender:latest
+   docker tag goforge:production your-registry/goforge:latest
+   docker push your-registry/goforge:latest
    ```
 
 3. Deploy using your orchestration tool (Kubernetes, Docker Swarm, etc.)

@@ -22,7 +22,6 @@ import CodeEditor from "@/components/code-editor";
 
 const options: ImportDatabaseOption[] = [{
     dialect: DatabaseDialect.POSTGRES,
-    docUrl: "https://stackrender.io/docs/import/postgresql",
     methods: [{
         id: "pg_dump",
         name: "pg_dump",
@@ -41,7 +40,6 @@ const options: ImportDatabaseOption[] = [{
     }]
 }, {
     dialect: DatabaseDialect.MYSQL,
-    docUrl: "https://stackrender.io/docs/import/mysql",
     methods: [{
         id: "mysql_dump",
         name: "mysqldump",
@@ -59,7 +57,6 @@ const options: ImportDatabaseOption[] = [{
 }
     , {
     dialect: DatabaseDialect.MARIADB,
-    docUrl: "https://stackrender.io/docs/import/mariadb",
     methods: [{
         id: "mariadb-dump",
         name: "mariadb-dump",
@@ -90,7 +87,6 @@ const options: ImportDatabaseOption[] = [{
 
 }, {
     dialect: DatabaseDialect.SQLITE,
-    docUrl: "https://stackrender.io/docs/import/sqlite",
     methods: [{
         id: "sqlite3",
         name: "Sqlite3",
@@ -108,7 +104,6 @@ const options: ImportDatabaseOption[] = [{
 }
     , {
     dialect: DatabaseDialect.MSSQL,
-    docUrl: "https://stackrender.io/docs/import/mssql",
     methods: [{
         id: "ssms",
         name: "SSMS",
@@ -118,7 +113,6 @@ const options: ImportDatabaseOption[] = [{
     }]
 }, {
     dialect: DatabaseDialect.ORACLE,
-    docUrl: "https://stackrender.io/docs/import/oracle",
     methods: [{
         id: "sqldeveloper",
         name: "SQL Developer",
@@ -247,19 +241,21 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                         {t("modals.import_database.import_options")}
                     </p>
                     <div className="flex flex-col lg:flex-row-reverse gap-2 justify-between items-center ">
-                        <a
-                            className={
-                                buttonVariants({
-                                    variant: "outline"
-                                })
-                            }
-                            href={currentOption?.docUrl}
-                            target="_blank"
-                        >
-                            {t("modals.import_database.view_docs")}
+                        {currentOption?.docUrl &&
+                            <a
+                                className={
+                                    buttonVariants({
+                                        variant: "outline"
+                                    })
+                                }
+                                href={currentOption.docUrl}
+                                target="_blank"
+                            >
+                                {t("modals.import_database.view_docs")}
 
-                            <HelpCircle className="size-4 text-muted-foreground" />
-                        </a>
+                                <HelpCircle className="size-4 text-muted-foreground" />
+                            </a>
+                        }
                         {
                             <RadioGroup
                                 onValueChange={onImportMethodChange}
