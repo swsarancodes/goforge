@@ -31,6 +31,7 @@ export type TableProps = Node<{
     aiPreviewActive?: boolean,
     aiDiffStatus?: AiDiffStatus,
     aiFieldStatuses?: Record<string, AiDiffStatus>,
+    syncKey?: string,
 }>
 
 const MAX_FIELDS = 10;

@@ -7,11 +7,15 @@ class AiApiError extends Error {
     }
 }
 
-export async function requestAiSchemaPlan(context: AiSchemaContext): Promise<AiSchemaPlanResponse> {
+export async function requestAiSchemaPlan(
+    context: AiSchemaContext,
+    signal?: AbortSignal,
+): Promise<AiSchemaPlanResponse> {
     const response = await fetch("/api/ai/schema-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(context),
+        signal,
     });
 
     if (!response.ok) {

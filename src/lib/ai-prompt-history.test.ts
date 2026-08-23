@@ -44,4 +44,23 @@ describe("AI prompt history", () => {
         expect(loadAiPromptHistory("db-1", storage)).toEqual([]);
         expect(loadAiPromptHistory("db-2", storage)).toHaveLength(1);
     });
+
+    it("ignores malformed local storage entries", () => {
+        const storage = memoryStorage();
+        storage.setItem("goforge.ai-schema.prompt-history.v1", JSON.stringify([
+            null,
+            { databaseId: "db-1", prompt: "missing required fields" },
+            {
+                id: "valid",
+                databaseId: "db-1",
+                prompt: "Add projects",
+                scope: "database",
+                selectedTables: [],
+                createdAt: new Date().toISOString(),
+                status: "generated",
+            },
+        ]));
+
+        expect(loadAiPromptHistory("db-1", storage)).toMatchObject([{ id: "valid" }]);
+    });
 });

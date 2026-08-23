@@ -118,11 +118,24 @@ describe("AI schema plan compiler", () => {
         const context = buildAiSchemaContext("Add an audit table", current, dataTypes, ["users"]);
 
         expect(context.tables[0].fields[0]).toMatchObject({ name: "id", dataType: "integer" });
+        expect(context.tables.map((table) => table.name)).toEqual(["users"]);
+        expect(context.relationships).toEqual([]);
         expect(context.selectedTables).toEqual(["users"]);
         expect(context.scope).toBe("selected_tables");
-        expect(context.relationships[0]).not.toHaveProperty("onDelete");
-        expect(context.relationships[0]).not.toHaveProperty("onUpdate");
         expect(JSON.stringify(context)).not.toMatch(/password|connectionString|rows/i);
+
+        const wholeDatabaseContext = buildAiSchemaContext("Review the schema", current, dataTypes);
+        expect(wholeDatabaseContext.relationships[0]).not.toHaveProperty("onDelete");
+        expect(wholeDatabaseContext.relationships[0]).not.toHaveProperty("onUpdate");
+    });
+
+    it("keeps the complete schema payload for whole-database prompts", () => {
+        const current = buildSampleDatabase(DatabaseDialect.POSTGRES);
+        const context = buildAiSchemaContext("Review every table", current, dataTypes);
+
+        expect(context.scope).toBe("database");
+        expect(context.tables).toHaveLength(current.tables.length);
+        expect(context.relationships).toHaveLength(current.relationships.length);
     });
 
     it("blocks operations outside selected-table scope", () => {

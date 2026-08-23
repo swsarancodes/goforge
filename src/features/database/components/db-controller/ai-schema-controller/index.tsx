@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { compare } from "fast-json-patch";
+import hash from "object-hash";
 import {
     AlertTriangle,
     Check,
@@ -55,6 +56,7 @@ interface AiPreview {
     compilerWarnings: string[];
     historyId: string;
     targetDatabase: DatabaseType;
+    baseSchemaHash: string;
 }
 
 type PromptScope = "database" | "selected_tables";
@@ -80,6 +82,8 @@ const AiSchemaController: React.FC = () => {
     const { applyUndoableOperations } = useDatabaseHistory();
     const { setAiPreview } = useDiagram();
     const promptRef = useRef<HTMLTextAreaElement>(null);
+    const requestControllerRef = useRef<AbortController>();
+    const mountedRef = useRef(true);
     const [prompt, setPrompt] = useState("");
     const [scope, setScope] = useState<PromptScope>("database");
     const [selectedTableIds, setSelectedTableIds] = useState<string[]>([]);
@@ -96,11 +100,12 @@ const AiSchemaController: React.FC = () => {
         () => preview?.response.plan.operations.some(isDestructiveAiOperation) ?? false,
         [preview],
     );
+    const selectedTableIdSet = useMemo(() => new Set(selectedTableIds), [selectedTableIds]);
     const selectedTableNames = useMemo(
         () => database?.tables
-            .filter((table) => selectedTableIds.includes(table.id))
+            .filter((table) => selectedTableIdSet.has(table.id))
             .map((table) => table.name) ?? [],
-        [database, selectedTableIds],
+        [database, selectedTableIdSet],
     );
 
     const refreshHistory = useCallback(() => {
@@ -115,13 +120,23 @@ const AiSchemaController: React.FC = () => {
     }, [setAiPreview]);
 
     useEffect(() => {
+        requestControllerRef.current?.abort();
+        requestControllerRef.current = undefined;
+        setIsGenerating(false);
         clearPreview();
         setSelectedTableIds([]);
         setScope("database");
         refreshHistory();
     }, [database?.id]);
 
-    useEffect(() => () => setAiPreview(undefined), [setAiPreview]);
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+            requestControllerRef.current?.abort();
+            setAiPreview(undefined);
+        };
+    }, [setAiPreview]);
 
     const generate = useCallback(async () => {
         if (!database || !prompt.trim() || data_types.length === 0) return;
@@ -135,11 +150,15 @@ const AiSchemaController: React.FC = () => {
         setPreview(undefined);
         setAiPreview(undefined);
         setDestructiveAccepted(false);
+        requestControllerRef.current?.abort();
+        const requestController = new AbortController();
+        requestControllerRef.current = requestController;
 
         try {
             const scopedTables = scope === "selected_tables" ? selectedTableNames : [];
             const response = await requestAiSchemaPlan(
                 buildAiSchemaContext(prompt.trim(), database, data_types, scopedTables),
+                requestController.signal,
             );
             const questions = response.plan.clarifyingQuestions ?? [];
             let operations: DBDiffOperation[] = [];
@@ -171,17 +190,34 @@ const AiSchemaController: React.FC = () => {
                 status: questions.length > 0 ? "clarification" : "generated",
                 summary: response.plan.summary,
             });
-            setPreview({ response, operations, sql, compilerWarnings, historyId: savedHistory.id, targetDatabase });
+            setPreview({
+                response,
+                operations,
+                sql,
+                compilerWarnings,
+                historyId: savedHistory.id,
+                targetDatabase,
+                baseSchemaHash: hash(normalizeDatabase(database), { algorithm: "sha1" }),
+            });
             refreshHistory();
         } catch (caught) {
+            if (requestController.signal.aborted) return;
             setError(errorMessage(caught));
         } finally {
-            setIsGenerating(false);
+            if (requestControllerRef.current === requestController) {
+                requestControllerRef.current = undefined;
+                if (mountedRef.current) setIsGenerating(false);
+            }
         }
     }, [data_types, database, prompt, refreshHistory, scope, selectedTableNames, setAiPreview]);
 
     const apply = useCallback(async () => {
-        if (!preview || preview.operations.length === 0) return;
+        if (!database || !preview || preview.operations.length === 0) return;
+        const currentSchemaHash = hash(normalizeDatabase(database), { algorithm: "sha1" });
+        if (currentSchemaHash !== preview.baseSchemaHash) {
+            setError("The schema changed after this plan was generated. Regenerate the plan before applying it.");
+            return;
+        }
         setIsApplying(true);
         setError(undefined);
         try {
@@ -198,7 +234,7 @@ const AiSchemaController: React.FC = () => {
         } finally {
             setIsApplying(false);
         }
-    }, [applyUndoableOperations, clearPreview, preview, refreshHistory]);
+    }, [applyUndoableOperations, clearPreview, database, preview, refreshHistory]);
 
     const reject = useCallback(() => {
         if (preview) updateAiPromptHistoryStatus(preview.historyId, "rejected");
@@ -233,6 +269,18 @@ const AiSchemaController: React.FC = () => {
     const onPromptChange = useCallback((value: string) => {
         if (preview) clearPreview();
         setPrompt(value);
+    }, [clearPreview, preview]);
+
+    const onScopeChange = useCallback((value: PromptScope) => {
+        if (preview) clearPreview();
+        setScope(value);
+    }, [clearPreview, preview]);
+
+    const toggleSelectedTable = useCallback((tableId: string, checked: boolean) => {
+        if (preview) clearPreview();
+        setSelectedTableIds((current) => checked
+            ? [...current, tableId]
+            : current.filter((id) => id !== tableId));
     }, [clearPreview, preview]);
 
     return (
@@ -274,7 +322,8 @@ const AiSchemaController: React.FC = () => {
                                     size="sm"
                                     variant={scope === "database" ? "default" : "ghost"}
                                     className="h-7 text-xs"
-                                    onClick={() => setScope("database")}
+                                    onClick={() => onScopeChange("database")}
+                                    disabled={isGenerating || isApplying}
                                 >
                                     Whole database
                                 </Button>
@@ -283,8 +332,8 @@ const AiSchemaController: React.FC = () => {
                                     size="sm"
                                     variant={scope === "selected_tables" ? "default" : "ghost"}
                                     className="h-7 text-xs"
-                                    onClick={() => setScope("selected_tables")}
-                                    disabled={!database?.tables.length}
+                                    onClick={() => onScopeChange("selected_tables")}
+                                    disabled={!database?.tables.length || isGenerating || isApplying}
                                 >
                                     Selected tables
                                 </Button>
@@ -297,9 +346,8 @@ const AiSchemaController: React.FC = () => {
                                                 type="checkbox"
                                                 className="size-3.5 accent-primary"
                                                 checked={selectedTableIds.includes(table.id)}
-                                                onChange={(event) => setSelectedTableIds((current) => event.target.checked
-                                                    ? [...current, table.id]
-                                                    : current.filter((id) => id !== table.id))}
+                                                onChange={(event) => toggleSelectedTable(table.id, event.target.checked)}
+                                                disabled={isGenerating || isApplying}
                                             />
                                             <span className="truncate">{table.name}</span>
                                         </label>
@@ -315,6 +363,7 @@ const AiSchemaController: React.FC = () => {
                                     type="button"
                                     className="block w-full rounded-md border bg-background px-2.5 py-2 text-left text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
                                     onClick={() => onPromptChange(example)}
+                                    disabled={isGenerating || isApplying}
                                 >
                                     {example}
                                 </button>
@@ -344,6 +393,7 @@ const AiSchemaController: React.FC = () => {
                                     type="button"
                                     className="w-full rounded-md border p-2 text-left hover:bg-muted"
                                     onClick={() => restoreHistory(entry)}
+                                    disabled={isGenerating || isApplying}
                                 >
                                     <span className="flex items-center gap-1.5">
                                         <span className="min-w-0 flex-1 truncate text-xs font-medium">{entry.prompt}</span>

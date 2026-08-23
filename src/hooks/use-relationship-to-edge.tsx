@@ -9,23 +9,32 @@ export const useRelationshipToEdge = (relationships: RelationshipType[], statuse
     const { setEdges } = useReactFlow();
     useEffect(() => {
 
-        const edges = relationships.map((relationship: RelationshipType) => {
-            return {
-                id: relationship.id,
-                source: relationship.sourceTableId,
-                sourceHandle: LEFT_PREFIX + relationship.sourceFieldId,
-                target: relationship.targetTableId,
-                targetHandle: TARGET_PREFIX + relationship.targetFieldId,
-                selected: false , 
-                animated : false , 
-                data: {
-                    relationship,
-                    aiDiffStatus: statuses?.[relationship.id],
+        setEdges((currentEdges) => {
+            const currentById = new Map(currentEdges.map((edge) => [edge.id, edge]));
+            let changed = currentEdges.length !== relationships.length;
+            const edges = relationships.map((relationship: RelationshipType) => {
+                const current = currentById.get(relationship.id);
+                const aiDiffStatus = statuses?.[relationship.id];
+                if (current?.data?.relationship === relationship && current.data.aiDiffStatus === aiDiffStatus) {
+                    return current;
                 }
-            } as Edge
-        })
+                changed = true;
+                return {
+                    id: relationship.id,
+                    source: relationship.sourceTableId,
+                    sourceHandle: LEFT_PREFIX + relationship.sourceFieldId,
+                    target: relationship.targetTableId,
+                    targetHandle: TARGET_PREFIX + relationship.targetFieldId,
+                    selected: current?.selected ?? false,
+                    animated: current?.animated ?? false,
+                    data: {
+                        relationship,
+                        aiDiffStatus,
+                    },
+                } as Edge;
+            });
 
-        setEdges(edges);
-    }, [relationships, statuses])
-
-}
+            return changed ? edges : currentEdges;
+        });
+    }, [relationships, setEdges, statuses]);
+};

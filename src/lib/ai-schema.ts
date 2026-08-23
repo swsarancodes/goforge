@@ -120,13 +120,24 @@ export function buildAiSchemaContext(
     selectedTables: string[] = [],
 ): AiSchemaContext {
     const tableById = new Map(database.tables.map((table) => [table.id, table]));
+    const selectedNames = new Set(selectedTables.map(normalizeName));
+    const scopedTables = selectedNames.size === 0
+        ? database.tables
+        : database.tables.filter((table) => selectedNames.has(normalizeName(table.name)));
+    const scopedTableIds = new Set(scopedTables.map((table) => table.id));
+    const scopedRelationships = selectedNames.size === 0
+        ? database.relationships
+        : database.relationships.filter(
+            (relationship) => scopedTableIds.has(relationship.sourceTableId)
+                && scopedTableIds.has(relationship.targetTableId),
+        );
 
     return {
         prompt,
         scope: selectedTables.length > 0 ? "selected_tables" : "database",
         dialect: database.dialect,
         databaseName: database.name,
-        tables: database.tables.map((table) => ({
+        tables: scopedTables.map((table) => ({
             name: table.name,
             note: table.note ?? null,
             fields: table.fields.map((field) => ({
@@ -149,7 +160,7 @@ export function buildAiSchemaContext(
                 unique: index.unique ?? false,
             })),
         })),
-        relationships: database.relationships.map((relationship) => {
+        relationships: scopedRelationships.map((relationship) => {
             const sourceTable = tableById.get(relationship.sourceTableId);
             const targetTable = tableById.get(relationship.targetTableId);
             return {

@@ -22,6 +22,7 @@ export function buildAiDiagramPreview(
     const tableStatuses: Record<string, AiDiffStatus> = {};
     const fieldStatuses: Record<string, AiDiffStatus> = {};
     const relationshipStatuses: Record<string, AiDiffStatus> = {};
+    const currentTables = new Map(currentDatabase.tables.map((table) => [table.id, table]));
 
     for (const operation of operations) {
         switch (operation.type) {
@@ -31,7 +32,7 @@ export function buildAiDiagramPreview(
                 break;
             case "DELETE_TABLE": {
                 tableStatuses[operation.tableId] = "deleted";
-                currentDatabase.tables.find((table) => table.id === operation.tableId)?.fields
+                currentTables.get(operation.tableId)?.fields
                     .forEach((field) => { fieldStatuses[field.id] = "deleted"; });
                 break;
             }

@@ -195,10 +195,16 @@ function buildInstructions(request: AiSchemaPlanRequest): string {
     ].join("\n");
 }
 
-export async function createZenSchemaPlan(request: AiSchemaPlanRequest): Promise<{ plan: AiSchemaPlan; model: string }> {
+export async function createZenSchemaPlan(
+    request: AiSchemaPlanRequest,
+    requestSignal?: AbortSignal,
+): Promise<{ plan: AiSchemaPlan; model: string }> {
     const config = getConfig();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
+    const cancelRequest = () => controller.abort();
+    if (requestSignal?.aborted) cancelRequest();
+    else requestSignal?.addEventListener("abort", cancelRequest, { once: true });
 
     try {
         const response = await fetch(`${config.baseUrl}/responses`, {
@@ -252,5 +258,6 @@ export async function createZenSchemaPlan(request: AiSchemaPlanRequest): Promise
         throw error;
     } finally {
         clearTimeout(timeout);
+        requestSignal?.removeEventListener("abort", cancelRequest);
     }
 }

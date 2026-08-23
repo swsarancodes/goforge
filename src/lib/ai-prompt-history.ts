@@ -21,15 +21,35 @@ interface StorageLike {
 
 const HISTORY_KEY = "goforge.ai-schema.prompt-history.v1";
 const MAX_HISTORY_ITEMS = 30;
+const HISTORY_STATUSES = new Set<AiPromptHistoryStatus>([
+    "generated",
+    "clarification",
+    "applied",
+    "rejected",
+]);
 
 const browserStorage = (): StorageLike | undefined =>
     typeof window === "undefined" ? undefined : window.localStorage;
+
+const isHistoryEntry = (value: unknown): value is AiPromptHistoryEntry => {
+    if (!value || typeof value !== "object") return false;
+    const entry = value as Partial<AiPromptHistoryEntry>;
+    return typeof entry.id === "string"
+        && typeof entry.databaseId === "string"
+        && typeof entry.prompt === "string"
+        && (entry.scope === "database" || entry.scope === "selected_tables")
+        && Array.isArray(entry.selectedTables)
+        && entry.selectedTables.every((table) => typeof table === "string")
+        && typeof entry.createdAt === "string"
+        && HISTORY_STATUSES.has(entry.status as AiPromptHistoryStatus)
+        && (entry.summary === undefined || typeof entry.summary === "string");
+};
 
 const readAll = (storage: StorageLike | undefined): AiPromptHistoryEntry[] => {
     if (!storage) return [];
     try {
         const parsed = JSON.parse(storage.getItem(HISTORY_KEY) ?? "[]");
-        return Array.isArray(parsed) ? parsed : [];
+        return Array.isArray(parsed) ? parsed.filter(isHistoryEntry).slice(0, MAX_HISTORY_ITEMS) : [];
     } catch {
         return [];
     }
