@@ -1,15 +1,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { init } from "@guanmingchiu/sqlparser-ts";
-import { compare } from "fast-json-patch";
 
 import { DatabaseDialect } from "@/lib/database";
-import { getImporter } from "@/utils/import/import-utils";
+import { ForeignKeyActions } from "@/lib/field";
 import { getRenderer } from "@/utils/render/render-uttils";
 import { getDataTypes } from "@/test/fixtures/data-types";
 import { buildSampleDatabase } from "@/test/fixtures/database";
-import { reconcileWithDatabase } from "@/utils/import/reconcile-with-database";
-import { normalizeDatabase, mapDiffToDBDiffOperation } from "@/utils/database";
 import { DatabaseType } from "@/lib/schemas/database-schema";
+import { prepareSqlSchemaChange } from "@/utils/import/prepare-sql-schema-change";
 
 // This exercises the exact pipeline SqlPreview's "apply edited SQL" button runs
 // (parse -> reconcileWithDatabase -> normalizeDatabase/compare/mapDiffToDBDiffOperation),
@@ -26,22 +24,8 @@ beforeAll(async () => {
     await init();
 });
 
-const buildOperations = (draftSql: string, currentDatabase: DatabaseType) => {
-    const importer = getImporter(DatabaseDialect.POSTGRES, data_types)!;
-    const parsed = importer.parseSql(draftSql);
-    const reconciled = reconcileWithDatabase(parsed as any, currentDatabase);
-
-    const targetDatabase: DatabaseType = {
-        ...currentDatabase,
-        tables: reconciled.tables.map((table) => ({
-            ...table,
-            indices: reconciled.indexes.filter((index) => index.tableId === table.id),
-        })) as any,
-        relationships: reconciled.relationships as any,
-    };
-
-    const differences = compare(normalizeDatabase(currentDatabase), normalizeDatabase(targetDatabase));
-    return mapDiffToDBDiffOperation(differences);
+const buildOperations = async (draftSql: string, currentDatabase: DatabaseType) => {
+    return (await prepareSqlSchemaChange(draftSql, currentDatabase, data_types)).operations;
 };
 
 /**
@@ -57,12 +41,29 @@ const hydrateForRoundTrip = (db: DatabaseType): DatabaseType => {
     for (const table of db.tables) {
         table.databaseId = db.id;
         table.color = table.color ?? "#ff6363";
+        table.note = null;
+        table.createdAt = "2026-01-01T00:00:00.000Z";
         table.fields.forEach((field, index) => {
             field.sequence = index;
+            field.note = null;
+            field.defaultValue = field.defaultValue ?? null;
+            field.maxLength = field.maxLength ?? null;
+            field.unsigned = field.unsigned ?? false;
+            field.isForeign = field.isForeign ?? false;
+            field.zeroFill = field.zeroFill ?? false;
+            field.precision = field.precision ?? null;
+            field.scale = field.scale ?? null;
+            field.charset = field.charset ?? null;
+            field.collate = field.collate ?? null;
+            field.values = field.values ?? null;
         });
     }
     for (const relationship of db.relationships) {
         relationship.name = relationship.name ?? `fk_${relationship.sourceTable.name}_${relationship.targetTable.name}`;
+        relationship.sourceAliasName = null;
+        relationship.targetAliasName = null;
+        relationship.createdAt = "2026-01-01T00:00:00.000Z";
+        relationship.onUpdate = relationship.onUpdate ?? ForeignKeyActions.NO_ACTION;
     }
     return db;
 };
@@ -77,15 +78,15 @@ describe("apply-edited-sql pipeline (reconcile -> diff -> operations)", () => {
         const current = hydrateForRoundTrip(buildSampleDatabase(DatabaseDialect.POSTGRES));
         const renderedSql = await getRenderer(DatabaseDialect.POSTGRES, data_types)!.renderDDL(current);
 
-        const operations = buildOperations(renderedSql, current);
+        const operations = await buildOperations(renderedSql, current);
 
         expect(operations.filter((op) => op.type !== "UPDATE_NUM_TABLES")).toHaveLength(0);
     });
 
-    it("emits a CREATE_TABLE op with a real databaseId (not undefined) for a genuinely new table", () => {
+    it("emits a CREATE_TABLE op with a real databaseId (not undefined) for a genuinely new table", async () => {
         const current = buildSampleDatabase(DatabaseDialect.POSTGRES);
 
-        const operations = buildOperations(
+        const operations = await buildOperations(
             `
                 CREATE TABLE users (
                     id integer PRIMARY KEY,
@@ -103,13 +104,10 @@ describe("apply-edited-sql pipeline (reconcile -> diff -> operations)", () => {
                     body text NOT NULL
                 );
             `,
-            current
+            current,
         );
 
-        const createTableOps = operations.filter((op) => op.type === "CREATE_TABLE") as Extract<
-            (typeof operations)[number],
-            { type: "CREATE_TABLE" }
-        >[];
+        const createTableOps = operations.filter((op) => op.type === "CREATE_TABLE") as Extract<(typeof operations)[number], { type: "CREATE_TABLE" }>[];
         const commentsOp = createTableOps.find((op) => op.table.name === "comments");
 
         expect(commentsOp).toBeTruthy();
@@ -117,10 +115,10 @@ describe("apply-edited-sql pipeline (reconcile -> diff -> operations)", () => {
         expect(commentsOp!.table.databaseId).not.toBeUndefined();
     });
 
-    it("does not delete existing tables that are unchanged in the edited SQL", () => {
+    it("does not delete existing tables that are unchanged in the edited SQL", async () => {
         const current = buildSampleDatabase(DatabaseDialect.POSTGRES);
 
-        const operations = buildOperations(
+        const operations = await buildOperations(
             `
                 CREATE TABLE users (
                     id integer PRIMARY KEY,
@@ -138,9 +136,77 @@ describe("apply-edited-sql pipeline (reconcile -> diff -> operations)", () => {
                     body text NOT NULL
                 );
             `,
-            current
+            current,
         );
 
         expect(operations.some((op) => op.type === "DELETE_TABLE")).toBe(false);
+    });
+
+    it("classifies schema objects omitted from edited SQL as destructive changes", async () => {
+        const current = buildSampleDatabase(DatabaseDialect.POSTGRES);
+        const prepared = await prepareSqlSchemaChange(
+            `
+                CREATE TABLE users (
+                    id integer PRIMARY KEY,
+                    email varchar(255) NOT NULL UNIQUE,
+                    status varchar(20) NOT NULL DEFAULT 'active'
+                );
+            `,
+            current,
+            data_types,
+        );
+
+        expect(prepared.destructiveOperations.some((operation) => operation.type === "DELETE_TABLE")).toBe(true);
+    });
+
+    it("imports pasted SQL into an empty database and updates its table count", async () => {
+        const current: DatabaseType = {
+            ...buildSampleDatabase(DatabaseDialect.POSTGRES),
+            numOfTables: 0,
+            tables: [],
+            relationships: [],
+        };
+
+        const prepared = await prepareSqlSchemaChange(
+            `
+                CREATE TABLE customers (
+                    id integer PRIMARY KEY,
+                    email varchar(255) NOT NULL UNIQUE
+                );
+                CREATE TABLE orders (
+                    id integer PRIMARY KEY,
+                    customer_id integer NOT NULL,
+                    CONSTRAINT fk_customer FOREIGN KEY (customer_id) REFERENCES customers (id)
+                );
+            `,
+            current,
+            data_types,
+        );
+
+        expect(prepared.operations.filter((operation) => operation.type === "CREATE_TABLE")).toHaveLength(2);
+        expect(prepared.operations).toContainEqual({
+            type: "UPDATE_NUM_TABLES",
+            value: 2,
+        });
+        expect(prepared.targetDatabase.tables[0].posX).toBeDefined();
+        expect(prepared.targetDatabase.tables[1].posX).not.toBe(prepared.targetDatabase.tables[0].posX);
+    });
+
+    it("keeps PostgreSQL TIMESTAMPTZ distinct from TIMESTAMP", async () => {
+        const current: DatabaseType = {
+            ...buildSampleDatabase(DatabaseDialect.POSTGRES),
+            numOfTables: 0,
+            tables: [],
+            relationships: [],
+        };
+        const prepared = await prepareSqlSchemaChange("CREATE TABLE events (created_at TIMESTAMPTZ NOT NULL);", current, data_types);
+        const timestamptz = data_types.find((dataType) => dataType.name === "timestamptz");
+
+        expect(prepared.targetDatabase.tables[0].fields[0].typeId).toBe(timestamptz?.id);
+    });
+
+    it("rejects blank pasted SQL with an actionable message", async () => {
+        const current = buildSampleDatabase(DatabaseDialect.POSTGRES);
+        await expect(prepareSqlSchemaChange("   ", current, data_types)).rejects.toThrow("Paste or enter SQL before applying changes.");
     });
 });

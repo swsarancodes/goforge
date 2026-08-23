@@ -3,6 +3,7 @@ import { FieldIndexInsertType } from "@/lib/schemas/field_index-schema";
 import { IndexInsertType } from "@/lib/schemas/index-schema";
 import { RelationshipInsertType } from "@/lib/schemas/relationship-schema";
 import { DatabaseType } from "@/lib/schemas/database-schema";
+import { DataType } from "@/lib/schemas/data-type-schema";
 
 export interface ParsedDatabaseResult {
     tables: TableInsertType[];
@@ -24,7 +25,24 @@ export interface ParsedDatabaseResult {
  * indexes), so the downstream diff produces UPDATE ops for edited entities and
  * only CREATE ops for genuinely new ones.
  */
-export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatabase: DatabaseType): ParsedDatabaseResult {
+const dataTypeNames = (dataType: DataType | undefined) => {
+    if (!dataType) return new Set<string>();
+    let synonyms: string[] = [];
+    try {
+        synonyms = Array.isArray(dataType.synonyms) ? dataType.synonyms : dataType.synonyms ? JSON.parse(dataType.synonyms) : [];
+    } catch {
+        synonyms = [];
+    }
+    return new Set([dataType.name, ...synonyms].filter(Boolean).map((name) => name.toLowerCase().replace(/\s+/g, "")));
+};
+
+const areEquivalentDataTypes = (left: DataType | undefined, right: DataType | undefined) => {
+    const leftNames = dataTypeNames(left);
+    const rightNames = dataTypeNames(right);
+    return [...leftNames].some((name) => rightNames.has(name));
+};
+
+export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatabase: DatabaseType, dataTypes: DataType[] = []): ParsedDatabaseResult {
     const tableIdMap = new Map<string, string>();
     const fieldIdMap = new Map<string, string>();
 
@@ -36,8 +54,31 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
         const fields = (parsedTable.fields ?? []).map((parsedField) => {
             const existingField = existingTable?.fields.find((f) => f.name === parsedField.name);
             const resolvedFieldId = existingField?.id ?? (parsedField.id as string);
+            const parsedDataType = dataTypes.find((dataType) => dataType.id === parsedField.typeId);
+            const existingDataType = existingField?.type ?? dataTypes.find((dataType) => dataType.id === existingField?.typeId);
+            const resolvedTypeId = existingField && areEquivalentDataTypes(existingDataType, parsedDataType) ? existingField.typeId : parsedField.typeId;
             fieldIdMap.set(parsedField.id as string, resolvedFieldId);
-            return { ...parsedField, id: resolvedFieldId, tableId: resolvedTableId };
+            return {
+                ...parsedField,
+                id: resolvedFieldId,
+                tableId: resolvedTableId,
+                typeId: resolvedTypeId,
+                // SQL does not represent notes and the parser uses undefined for
+                // absent nullable/defaulted columns while persisted rows use null.
+                // Canonicalizing here prevents a no-op round trip from looking like
+                // dozens of property removals.
+                note: existingField?.note ?? null,
+                defaultValue: parsedField.defaultValue ?? null,
+                maxLength: parsedField.maxLength ?? null,
+                unsigned: parsedField.unsigned ?? false,
+                isForeign: existingField?.isForeign ?? parsedField.isForeign ?? false,
+                zeroFill: parsedField.zeroFill ?? false,
+                precision: parsedField.precision ?? null,
+                scale: parsedField.scale ?? null,
+                charset: parsedField.charset ?? null,
+                collate: parsedField.collate ?? null,
+                values: parsedField.values ?? null,
+            };
         });
 
         return {
@@ -52,9 +93,11 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
             // edit-and-apply round-trip shouldn't reshuffle the diagram layout.
             posX: existingTable?.posX ?? parsedTable.posX,
             posY: existingTable?.posY ?? parsedTable.posY,
-            color: existingTable?.color ?? parsedTable.color,
-            width: existingTable?.width ?? parsedTable.width,
+            color: existingTable ? existingTable.color : parsedTable.color,
+            width: existingTable ? existingTable.width : parsedTable.width,
             sequence: existingTable?.sequence ?? parsedTable.sequence,
+            note: existingTable?.note ?? null,
+            createdAt: existingTable ? existingTable.createdAt : (parsedTable.createdAt ?? null),
             fields,
         } as TableInsertType;
     });
@@ -65,13 +108,7 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
         const sourceFieldId = fieldIdMap.get(rel.sourceFieldId as string) ?? rel.sourceFieldId;
         const targetFieldId = fieldIdMap.get(rel.targetFieldId as string) ?? rel.targetFieldId;
 
-        const existingRelationship = currentDatabase.relationships.find(
-            (existing) =>
-                existing.sourceTableId === sourceTableId &&
-                existing.targetTableId === targetTableId &&
-                existing.sourceFieldId === sourceFieldId &&
-                existing.targetFieldId === targetFieldId
-        );
+        const existingRelationship = currentDatabase.relationships.find((existing) => existing.sourceTableId === sourceTableId && existing.targetTableId === targetTableId && existing.sourceFieldId === sourceFieldId && existing.targetFieldId === targetFieldId);
 
         return {
             ...rel,
@@ -83,6 +120,12 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
             targetTableId,
             sourceFieldId,
             targetFieldId,
+            name: rel.name ?? existingRelationship?.name ?? null,
+            onDelete: rel.onDelete ?? "no_action",
+            onUpdate: rel.onUpdate ?? "no_action",
+            sourceAliasName: existingRelationship?.sourceAliasName ?? null,
+            targetAliasName: existingRelationship?.targetAliasName ?? null,
+            createdAt: existingRelationship ? existingRelationship.createdAt : (rel.createdAt ?? null),
         } as RelationshipInsertType;
     });
 
@@ -104,9 +147,12 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
             ...index,
             id: existingIndex?.id ?? index.id,
             tableId: resolvedTableId,
+            unique: index.unique ?? false,
+            createdAt: existingIndex ? existingIndex.createdAt : (index.createdAt ?? null),
             fieldIndices: remappedFieldIndices.map((fi) => ({
                 ...fi,
                 id: existingIndex?.fieldIndices.find((e) => e.fieldId === fi.fieldId)?.id ?? fi.id,
+                indexId: existingIndex?.id ?? index.id,
             })),
         } as IndexInsertType;
     });

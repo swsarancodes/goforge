@@ -77,17 +77,19 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
             else if (parts[2] === 'fields') {
                 const fieldId = parts[3];
 
-                if (op.op === 'add') {
-                    fieldCreates[tableId] ??= [];
-                    fieldCreates[tableId].push(op.value);
-                } else if (op.op === 'remove') {
-                    fieldDeletes[tableId] ??= [];
-                    fieldDeletes[tableId].push(fieldId);
-                } else if (op.op === 'replace') {
+                if (parts.length === 4) {
+                    if (op.op === 'add') {
+                        fieldCreates[tableId] ??= [];
+                        fieldCreates[tableId].push(op.value);
+                    } else if (op.op === 'remove') {
+                        fieldDeletes[tableId] ??= [];
+                        fieldDeletes[tableId].push(fieldId);
+                    }
+                } else if (['add', 'remove', 'replace'].includes(op.op)) {
                     const attr = parts.slice(4).join('/');
                     fieldChanges[tableId] ??= {};
                     fieldChanges[tableId][fieldId] ??= {};
-                    fieldChanges[tableId][fieldId][attr as keyof FieldType] = op.value;
+                    fieldChanges[tableId][fieldId][attr as keyof FieldType] = op.op === 'remove' ? null : op.value;
                 }
             }
             // Handle indices inside tables
@@ -129,20 +131,20 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
                     }
                 }
 
-                else if (op.op === 'replace') {
+                else if (['add', 'remove', 'replace'].includes(op.op)) {
                     // partial index attribute change
                     const attr = parts.slice(4).join('/');
                     indexChanges[tableId] ??= {};
                     indexChanges[tableId][indexId] ??= {};
-                    indexChanges[tableId][indexId][attr as keyof IndexType] = op.value;
+                    indexChanges[tableId][indexId][attr as keyof IndexType] = op.op === 'remove' ? null : op.value;
                 }
             }
 
             // Updating table attributes (e.g., name, position, etc.)
-            else if (op.op === 'replace') {
+            else if (['add', 'remove', 'replace'].includes(op.op)) {
                 const attr = parts[2];
                 tableChanges[tableId] ??= {};
-                tableChanges[tableId][attr as keyof TableType] = op.value;
+                tableChanges[tableId][attr as keyof TableType] = op.op === 'remove' ? null : op.value;
             }
         }
 
@@ -160,10 +162,10 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
             }
 
             // Update relationship properties (e.g., type, constraints)
-            else if (op.op === 'replace') {
+            else if (['add', 'remove', 'replace'].includes(op.op)) {
                 const attr = parts.slice(2).join('/');
                 relationshipChanges[relationshipId] ??= {};
-                relationshipChanges[relationshipId][attr as keyof RelationshipType] = op.value;
+                relationshipChanges[relationshipId][attr as keyof RelationshipType] = op.op === 'remove' ? null : op.value;
             }
         }
     }
@@ -306,6 +308,5 @@ export function normalizeDatabase(db: DatabaseType): any {
         )
     };
 }
-
 
 

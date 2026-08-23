@@ -3,9 +3,10 @@ import logo from '@/assets/favicon.png';
 interface EmptyListProps {
     title?: string;
     description?: string;
+    children?: React.ReactNode;
 }
 
-const EmptyList: React.FC<EmptyListProps> = ({ title, description }) => {
+const EmptyList: React.FC<EmptyListProps> = ({ title, description, children }) => {
     return (
         <div className="flex flex-col items-center  gap-1  h-full  pt-[86px] main-linear-background rounded-lg">
             {
@@ -27,9 +28,10 @@ const EmptyList: React.FC<EmptyListProps> = ({ title, description }) => {
                     {description}
                 </p>
             }
+            {children && <div className="mt-4">{children}</div>}
         </div>
     )
 }
 
 
-export default EmptyList; 
+export default EmptyList;

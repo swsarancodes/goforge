@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { useTranslation } from "react-i18next";
 
@@ -21,17 +21,35 @@ const Clipboard: React.FC<ClipboardProps> = ({ text }) => {
 
 
     const [isCopied, setIsCopied] = useState<boolean>(false);
+    const resetTimer = useRef<ReturnType<typeof setTimeout>>();
+
+    useEffect(() => () => {
+        if (resetTimer.current) clearTimeout(resetTimer.current);
+    }, []);
 
     const copyToClipboard = useCallback(async () => {
 
 
         if (text)
             try {
-                await navigator.clipboard.writeText(text);
+                if (navigator.clipboard?.writeText) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const textarea = document.createElement("textarea");
+                    textarea.value = text;
+                    textarea.style.position = "fixed";
+                    textarea.style.opacity = "0";
+                    document.body.appendChild(textarea);
+                    textarea.select();
+                    const copied = document.execCommand("copy");
+                    textarea.remove();
+                    if (!copied) throw new Error("Clipboard copy is unavailable");
+                }
                 setIsCopied(true);
-                setTimeout(() => {
+                if (resetTimer.current) clearTimeout(resetTimer.current);
+                resetTimer.current = setTimeout(() => {
                     setIsCopied(false);
-                }, 500)
+                }, 1200)
 
             } catch (err) {
 
@@ -49,6 +67,8 @@ const Clipboard: React.FC<ClipboardProps> = ({ text }) => {
                         variant="outline"
                         className="w-7 h-7 text-muted-foreground bg-card/50   backdrop-blur-xs dark:backdrop-blur-md shadow-lg"
                         onClick={copyToClipboard}
+                        disabled={!text}
+                        aria-label={!isCopied ? t("clipboard.copy") : t("clipboard.copied")}
                     >
                         {
                             !isCopied ? <Copy className="size-4" /> : <CopyCheck className="size-4" />

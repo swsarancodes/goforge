@@ -289,6 +289,18 @@ export class BaseSqlImporter {
             }
             typeName = attributeName.toLowerCase();
 
+            // sqlparser-ts represents PostgreSQL TIMESTAMPTZ as
+            // { Timestamp: [precision, "Tz"] }. Treating that as plain
+            // TIMESTAMP silently changed the type on every SQL round trip.
+            if (
+                typeName === "timestamp" &&
+                this.dialect === DatabaseDialect.POSTGRES &&
+                Array.isArray(ast.data_type[attributeName]) &&
+                ast.data_type[attributeName][1] === "Tz"
+            ) {
+                typeName = "timestamptz";
+            }
+
             
             if (typeName == "timestamp" && this.dialect == DatabaseDialect.ORACLE && ast.data_type[attributeName].length >= 2 && ast.data_type[attributeName][1] == "WithTimeZone") { 
                 typeName += "withtimezone" ; 

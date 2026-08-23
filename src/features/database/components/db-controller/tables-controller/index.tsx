@@ -1,6 +1,6 @@
 
 
-import { Code } from "lucide-react"
+import { ClipboardPaste, Code } from "lucide-react"
 import { useTranslation } from "react-i18next";
 import { Ref, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
@@ -171,7 +171,7 @@ const TablesController: React.FC = ({ }) => {
                 </Tooltip>
             </div>
             {
-                allTables.length > 0 && !showSqlPreview &&
+                !showSqlPreview && allTables.length > 0 &&
                 <ScrollArea className="px-3 h-full  w-full overflow-hidden">
                     <Accordion
                         type="single"
@@ -205,22 +205,27 @@ const TablesController: React.FC = ({ }) => {
                 </ScrollArea>
             }
             {
-                allTables.length > 0 && showSqlPreview &&
+                showSqlPreview &&
                 <div className=" flex-1 overflow-auto ">
                     <SqlPreview
                         tableFilterIds={tableFilterIds}
                         editable={tables.length === allTables.length}
+                        startEditing={allTables.length === 0}
                         className="rounded-none  border-0 border-t-1"
                     />
                 </div>
             }
             {
-                (allTables.length == 0) &&
+                !showSqlPreview && allTables.length === 0 &&
                 <div className="px-3 h-full">
                     <EmptyList
                         title={t("db_controller.empty_list.no_tables")}
                         description={t("db_controller.empty_list.no_tables_description")}
-                    />
+                    >
+                        <Button size="sm" variant="outline" onClick={() => setShowSqlPreview(true)}>
+                            <ClipboardPaste className="size-4" /> Paste SQL
+                        </Button>
+                    </EmptyList>
                 </div>
             }
         </div>
