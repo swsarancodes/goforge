@@ -98,8 +98,17 @@ export const aiSchemaPlanSchema = z.object({
     summary: z.string().trim().min(1).max(4_000),
     assumptions: z.array(z.string().max(1_000)).max(20).default([]),
     warnings: z.array(z.string().max(1_000)).max(20).default([]),
+    clarifyingQuestions: z.array(z.string().trim().min(1).max(1_000)).max(10).default([]),
     operations: z.array(aiSchemaOperationSchema).max(100),
-}).strict();
+}).strict().superRefine((plan, context) => {
+    if (plan.clarifyingQuestions.length > 0 && plan.operations.length > 0) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["operations"],
+            message: "operations must be empty when clarification is required",
+        });
+    }
+});
 
 const currentFieldSchema = z.object({
     name: identifier,
@@ -123,13 +132,31 @@ const currentTableSchema = z.object({
 
 export const aiSchemaPlanRequestSchema = z.object({
     prompt: z.string().trim().min(3).max(8_000),
+    scope: z.enum(["database", "selected_tables"]),
     dialect: z.enum(["postgres", "mysql", "sqlite", "mariadb", "mssql", "oracle"]),
     databaseName: identifier,
     tables: z.array(currentTableSchema).max(250),
     relationships: z.array(currentRelationshipSchema).max(500),
     allowedDataTypes: z.array(identifier).min(1).max(500),
     selectedTables: z.array(identifier).max(100).optional(),
-}).strict();
+}).strict().superRefine((request, context) => {
+    if (request.scope === "selected_tables" && (request.selectedTables?.length ?? 0) === 0) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["selectedTables"],
+            message: "at least one table is required for selected_tables scope",
+        });
+    }
+    const existingTables = new Set(request.tables.map((table) => table.name.toLowerCase()));
+    const unknown = (request.selectedTables ?? []).filter((table) => !existingTables.has(table.toLowerCase()));
+    if (unknown.length > 0) {
+        context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["selectedTables"],
+            message: `unknown selected table(s): ${unknown.join(", ")}`,
+        });
+    }
+});
 
 export type AiSchemaPlan = z.infer<typeof aiSchemaPlanSchema>;
 export type AiSchemaPlanRequest = z.infer<typeof aiSchemaPlanRequestSchema>;

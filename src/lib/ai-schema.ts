@@ -57,6 +57,7 @@ export interface AiSchemaPlan {
     summary: string;
     assumptions: string[];
     warnings: string[];
+    clarifyingQuestions: string[];
     operations: AiSchemaOperation[];
 }
 
@@ -67,6 +68,7 @@ export interface AiSchemaPlanResponse {
 
 export interface AiSchemaContext {
     prompt: string;
+    scope: "database" | "selected_tables";
     dialect: DatabaseType["dialect"];
     databaseName: string;
     tables: Array<{
@@ -121,6 +123,7 @@ export function buildAiSchemaContext(
 
     return {
         prompt,
+        scope: selectedTables.length > 0 ? "selected_tables" : "database",
         dialect: database.dialect,
         databaseName: database.name,
         tables: database.tables.map((table) => ({
@@ -167,6 +170,44 @@ export function buildAiSchemaContext(
         allowedDataTypes: [...new Set(dataTypes.map((type) => type.name).filter((name): name is string => Boolean(name)))],
         selectedTables,
     };
+}
+
+export function validateAiPlanScope(plan: AiSchemaPlan, selectedTables: string[]): void {
+    if (selectedTables.length === 0) return;
+    const allowed = new Set(selectedTables.map(normalizeName));
+    const assertAllowed = (tableNames: string[], operationType: string) => {
+        const outsideScope = tableNames.filter((name) => !allowed.has(normalizeName(name)));
+        if (outsideScope.length > 0) {
+            throw new AiPlanValidationError(
+                `${operationType} targets table(s) outside the selected scope: ${outsideScope.join(", ")}.`,
+            );
+        }
+    };
+
+    for (const operation of plan.operations) {
+        switch (operation.type) {
+            case "create_table":
+                throw new AiPlanValidationError("Creating tables requires Whole database scope.");
+            case "rename_table":
+            case "drop_table":
+            case "add_column":
+            case "alter_column":
+            case "drop_column":
+            case "add_index":
+            case "drop_index":
+                assertAllowed([operation.tableName], operation.type);
+                break;
+            case "add_relationship":
+                assertAllowed(
+                    [operation.relationship.sourceTable, operation.relationship.targetTable],
+                    operation.type,
+                );
+                break;
+            case "drop_relationship":
+                assertAllowed([operation.sourceTable, operation.targetTable], operation.type);
+                break;
+        }
+    }
 }
 
 function resolveDataType(name: string, dataTypes: DataType[]): DataType {

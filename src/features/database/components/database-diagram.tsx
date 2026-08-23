@@ -26,7 +26,7 @@ import { RelationshipInsertType } from "@/lib/schemas/relationship-schema";
 import { v4 } from "uuid";
 import { TARGET_PREFIX } from "./field";
 import CardinalityMarker from "@/features/database/components/cardinality-marker";
-import { useDiagramOps } from "@/providers/diagram-provider/diagram-provider";
+import { useDiagram, useDiagramOps } from "@/providers/diagram-provider/diagram-provider";
 
 
 import { AlertTriangle, Menu } from "lucide-react";
@@ -75,7 +75,10 @@ const DatabaseDiagram: React.FC = () => {
     const { setIsConnectionInProgress, cardinalityStyle, showController, openController } = useDiagramOps();
     const raise = useToast() ; 
     // Destructure tables and relationships from database
-    const { tables, relationships } = database || { tables: [], relationships: [] };
+    const { aiPreview } = useDiagram();
+    const liveSchema = database || { tables: [], relationships: [] };
+    const tables = aiPreview?.database.tables ?? liveSchema.tables;
+    const relationships = aiPreview?.database.relationships ?? liveSchema.relationships;
 
     // Hook to allow zooming and centering the diagram
     const { fitView } = useReactFlow();
@@ -215,12 +218,19 @@ const DatabaseDiagram: React.FC = () => {
 
 
     // Convert tables and relationships into flow elements
-    useTableToNode(tables);
-    useRelationshipToEdge(relationships);
+    useTableToNode(tables, aiPreview);
+    useRelationshipToEdge(relationships, aiPreview?.relationshipStatuses);
     useHighlightedEdges(nodes, relationships, edges);
     const { isOverlapping, puls } = useOverlappingTables(tables);
 
     const isMobile = useIsMobile();
+
+    useEffect(() => {
+        if (!aiPreview) return;
+        const timer = setTimeout(() => fitView({ duration: 350, padding: 0.15 }), 100);
+        return () => clearTimeout(timer);
+    }, [aiPreview, fitView]);
+
     return (
 
         <div className="w-full h-full  flex  relative overflow-hidden">
@@ -239,6 +249,10 @@ const DatabaseDiagram: React.FC = () => {
                         onNodesChange={handleNodesChanges}
                         onEdgesChange={handleEdgeChanges}
                         onConnect={onConnect}
+                        nodesDraggable={!aiPreview}
+                        nodesConnectable={!aiPreview}
+                        elementsSelectable={!aiPreview}
+                        deleteKeyCode={aiPreview ? null : ["Backspace", "Delete"]}
                         defaultEdgeOptions={{
                             type: 'relationship-edge',
                             animated: false
@@ -305,6 +319,16 @@ const DatabaseDiagram: React.FC = () => {
                             </Tooltip>
                         }
                     </div>
+                    {aiPreview && (
+                        <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-md border bg-card/95 px-3 py-2 shadow-lg backdrop-blur">
+                            <p className="text-center text-xs font-semibold">AI visual diff · preview only</p>
+                            <div className="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground">
+                                <span className="flex items-center gap-1"><i className="size-2 rounded-full bg-emerald-500" /> Added</span>
+                                <span className="flex items-center gap-1"><i className="size-2 rounded-full bg-amber-500" /> Edited</span>
+                                <span className="flex items-center gap-1"><i className="size-2 rounded-full bg-red-500" /> Deleted</span>
+                            </div>
+                        </div>
+                    )}
                     {
                         isMobile &&
                         <Button size={"icon"} className="absolute bottom-[24px] left-[24px]"
@@ -344,6 +368,4 @@ const DatabaseDiagram: React.FC = () => {
 
 
 export default DatabaseDiagram;
-
-
 

@@ -1,5 +1,6 @@
 import { CardinalityStyle } from "@/lib/database";
 import { createContext, Dispatch } from "react";
+import { AiDiagramPreview } from "@/lib/ai-diagram-preview";
 
 
 interface DiagramDataContextType {
@@ -7,7 +8,9 @@ interface DiagramDataContextType {
     focusedRelationshipId: string | undefined;
     
     setFocusedTableId : ( focused : string | undefined) => void , 
-    setFocusedRelationshipId : ( focused : string | undefined) => void 
+    setFocusedRelationshipId : ( focused : string | undefined) => void,
+    aiPreview: AiDiagramPreview | undefined,
+    setAiPreview: (preview: AiDiagramPreview | undefined) => void,
 }
 
 interface DiagramOpsContextType {

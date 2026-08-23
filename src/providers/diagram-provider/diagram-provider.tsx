@@ -18,6 +18,7 @@ const DiagramProvider: React.FC<Props> = ({ children }) => {
     const navigate = useNavigate();
     const [focusedTableId, setFocusedTableId] = useState<string | undefined>(undefined)
     const [focusedRelationshipId, setFocusedRelationshipId] = useState<string | undefined>(undefined)
+    const [aiPreview, setAiPreview] = useState<import("@/lib/ai-diagram-preview").AiDiagramPreview>();
     const [isConnectionInProgress, setIsConnectionInProgress] = useState<boolean>(false);
 
     const [showController, setShowController] = useState<boolean>(() => {
@@ -115,9 +116,11 @@ const DiagramProvider: React.FC<Props> = ({ children }) => {
         focusedTableId,
         focusedRelationshipId,
         setFocusedTableId,
-        setFocusedRelationshipId
+        setFocusedRelationshipId,
+        aiPreview,
+        setAiPreview,
 
-    }), [focusedTableId, focusedRelationshipId,]);
+    }), [focusedTableId, focusedRelationshipId, aiPreview]);
 
     const contextOpsValues = useMemo(() => ({
         focusOnTable,
@@ -150,4 +153,4 @@ export const useDiagram = () => useContext(DiagramDataContext);
 export const useDiagramOps = () => useContext(DiagramOpsContext);
 
 
-export default DiagramProvider; 
+export default DiagramProvider;

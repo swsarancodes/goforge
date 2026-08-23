@@ -4,10 +4,11 @@ import { Node, useReactFlow } from "@xyflow/react";
 import { useEffect } from "react";
 import { getDefaultTableOverlapping } from "@/utils/tables";
 import hash from "object-hash";
+import { AiDiagramPreview } from "@/lib/ai-diagram-preview";
 
 
 
-export const useTableToNode = (tables: TableType[]): void => {
+export const useTableToNode = (tables: TableType[], aiPreview?: AiDiagramPreview): void => {
     const { setNodes } = useReactFlow();
     
     useEffect(() => {     
@@ -24,7 +25,10 @@ export const useTableToNode = (tables: TableType[]): void => {
                     table,
                     overlapping: getDefaultTableOverlapping(table, tables),
                     pulsing: false,
-                    highlightedEdges: []
+                    highlightedEdges: [],
+                    aiPreviewActive: Boolean(aiPreview),
+                    aiDiffStatus: aiPreview?.tableStatuses[table.id],
+                    aiFieldStatuses: aiPreview?.fieldStatuses ?? {},
                 },
                 style: {
                     width: 224
@@ -39,14 +43,26 @@ export const useTableToNode = (tables: TableType[]): void => {
                 if (!node)
                     return tableNode;
                 else {
-                    const hashNode: string = hash(node.data.table as TableType);
-                    const hashTableNode: string = hash(tableNode.data.table as TableType);
+                    const hashNode: string = hash({
+                        table: node.data.table as TableType,
+                        aiPreviewActive: node.data.aiPreviewActive,
+                        aiDiffStatus: node.data.aiDiffStatus,
+                        aiFieldStatuses: node.data.aiFieldStatuses,
+                    });
+                    const hashTableNode: string = hash({
+                        table: tableNode.data.table as TableType,
+                        aiPreviewActive: tableNode.data.aiPreviewActive,
+                        aiDiffStatus: tableNode.data.aiDiffStatus,
+                        aiFieldStatuses: tableNode.data.aiFieldStatuses,
+                    });
                 
-                    return hashNode == hashTableNode ? node : tableNode;
+                    return hashNode == hashTableNode
+                        ? node
+                        : { ...tableNode, selected: node.selected, data: { ...tableNode.data, highlightedEdges: node.data.highlightedEdges ?? [] } };
                 }
             })
         }); 
         
-    }, [tables])
+    }, [tables, aiPreview])
 
 }

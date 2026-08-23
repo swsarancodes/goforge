@@ -20,18 +20,23 @@ import { Button } from "@/components/ui/button";
 import { IconFocus2, IconPencil, IconTableFilled } from "@tabler/icons-react";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import { AiDiffStatus } from "@/lib/ai-diagram-preview";
 
 export type TableProps = Node<{
     table: TableType,
     overlapping?: boolean,
     pulsing?: boolean,
-    highlightedEdges: Edge[]
+    highlightedEdges: Edge[],
+    aiPreviewActive?: boolean,
+    aiDiffStatus?: AiDiffStatus,
+    aiFieldStatuses?: Record<string, AiDiffStatus>,
 }>
 
 const MAX_FIELDS = 10;
 const Table: React.FC<NodeProps<TableProps>> = (props) => {
 
-    const { selected, data: { table, overlapping = false, pulsing = false, highlightedEdges = [] } } = props
+    const { selected, data: { table, overlapping = false, pulsing = false, highlightedEdges = [], aiPreviewActive = false, aiDiffStatus, aiFieldStatuses = {} } } = props
 
     const [editMode, setEditMode] = useState<boolean>(false);
     const [tableName, setTableName] = useState<string>(table.name);
@@ -44,6 +49,10 @@ const Table: React.FC<NodeProps<TableProps>> = (props) => {
     useEffect(() => {
         setTableName(table.name);
     }, [table.name])
+
+    useEffect(() => {
+        if (aiPreviewActive) setEditMode(false);
+    }, [aiPreviewActive]);
 
     const saveTableName = useCallback(async () => {
         await editTable({ id: table.id, name: tableName } as TableInsertType);
@@ -65,13 +74,15 @@ const Table: React.FC<NodeProps<TableProps>> = (props) => {
             return (<FieldComponent
                 key={field.id}
                 field={field}
-                showHandles={selected}
+                showHandles={selected && !aiPreviewActive}
                 highlight={highlight}
                 color={table.color as string}
-                className={ index == table.fields.length - 1 ? "!rounded-b-md" : undefined }
+                readOnly={aiPreviewActive}
+                aiDiffStatus={aiFieldStatuses[field.id]}
+                className={index == table.fields.length - 1 ? "!rounded-b-md" : undefined}
             />)
         })
-    }, [table.fields, selected, highlightedEdges]);
+    }, [table.fields, selected, highlightedEdges, aiPreviewActive, aiFieldStatuses]);
 
 
     const toggleShowMore = useCallback(() => {
@@ -93,6 +104,9 @@ const Table: React.FC<NodeProps<TableProps>> = (props) => {
                     : '',
 
                 selected && !overlapping ? "ring-[1.5px] !ring-primary" : ""
+                , aiDiffStatus === "added" ? "!ring-2 !ring-emerald-500 shadow-emerald-500/20" : ""
+                , aiDiffStatus === "modified" ? "!ring-2 !ring-amber-500 shadow-amber-500/20" : ""
+                , aiDiffStatus === "deleted" ? "!ring-2 !ring-destructive opacity-70" : ""
             )}
             style={
                 (selected && table.color && !overlapping) ?
@@ -101,7 +115,7 @@ const Table: React.FC<NodeProps<TableProps>> = (props) => {
                     }
                     : undefined
             }
-            onDoubleClick={focus}
+            onDoubleClick={aiPreviewActive ? undefined : focus}
 
         >
             <CardHeader className="group rounded-t rounded-t-md p-1.5 border-1  border-primary/20  flex items-center mb-0 bg-primary/10  "
@@ -116,12 +130,13 @@ const Table: React.FC<NodeProps<TableProps>> = (props) => {
                 {!editMode ? <>
                     <label
                         className=" w-full text-editable truncate  py-0.5 text-sm font-bold  text-primary"
-                        onDoubleClick={ () => setEditMode(true)  }
+                        onDoubleClick={() => !aiPreviewActive && setEditMode(true)}
                         style={{ color: table.color as string }}
                     >
                         {tableName}
                     </label>
-                    <div className="flex gap-1 hidden shrink-0 flex-row group-hover:flex  ">
+                    {aiDiffStatus && <Badge variant={aiDiffStatus === "deleted" ? "destructive" : "secondary"} className="h-5 text-[9px] capitalize">{aiDiffStatus}</Badge>}
+                    {!aiPreviewActive && <div className="flex gap-1 hidden shrink-0 flex-row group-hover:flex  ">
                         
                             <Button variant="outline" size="icon" className="size-6 shrink-0 shadow-sm rounded-sm" onClick={() => setEditMode(true)}>
                                 <IconPencil className="size-3 text-muted-foreground " />
@@ -130,7 +145,7 @@ const Table: React.FC<NodeProps<TableProps>> = (props) => {
                         <Button variant="outline" size="icon" className="size-6 shrink-0 shadow-sm rounded-sm" onClick={focus}>
                             <IconFocus2 className="size-3 text-muted-foreground " />
                         </Button>
-                    </div>
+                    </div>}
                 </>
                     :
                     <>
@@ -200,4 +215,3 @@ export default React.memo(Table, (previousState: any, newState: any) => {
     const newStateHash: string = hash(newState.data);
     return previousStateHash == newStateHash && previousState.selected == newState.selected;
 });
-

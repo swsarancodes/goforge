@@ -12,13 +12,16 @@ import { IconCheck, IconKey, IconKeyframe, IconMessageCircle, IconPencil, IconTr
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { AiDiffStatus } from "@/lib/ai-diagram-preview";
 
 interface Props {
     field: FieldType,
     showHandles?: boolean,
     highlight?: boolean,
     color?: string,
-    className?: string
+    className?: string,
+    readOnly?: boolean,
+    aiDiffStatus?: AiDiffStatus,
 }
 
 
@@ -29,7 +32,7 @@ export const TARGET_PREFIX = "target_";
 
 const Field: React.FC<Props> = (props) => {
 
-    const { field, showHandles, highlight, color, className } = props;
+    const { field, showHandles, highlight, color, className, readOnly = false, aiDiffStatus } = props;
     const [editMode, setEditMode] = useState<boolean>(false);
     const { deleteField, editField } = useDatabaseOperations();
     const [fieldName, setFieldName] = useState<string>(field.name);
@@ -38,6 +41,10 @@ const Field: React.FC<Props> = (props) => {
     useEffect(() => {
         setFieldName(field.name);
     }, [field.name]);
+
+    useEffect(() => {
+        if (readOnly) setEditMode(false);
+    }, [readOnly]);
 
     const removeField = useCallback(() => {
 
@@ -59,6 +66,9 @@ const Field: React.FC<Props> = (props) => {
         <div className={cn(
             "group relative flex h-8 items-center justify-between gap-1 px-1.5 text-sm hover:bg-secondary transition-all duration-200 ease-in-out ",
             highlight ? "bg-secondary" : "",
+            aiDiffStatus === "added" ? "bg-emerald-500/15 ring-1 ring-inset ring-emerald-500/40" : "",
+            aiDiffStatus === "modified" ? "bg-amber-500/15 ring-1 ring-inset ring-amber-500/40" : "",
+            aiDiffStatus === "deleted" ? "bg-destructive/10 text-destructive line-through opacity-70" : "",
             className
         )}>
             <div className="text-muted-foreground flex items-center truncate w-full   gap-1.5 min-w-0  ">
@@ -78,7 +88,7 @@ const Field: React.FC<Props> = (props) => {
                     !editMode ?
                         <label
                             className={"truncate flex gap-1 text-xs text-foreground font-medium "}
-                            onDoubleClick={() => setEditMode(true)}
+                            onDoubleClick={() => !readOnly && setEditMode(true)}
                         >
                             {fieldName}
                             {
@@ -120,14 +130,14 @@ const Field: React.FC<Props> = (props) => {
                             {field.type?.name?.split(' ')[0]}
                         </div>
 
-                        <div className="flex gap-1 opacity-0 shrink-0 flex-row group-hover:opacity-100 transition-opacity duration-200 absolute right-1 top-1 ">
+                        {!readOnly && <div className="flex gap-1 opacity-0 shrink-0 flex-row group-hover:opacity-100 transition-opacity duration-200 absolute right-1 top-1 ">
                             <Button variant="outline" size="icon" className="size-6 shrink-0 shadow-sm rounded-sm" onClick={() => setEditMode(true)}>
                                 <IconPencil className="size-3 text-muted-foreground " />
                             </Button>
                             <Button variant="outline" size="icon" className="size-6 shrink-0 shadow-sm rounded-sm" onClick={removeField}>
                                 <IconTrash className="size-3 text-destructive " />
                             </Button>
-                        </div>
+                        </div>}
 
                     </div>
                     :
@@ -195,4 +205,4 @@ const Field: React.FC<Props> = (props) => {
 
 export default React.memo(Field, (previousState, newState) => {
     return hash(previousState) == hash(newState);
-}); 
+});

@@ -1,5 +1,6 @@
 import { DatabaseType } from "@/lib/schemas/database-schema"; 
 import { createContext } from "react";
+import { DBDiffOperation } from "@/utils/database";
 
  
 
@@ -13,6 +14,7 @@ export interface DatabaseHistoryContextType {
     isProcessing : boolean ; 
 
     present : DatabaseType  ; 
+    applyUndoableOperations: (operations: DBDiffOperation[], targetDatabase: DatabaseType) => Promise<void>;
 
 }
 

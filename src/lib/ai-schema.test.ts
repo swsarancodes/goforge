@@ -4,7 +4,7 @@ import { DatabaseDialect } from "@/lib/database";
 import { Cardinality } from "@/lib/schemas/relationship-schema";
 import { buildSampleDatabase } from "@/test/fixtures/database";
 import { getDataTypes } from "@/test/fixtures/data-types";
-import { AiPlanValidationError, AiSchemaPlan, applyAiSchemaPlan, buildAiSchemaContext } from "./ai-schema";
+import { AiPlanValidationError, AiSchemaPlan, applyAiSchemaPlan, buildAiSchemaContext, validateAiPlanScope } from "./ai-schema";
 
 const dataTypes = getDataTypes(DatabaseDialect.POSTGRES);
 
@@ -12,6 +12,7 @@ const plan = (operations: AiSchemaPlan["operations"]): AiSchemaPlan => ({
     summary: "Test plan",
     assumptions: [],
     warnings: [],
+    clarifyingQuestions: [],
     operations,
 });
 
@@ -118,8 +119,21 @@ describe("AI schema plan compiler", () => {
 
         expect(context.tables[0].fields[0]).toMatchObject({ name: "id", dataType: "integer" });
         expect(context.selectedTables).toEqual(["users"]);
+        expect(context.scope).toBe("selected_tables");
         expect(context.relationships[0]).not.toHaveProperty("onDelete");
         expect(context.relationships[0]).not.toHaveProperty("onUpdate");
         expect(JSON.stringify(context)).not.toMatch(/password|connectionString|rows/i);
+    });
+
+    it("blocks operations outside selected-table scope", () => {
+        expect(() => validateAiPlanScope(plan([
+            { type: "add_column", tableName: "posts", field: { name: "archived_at", dataType: "timestamp" } },
+        ]), ["users"])).toThrow(/outside the selected scope/i);
+    });
+
+    it("allows operations limited to selected tables", () => {
+        expect(() => validateAiPlanScope(plan([
+            { type: "add_index", tableName: "users", index: { name: "users_email_idx", columns: ["email"] } },
+        ]), ["users"])).not.toThrow();
     });
 });

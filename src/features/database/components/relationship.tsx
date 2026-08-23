@@ -6,13 +6,15 @@ import {  useDiagramOps } from "@/providers/diagram-provider/diagram-provider";
  
 import { Edge, EdgeProps,  getSmoothStepPath, Position, useReactFlow } from "@xyflow/react";
 import React, {  useMemo } from "react";
+import { AiDiffStatus } from "@/lib/ai-diagram-preview";
 
  
 
 
 export type RelationshipProps = Edge<{
     relationship: RelationshipType,
-    selected?: boolean
+    selected?: boolean,
+    aiDiffStatus?: AiDiffStatus,
 }, 'relationship-edge'>
 
 const Relationship: React.FC<EdgeProps<RelationshipProps>> = (props) => {
@@ -20,6 +22,13 @@ const Relationship: React.FC<EdgeProps<RelationshipProps>> = (props) => {
     let { id, sourceX, sourceY, targetX, targetY, source, target, selected, data, animated } = props;
     const { getInternalNode, getEdge } = useReactFlow();
     const { focusOnRelationship } = useDiagramOps();
+    const diffColor = data?.aiDiffStatus === "added"
+        ? "#10b981"
+        : data?.aiDiffStatus === "modified"
+            ? "#f59e0b"
+            : data?.aiDiffStatus === "deleted"
+                ? "#ef4444"
+                : undefined;
 
 
     const sourceNode = getInternalNode(source);
@@ -133,8 +142,11 @@ const Relationship: React.FC<EdgeProps<RelationshipProps>> = (props) => {
                     }
                 }}
                 style={{
-                    strokeDasharray: (selected || animated) ? '5, 5' : '0',
-                    animation: (selected || animated) ? 'dash 0.5s linear infinite' : 'none',
+                    stroke: diffColor,
+                    strokeWidth: data?.aiDiffStatus ? 2.5 : undefined,
+                    opacity: data?.aiDiffStatus === "deleted" ? 0.65 : 1,
+                    strokeDasharray: (selected || animated || data?.aiDiffStatus) ? '5, 5' : '0',
+                    animation: (selected || animated || data?.aiDiffStatus === "added") ? 'dash 0.5s linear infinite' : 'none',
                 }}
             />
 

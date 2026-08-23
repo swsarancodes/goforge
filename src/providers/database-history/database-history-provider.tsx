@@ -12,6 +12,7 @@ interface Props { children: React.ReactNode };
 const DatabaseHistoryProvider: React.FC<Props> = ({ children }) => {
 
     const udpateDbFlag = useRef(false);
+    const skipDatabaseSyncHash = useRef<string>();
     const { database, isLoading  } = useDatabase();
     const { executeDbDiffOps } = useDatabaseOperations();
     const [isProcessing, setIsProcessing] = useState<boolean>(false);
@@ -27,8 +28,13 @@ const DatabaseHistoryProvider: React.FC<Props> = ({ children }) => {
         if (database && datatbaseState.present && !isLoading && !isProcessing &&  database?.id == datatbaseState.present?.id) {
             udpateDbFlag.current = false;
 
-            const presentHash: string | undefined = hash(datatbaseState.present, { algorithm: 'sha1' });
-            const databaseHash: string = hash(database, { algorithm: 'sha1' });
+            const presentHash: string | undefined = hash(normalizeDatabase(datatbaseState.present), { algorithm: 'sha1' });
+            const databaseHash: string = hash(normalizeDatabase(database), { algorithm: 'sha1' });
+
+            if (skipDatabaseSyncHash.current === databaseHash) {
+                skipDatabaseSyncHash.current = undefined;
+                return;
+            }
 
             if (presentHash != databaseHash) {
 
@@ -51,6 +57,24 @@ const DatabaseHistoryProvider: React.FC<Props> = ({ children }) => {
             redoChanges();
         }
     }, [redoChanges, udpateDbFlag, isProcessing, isLoading]);
+
+    const applyUndoableOperations = useCallback(async (
+        operations: DBDiffOperation[],
+        targetDatabase: DatabaseType,
+    ) => {
+        if (isProcessing || isLoading) throw new Error("Database history is busy");
+        setIsProcessing(true);
+        try {
+            skipDatabaseSyncHash.current = hash(normalizeDatabase(targetDatabase), { algorithm: 'sha1' });
+            await executeDbDiffOps(operations);
+            // One explicit snapshot means a multi-operation AI plan is one undo
+            // step even if the reactive query emits more than once after commit.
+            set(targetDatabase);
+            udpateDbFlag.current = false;
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [executeDbDiffOps, isLoading, isProcessing, set]);
 
     useEffect(() => {
 
@@ -97,7 +121,8 @@ const DatabaseHistoryProvider: React.FC<Props> = ({ children }) => {
                 canUndo,
                 canRedo,
                 isProcessing,
-                present: datatbaseState.present
+                present: datatbaseState.present,
+                applyUndoableOperations,
             }}
         >
             {children}
@@ -110,4 +135,4 @@ const DatabaseHistoryProvider: React.FC<Props> = ({ children }) => {
 export const useDatabaseHistory = () => useContext(DatabaseHistoryContext);
 
 
-export default DatabaseHistoryProvider; 
+export default DatabaseHistoryProvider;

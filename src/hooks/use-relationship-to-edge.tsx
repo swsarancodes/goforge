@@ -3,8 +3,9 @@ import { RelationshipType } from "@/lib/schemas/relationship-schema";
 import { LEFT_PREFIX, TARGET_PREFIX } from "@/features/database/components/field";
 import { Edge, useReactFlow } from "@xyflow/react";
 import { useEffect } from "react";
+import { AiDiffStatus } from "@/lib/ai-diagram-preview";
 
-export const useRelationshipToEdge = (relationships: RelationshipType[]): void => {
+export const useRelationshipToEdge = (relationships: RelationshipType[], statuses?: Record<string, AiDiffStatus>): void => {
     const { setEdges } = useReactFlow();
     useEffect(() => {
 
@@ -18,12 +19,13 @@ export const useRelationshipToEdge = (relationships: RelationshipType[]): void =
                 selected: false , 
                 animated : false , 
                 data: {
-                    relationship
+                    relationship,
+                    aiDiffStatus: statuses?.[relationship.id],
                 }
             } as Edge
         })
 
         setEdges(edges);
-    }, [relationships])
+    }, [relationships, statuses])
 
 }
