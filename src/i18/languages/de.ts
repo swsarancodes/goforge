@@ -5,6 +5,7 @@ export const de = {
     sidebar: {
       tables: "Tabellen",
       relationships: "Beziehungen",
+      ai_schema: "KI-Schema",
       database: "Datenbank",
       documentation: "Dokumentation"
     },

@@ -5,6 +5,7 @@ export const ru = {
     sidebar: {
       tables: "Таблицы",
       relationships: "Связи",
+      ai_schema: "ИИ-схема",
       database: "База данных",
       documentation : "Документация"
     },

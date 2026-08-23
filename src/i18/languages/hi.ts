@@ -5,6 +5,7 @@ export const hi = {
         sidebar: {
             tables: "तालिकाएँ",
             relationships: "रिलेशनशिप्स",
+            ai_schema: "AI स्कीमा",
             database: "डेटाबेस",
             documentation : "दस्तावेज़"
         },

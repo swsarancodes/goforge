@@ -10,6 +10,7 @@ GoForge is a **free, open-source database schema diagram generator** — design 
 -  **Import / Export SQL DDL** – Easily import existing schemas or export your design as SQL scripts, and edit the generated SQL directly to update the diagram.
 -  **Foreign Key Cycle Detection** – Identify and resolve circular dependencies in relationships.
 -  **Live Database Connections** – Connect to a real PostgreSQL database, introspect its schema onto the canvas, and push edits back to it.
+-  **AI Schema Assistant** – Describe schema changes in plain language, review a validated operation plan and migration SQL, then explicitly apply it as one local transaction.
 
 ### Supported Databases
 
@@ -42,20 +43,41 @@ Then visit `http://localhost:8080` in your browser.
 
 See [DOCKER.md](./DOCKER.md) for the full setup, including the optional live-database-connection service.
 
-#### Using Node.js
-Install dependencies and start the development server:
+#### Using Bun
+
+Install dependencies and start the frontend on port 7000:
+
 ```bash
-npm install
-npm run dev
+bun install
+bun run dev
 ```
 
-Then visit `http://localhost:3000` in your browser.
+Then visit `http://localhost:7000` in your browser.
+
+The API server is required for live PostgreSQL connections and the AI assistant. In a second terminal:
+
+```bash
+cd server
+bun install
+cp .env.example .env
+# Set MASTER_KEY and ZEN_API_KEY in server/.env
+bun run dev
+```
+
+Keep `ZEN_API_KEY` server-side. Never add it to a `VITE_*` variable or commit `server/.env`.
+
+The AI workflow sends schema metadata (table, column, relationship, and index definitions) to Zen. It does not send database rows or saved connection credentials. The default contributor-free Zen model may use prompts and completions to improve future models, so review its data policy before using sensitive schema names.
 
 ### How to Build
 Install dependencies and create a production build:
 ```bash
-npm install
-npm run build
+bun install
+bun run test
+bun run build
+
+cd server
+bun install
+bun run build
 ```
 
 ## Contributing

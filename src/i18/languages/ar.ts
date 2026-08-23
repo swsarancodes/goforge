@@ -5,6 +5,7 @@ export const ar = {
     sidebar: {
       tables: "الجداول",
       relationships: "العلاقات",
+      ai_schema: "مخطط الذكاء الاصطناعي",
       database: "قاعدة البيانات",
       documentation: "الوثائق"
     },

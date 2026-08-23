@@ -1,6 +1,7 @@
 import {
     IconTableAlias,
     IconVectorSpline,
+    IconSparkles,
 } from '@tabler/icons-react'
 
 import type { SidebarData } from '../../types';
@@ -25,6 +26,11 @@ export const useSidebarData = () => {
                         title: t("sidebar.relationships"),
                         url: '/database/relationships',
                         icon: IconVectorSpline,
+                    },
+                    {
+                        title: t("sidebar.ai_schema", { defaultValue: "AI Schema" }),
+                        url: '/database/ai-schema',
+                        icon: IconSparkles,
                     },
            
                 ],

@@ -5,6 +5,7 @@ export const pt = {
     sidebar: {
       tables: "Tabelas",
       relationships: "Relacionamentos",
+      ai_schema: "Esquema com IA",
       database: "Banco de dados",
       documentation : "Documentação"
     },

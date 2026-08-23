@@ -5,6 +5,7 @@ export const zh = {
     sidebar: {
       tables: "数据表",
       relationships: "关系",
+      ai_schema: "AI 架构",
       database: "数据库",
       documentation: "文档"
     },

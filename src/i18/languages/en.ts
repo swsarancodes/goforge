@@ -7,6 +7,7 @@ export const en = {
         sidebar: {
             tables: "Tables",
             relationships: "Relationships",
+            ai_schema: "AI Schema",
             database: "Database",
             documentation: "Docs"
         },
@@ -340,4 +341,4 @@ export const enLanguage: Language = {
     name: "English",
     nativeName: 'English',
     code: 'en',
-} 
+}

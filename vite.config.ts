@@ -7,10 +7,10 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 export default defineConfig({
   plugins: [react() , tailwindcss(), tsconfigPaths() , topLevelAwait()],
   server : {
-    port : 3000,
+    port : 7000,
     proxy: {
       // goforge-api (live database connections) - runs separately via
-      // `npm run dev` in server/, defaults to :4000.
+      // `bun run dev` in server/, defaults to :4000.
       '/api': 'http://localhost:4000'
     }
   } ,

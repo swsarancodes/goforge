@@ -6,6 +6,7 @@ export const es = {
         sidebar: {
             tables: "Tablas",
             relationships: "Relaciones", 
+            ai_schema: "Esquema con IA",
             documentation : "Documentación"
         },
 

@@ -14,7 +14,7 @@ export const databases = sqliteTable('databases', {
     name: text('name').notNull(),
 
     dialect: text("dialect", {
-        enum: ["postgres", "mysql", "sqlite", "mariadb"],
+        enum: ["postgres", "mysql", "sqlite", "mariadb", "mssql", "oracle"],
     }).notNull().default("postgres"),
 
     numOfTables: integer("numOfTables")
@@ -35,4 +35,4 @@ export interface DatabaseType extends InferSelectModel<typeof databases> {
     relationships: RelationshipType[];
     dialect: DatabaseDialect
 };
-export interface DatabaseInsertType extends InferInsertModel<typeof databases> { }; 
+export interface DatabaseInsertType extends InferInsertModel<typeof databases> { };

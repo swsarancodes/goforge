@@ -19,7 +19,7 @@ export const data_types = sqliteTable('data_types', {
 
 
 
-export const dataTypeRelations = relations(fields, ({ many }) => ({
+export const dataTypeRelations = relations(data_types, ({ many }) => ({
     fields: many(fields),
 }));
 
@@ -37,4 +37,4 @@ export interface DataInsertType extends InferSelectModel<typeof data_types> {
     modifiers: string[] | null | any;
     synonyms: string[] | null | any;
     dialect: DatabaseDialect 
-}; 
+};

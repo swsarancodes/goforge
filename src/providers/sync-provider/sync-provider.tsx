@@ -15,6 +15,12 @@ export const powerSyncDb = new PowerSyncDatabase({
         dbFilename: 'goforge.sqlite',
     },
     schema: AppSchema,
+    // GoForge is a local-first editor and does not coordinate writes across tabs.
+    // Avoid the SharedWorker path, which can leave wa-sqlite stuck after a dev
+    // reload in browsers that aggressively retain the previous worker instance.
+    flags: {
+        enableMultiTabs: false,
+    },
 });
 
 export const db: PowerSyncSQLiteDatabase<typeof drizzleSchema> = wrapPowerSyncWithDrizzle(powerSyncDb, {
@@ -46,4 +52,3 @@ export const SyncProvider: React.FC<SyncProviderProps> = ({ children }) => {
         </Suspense>
     )
 }
-

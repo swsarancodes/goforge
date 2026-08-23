@@ -58,7 +58,7 @@ interface DatabaseOperationsContextType {
     deleteRelationship: (id: string) => Promise<QueryResult>,
     deleteMultiRelationships: (ids: string[]) => Promise<QueryResult>,
     // execute the diff operation whenver user click in undo or redo
-    executeDbDiffOps: (operations: DBDiffOperation[]) => void,
+    executeDbDiffOps: (operations: DBDiffOperation[]) => Promise<void>,
     
     // insert databse tables , relationships , indices in one operation 
     importDatabase : (tables  : TableInsertType[] , relationships : RelationshipInsertType[] , indices : IndexInsertType[]) => Promise<any> ; 
@@ -67,6 +67,5 @@ interface DatabaseOperationsContextType {
 
 export const DatabaseDataContext = createContext<DatabaseDataContextType>({} as DatabaseDataContextType);
 export const DatabaseOperationsContext = createContext<DatabaseOperationsContextType>({} as DatabaseOperationsContextType);
-
 
 
