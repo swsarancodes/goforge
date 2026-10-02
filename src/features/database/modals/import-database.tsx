@@ -1,9 +1,9 @@
 import Modal, { ModalProps } from "@/components/modal"
-import { useCallback, useEffect, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { DatabaseDialect, ImportDatabaseMethod, ImportDatabaseOption, ImportMethodType, MARIADB_DUMP_EXAMPLE, MARIADB_DUMP_INSTRUCTIONS, MYSQL_DUMP_EXAMPLE, MYSQL_DUMP_INSTRUCTIONS, PG_DUMP_EXAMPLE, PG_DUMP_INSTRUCTIONS, SQLITE_DUMP_EXAMPLE, SQLITE_DUMP_INSRUCTION } from "@/lib/database";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
-import { AlertCircleIcon, Code, HelpCircle, InfoIcon } from "lucide-react";
+import { AlertCircleIcon, Code, HelpCircle, InfoIcon, Upload } from "lucide-react";
 import Clipboard from "@/components/clipboard";
 import { Trans } from 'react-i18next';
 import { Node, useReactFlow } from "@xyflow/react";
@@ -18,6 +18,7 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { BaseSqlImporter } from "@/utils/import/base-sql-importer";
 import { getImporter } from "@/utils/import/import-utils";
 import CodeEditor from "@/components/code-editor";
+import { MAX_IMPORT_FILE_BYTES, readTextFile } from "@/utils/file";
 
 
 const options: ImportDatabaseOption[] = [{
@@ -300,6 +301,30 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
             })
     }, [parsedDatabase, database]);
 
+    const fileInputRef = useRef<HTMLInputElement>(null);
+    const [isDragging, setIsDragging] = useState(false);
+    const [fileError, setFileError] = useState<string | undefined>(undefined);
+
+    const loadFile = useCallback(async (file: File | undefined) => {
+        if (!file) return;
+        setFileError(undefined);
+        if (file.size > MAX_IMPORT_FILE_BYTES) {
+            setFileError(t("modals.import_database.file_too_large", { defaultValue: "This file is larger than 5 MB. Import a smaller .sql file." }));
+            return;
+        }
+        try {
+            const content = await readTextFile(file);
+            // A NUL byte means this is a binary file, not SQL text.
+            if (content.includes("\u0000")) {
+                setFileError(t("modals.import_database.file_not_text", { defaultValue: "This file is not a text SQL file." }));
+                return;
+            }
+            validateSql(content);
+        } catch {
+            setFileError(t("modals.import_database.file_read_error", { defaultValue: "Could not read the selected file." }));
+        }
+    }, [validateSql, t]);
+
     const convertRawQueryToView = useCallback(() => {
         const query = sqlCode.trim().replace(/;\s*$/, "");
         if (!query) return;
@@ -444,7 +469,47 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                     }
 
                 </div>
-                <div className="flex flex-1 flex-col  ">
+                <div
+                    className="flex flex-1 flex-col relative"
+                    onDragOver={(event) => { event.preventDefault(); setIsDragging(true); }}
+                    onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as globalThis.Node | null)) setIsDragging(false); }}
+                    onDrop={(event) => {
+                        event.preventDefault();
+                        setIsDragging(false);
+                        void loadFile(event.dataTransfer.files?.[0]);
+                    }}
+                >
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                        <input
+                            ref={fileInputRef}
+                            type="file"
+                            accept=".sql,.txt,.ddl,text/plain,application/sql"
+                            className="sr-only"
+                            data-testid="import-file-input"
+                            onChange={(event) => {
+                                void loadFile(event.target.files?.[0]);
+                                // Allow re-selecting the same file after editing it.
+                                event.target.value = "";
+                            }}
+                        />
+                        <Button type="button" size="sm" variant="outline" className="gap-1.5" onClick={() => fileInputRef.current?.click()}>
+                            <Upload className="size-3.5" />
+                            {t("modals.import_database.upload_file", { defaultValue: "Upload .sql file" })}
+                        </Button>
+                        <span className="text-xs text-muted-foreground">
+                            {t("modals.import_database.drop_hint", { defaultValue: "or drop a file here, or paste below" })}
+                        </span>
+                    </div>
+                    {fileError && (
+                        <p className="mb-2 flex items-center gap-1 text-sm text-destructive">
+                            <AlertCircleIcon className="size-4 shrink-0" /> {fileError}
+                        </p>
+                    )}
+                    {isDragging && (
+                        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-md border-2 border-dashed border-primary bg-primary/10 text-sm font-medium">
+                            {t("modals.import_database.drop_active", { defaultValue: "Drop the .sql file to load it" })}
+                        </div>
+                    )}
                     <CodeEditor
                         className={
                             cn("flex w-full   border-1 rounded-md border-divider overflow-hidden ",

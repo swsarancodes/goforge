@@ -14,7 +14,9 @@ import { areArraysEqual } from "@/utils/utils";
 import CodeEditor from "@/components/code-editor";
 import useToast from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { AlertCircleIcon, AlertTriangle, Check, Code2, Loader2, Pencil, X } from "lucide-react";
+import { AlertCircleIcon, AlertTriangle, Check, Code2, Download, Loader2, Pencil, X } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { downloadTextFile, toSafeFileName } from "@/utils/file";
 import { PreparedSqlSchemaChange, prepareSqlSchemaChange } from "@/utils/import/prepare-sql-schema-change";
 import { DBDiffOperation } from "@/utils/database";
 
@@ -184,6 +186,13 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
 
     const { t } = useTranslation();
 
+    const onDownload = useCallback(() => {
+        const content = isEditing ? draftSql : sqlCode;
+        if (!content) return;
+        const fileName = `${toSafeFileName(currentDatabase?.name)}.${currentDatabase?.dialect ?? "sql"}.sql`;
+        downloadTextFile(content, fileName, "application/sql");
+    }, [isEditing, draftSql, sqlCode, currentDatabase?.name, currentDatabase?.dialect]);
+
     useEffect(() => {
         (async () => {
             if (database?.dialect && data_types.length > 0) {
@@ -303,6 +312,23 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
                                 </Button>
                             </>
                         )}
+                        <Tooltip>
+                            <TooltipTrigger asChild>
+                                <span>
+                                    <Button
+                                        size="icon"
+                                        variant="outline"
+                                        className="w-7 h-7 text-muted-foreground bg-card/50 backdrop-blur-xs dark:backdrop-blur-md shadow-lg"
+                                        onClick={onDownload}
+                                        disabled={!(isEditing ? draftSql : sqlCode)}
+                                        aria-label={t("export.download_sql", { defaultValue: "Download .sql file" })}
+                                    >
+                                        <Download className="size-4" />
+                                    </Button>
+                                </span>
+                            </TooltipTrigger>
+                            <TooltipContent>{t("export.download_sql", { defaultValue: "Download .sql file" })}</TooltipContent>
+                        </Tooltip>
                         <Clipboard text={isEditing ? draftSql : sqlCode} />
                     </div>
                 </div>
