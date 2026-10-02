@@ -9,6 +9,7 @@ import OpenDatabaseModal from "@/features/database/modals/open-database-modal";
 import DeleteDatabaseModal from "@/features/database/modals/delete-database-modal";
 import ImportDatabaseModal from "@/features/database/modals/import-database";
 import ExportSqlModal from "@/features/database/modals/export-sql-modal";
+import ImportProjectModal from "@/features/database/modals/import-project-modal";
 import ExportImageModal from "@/features/database/modals/export-image-modal";
 import ConnectLiveDatabaseModal from "@/features/database/modals/connect-live-database-modal";
 import PushLiveChangesModal from "@/features/database/modals/push-live-changes-modal";
@@ -69,6 +70,9 @@ export const ModalProvider: React.FC<Props> = ({ children }) => {
                     ||
                     (currentModal.modal == Modals.EXPORT_IMAGE ) &&
                     <ExportImageModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    (currentModal.modal == Modals.IMPORT_PROJECT ) &&
+                    <ImportProjectModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
                     ||
                     (currentModal.modal == Modals.CONNECT_LIVE_DATABASE ) &&
                     <ConnectLiveDatabaseModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />

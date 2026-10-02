@@ -9,6 +9,7 @@ import { ViewInsertType } from "@/lib/schemas/view-schema";
 import { SequenceInsertType } from "@/lib/schemas/sequence-schema";
 import { TableInsertType, TableType } from "@/lib/schemas/table-schema";
 import { DBDiffOperation } from "@/utils/database";
+import type { ProjectBundle } from "@/utils/project-file";
 import { QueryResult } from "@powersync/web";
 import { createContext } from "react";
 
@@ -68,6 +69,8 @@ interface DatabaseOperationsContextType {
     executeDbDiffOps: (operations: DBDiffOperation[]) => Promise<void>,
     
     // insert databse tables , relationships , indices in one operation 
+    // create a new database from a validated project bundle, resolves to its id
+    importProject : (bundle: ProjectBundle) => Promise<string> ;
     importDatabase : (tables  : TableInsertType[] , relationships : RelationshipInsertType[] , indices : IndexInsertType[], views?: ViewInsertType[], sequences?: SequenceInsertType[]) => Promise<any> ;
      
 }

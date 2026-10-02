@@ -19,6 +19,7 @@ import { v4 } from "uuid";
 import { DataType } from "@/lib/schemas/data-type-schema";
 import { deleteFieldsWithCascade, deleteIndicesWithCascade, deleteTablesWithCascade } from "@/utils/cascade";
 import { DatabaseDialect } from "@/lib/database";
+import type { ProjectBundle } from "@/utils/project-file";
 import { CheckConstraintInsertType, check_constraints, checkConstraintValues, validateCheck } from "@/lib/schemas/check-constraint-schema";
 import { ViewInsertType, views as viewsModel } from "@/lib/schemas/view-schema";
 import { SequenceInsertType, sequences as sequencesModel } from "@/lib/schemas/sequence-schema";
@@ -695,6 +696,23 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
         }
     }, [db, currentDatabaseId])
 
+    // Creates a brand new database together with all of its contents in one
+    // transaction, so a failed import never leaves an empty project behind.
+    const importProject = useCallback(async (bundle: ProjectBundle): Promise<string> => {
+        const databaseId = v4();
+        await db.transaction(async (tx) => {
+            await tx.insert(databaseModel).values({
+                id: databaseId,
+                name: bundle.name,
+                dialect: bundle.dialect as any,
+                createdAt: getTimestamp(),
+            });
+            await insertSchemaRows(tx, databaseId, bundle.tables, bundle.relationships, bundle.indexes, bundle.views, bundle.sequences);
+            await updateDbNumTables(databaseId, tx);
+        });
+        return databaseId;
+    }, [db, updateDbNumTables])
+
     const databaseOpsValue = useMemo(() => ({
         isSwitchingDatabase,
         createDatabase,
@@ -723,6 +741,7 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
         deleteCheck,
         editFieldIndices,
         importDatabase,
+        importProject,
         data_types,
         getInteger,
         orderTables
@@ -753,6 +772,7 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
         deleteCheck,
         editFieldIndices,
         importDatabase,
+        importProject,
         data_types,
         getInteger,
         orderTables

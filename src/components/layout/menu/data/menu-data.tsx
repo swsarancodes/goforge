@@ -10,6 +10,7 @@ import { useModal } from "@/providers/modal-provider/modal-provider";
 import { useDiagramOps } from "@/providers/diagram-provider/diagram-provider";
 import { TableType } from "@/lib/schemas/table-schema";
 import { CardinalityStyle } from "@/lib/database";
+import useProjectActions from "@/hooks/use-project-actions";
 import { useTheme } from "@/providers/theme-provider/theme-provider";
 
 export const useMenuData = () => {
@@ -21,6 +22,7 @@ export const useMenuData = () => {
     const { canRedo, canUndo, undo, redo } = useDatabaseHistory();
     const { deleteMultiTables } = useDatabaseOperations();
     const { database } = useDatabase();
+    const { exportProject, duplicateProject } = useProjectActions();
     const { openController, showController, cardinalityStyle, changeCardinalityStyle } = useDiagramOps();
 
     const menuData: MenuItem[] = useMemo(() => [
@@ -44,10 +46,23 @@ export const useMenuData = () => {
                 {
                     id: "menu.import",
                     title: t("menu.import"),
-                    divide: true,
                     clickHandler: () => {
                         open(Modals.IMPORT_DATABASE)
                     }
+                },
+                {
+                    id: "menu.import_project",
+                    title: t("menu.import_project", { defaultValue: "Import Project (.json)" }),
+                    clickHandler: () => {
+                        open(Modals.IMPORT_PROJECT)
+                    }
+                },
+                {
+                    id: "menu.duplicate_project",
+                    title: t("menu.duplicate_project", { defaultValue: "Duplicate Project" }),
+                    isDisabled: !database,
+                    divide: true,
+                    clickHandler: duplicateProject
                 },
                 {
                     id: "menu.export_sql",
@@ -57,6 +72,11 @@ export const useMenuData = () => {
 
                         open(Modals.EXPORT_SQL)
                     }
+                },
+                {
+                    id: "menu.export_project",
+                    title: t("menu.export_project", { defaultValue: "Export Project (.json)" }),
+                    clickHandler: exportProject
                 },
                 {
                     id: "menu.export_image",
@@ -167,7 +187,7 @@ export const useMenuData = () => {
                 },
             ],
         },
-    ], [t, canRedo, canUndo, undo, redo , deleteMultiTables, database, showController, openController, changeCardinalityStyle, cardinalityStyle, theme]);
+    ], [t, exportProject, duplicateProject, canRedo, canUndo, undo, redo , deleteMultiTables, database, showController, openController, changeCardinalityStyle, cardinalityStyle, theme]);
  
 
 
