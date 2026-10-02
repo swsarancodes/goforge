@@ -19,6 +19,7 @@ import { relationships } from "@/lib/schemas/relationship-schema";
 import { field_indices } from "@/lib/schemas/field_index-schema";
 import { indices } from "@/lib/schemas/index-schema";
 import { relationship_fields } from "@/lib/schemas/relationship_field-schema";
+import { check_constraints } from "@/lib/schemas/check-constraint-schema";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  deleteFieldsWithCascade
@@ -72,7 +73,7 @@ export const deleteFieldsWithCascade = async (
 //
 // Handles deletion of entire tables, and manually cascades to:
 // - all fields belonging to the table
-// - all indices attached to the table
+// - all indices and CHECK constraints attached to the table
 // - all relationships and field-index mappings tied to those fields/indices
 //
 // This ensures full cleanup when a table is removed in PowerSync context.
@@ -137,6 +138,8 @@ export const deleteTablesWithCascade = async (
         // Delete all indices belonging to the table
         results.push(await tx.delete(indices).where(inArray(indices.id, indicesIds)));
     }
+    // CHECK constraints belong to the table
+    results.push(await tx.delete(check_constraints).where(inArray(check_constraints.tableId, ids)));
     // Finally, delete the table(s) themselves
     results.push(await tx.delete(tables).where(inArray(tables.id, ids)));
     return results;

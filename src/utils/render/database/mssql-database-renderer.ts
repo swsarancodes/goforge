@@ -42,10 +42,13 @@ ${this.commit()}
         if (primaryKeys.length > 0) {
             constraints = this.getPrimaryKeyContraint(primaryKeys, table)
         }
+        const checkConstraints: string = (ast.checks as { name: string; expression: string }[])
+            .map((check) => `,\nCONSTRAINT ${check.name} CHECK (${check.expression.trim()})`)
+            .join("");
         return `
         CREATE TABLE ${qualifiedTableName(table)} (
             ${(ast as any).field_definitions.join(",\n")}
-            ${constraints ? ',\n' + constraints : ""}
+            ${constraints ? ',\n' + constraints : ""}${checkConstraints}
         );
         ${indexes}
         ` ;

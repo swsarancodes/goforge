@@ -64,6 +64,9 @@ export function buildAiDiagramPreview(
             case "DELETE_INDEX":
             case "UPDATE_INDEX":
             case "UPDATE_FIELD_INDICES":
+            case "CREATE_CHECK":
+            case "DELETE_CHECK":
+            case "UPDATE_CHECK":
                 markModified(tableStatuses, operation.tableId);
                 break;
         }

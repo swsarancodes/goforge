@@ -9,6 +9,7 @@ import { FieldIndexType } from "@/lib/schemas/field_index-schema";
 import { RelationshipFieldType } from "@/lib/schemas/relationship_field-schema";
 import { ViewType } from "@/lib/schemas/view-schema";
 import { SequenceType } from "@/lib/schemas/sequence-schema";
+import { CheckConstraintType } from "@/lib/schemas/check-constraint-schema";
 
 // Define the possible operations that can be performed when diffing databases
 export type DBDiffOperation =
@@ -33,6 +34,9 @@ export type DBDiffOperation =
     | { type: 'CREATE_INDEX'; tableId: string; index: IndexType; table?: TableType }
     | { type: 'DELETE_INDEX'; tableId: string; indexId: string; table?: TableType; index?: IndexType }
     | { type: 'UPDATE_INDEX'; tableId: string; indexId: string; changes: Partial<IndexType> }
+    | { type: 'CREATE_CHECK'; tableId: string; check: CheckConstraintType; table?: TableType }
+    | { type: 'DELETE_CHECK'; tableId: string; checkId: string; table?: TableType; check?: CheckConstraintType }
+    | { type: 'UPDATE_CHECK'; tableId: string; checkId: string; changes: Partial<CheckConstraintType>; table?: TableType; check?: CheckConstraintType }
     | { type: 'UPDATE_FIELD_INDICES'; tableId: string; indexId: string; create: FieldIndexType[]; delete: string[] }
     | { type: "UPDATE_NUM_TABLES", value: number };
 
@@ -70,6 +74,11 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
         create: FieldIndexType[];
         delete: string[];
     }>> = {};
+
+    // Keep track of CHECK constraint changes
+    const checkChanges: Record<string, Record<string, Partial<CheckConstraintType>>> = {};
+    const checkCreates: Record<string, CheckConstraintType[]> = {};
+    const checkDeletes: Record<string, string[]> = {};
 
     // Loop through each patch operation
     for (const op of patch) {
@@ -158,6 +167,39 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
                     indexChanges[tableId] ??= {};
                     indexChanges[tableId][indexId] ??= {};
                     indexChanges[tableId][indexId][attr as keyof IndexType] = op.op === 'remove' ? null : op.value;
+                }
+            }
+
+            // CHECK constraints are keyed by id inside the table (see normalizeDatabase)
+            else if (parts[2] === 'checks') {
+                const checkId = parts[3];
+                if (parts.length === 3) {
+                    // The whole map appearing/disappearing (e.g. the first check on a
+                    // table that had none): expand it into per-check operations.
+                    if (op.op === 'add' && op.value && typeof op.value === 'object') {
+                        checkCreates[tableId] ??= [];
+                        checkCreates[tableId].push(...Object.values(op.value) as CheckConstraintType[]);
+                    } else if (op.op === 'remove') {
+                        // Unknown ids here; the previous table is consulted below.
+                        checkDeletes[tableId] ??= [];
+                        checkDeletes[tableId].push('*');
+                    }
+                } else if (parts.length === 4) {
+                    if (op.op === 'add') {
+                        checkCreates[tableId] ??= [];
+                        checkCreates[tableId].push(op.value);
+                    } else if (op.op === 'remove') {
+                        checkDeletes[tableId] ??= [];
+                        checkDeletes[tableId].push(checkId);
+                    } else if (op.op === 'replace') {
+                        checkChanges[tableId] ??= {};
+                        checkChanges[tableId][checkId] = op.value;
+                    }
+                } else if (['add', 'remove', 'replace'].includes(op.op)) {
+                    const attr = parts.slice(4).join('/');
+                    checkChanges[tableId] ??= {};
+                    checkChanges[tableId][checkId] ??= {};
+                    checkChanges[tableId][checkId][attr as keyof CheckConstraintType] = op.op === 'remove' ? null : op.value;
                 }
             }
 
@@ -297,6 +339,19 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
         }
     }
 
+    // CHECK constraint creates / deletes / updates
+    for (const [tableId, checks] of Object.entries(checkCreates)) {
+        for (const check of checks) operations.push({ type: 'CREATE_CHECK', tableId, check });
+    }
+    for (const [tableId, checkIds] of Object.entries(checkDeletes)) {
+        for (const checkId of checkIds) operations.push({ type: 'DELETE_CHECK', tableId, checkId });
+    }
+    for (const [tableId, checks] of Object.entries(checkChanges)) {
+        for (const [checkId, changes] of Object.entries(checks)) {
+            operations.push({ type: 'UPDATE_CHECK', tableId, checkId, changes });
+        }
+    }
+
     for (const tableId in fieldIndexMutations) {
         for (const indexId in fieldIndexMutations[tableId]) {
             const { create, delete: del } = fieldIndexMutations[tableId][indexId];
@@ -359,6 +414,11 @@ export function normalizeDatabase(db: DatabaseType): any {
                             ...field , 
                             type : undefined 
                         }])
+                    ),
+                    // Always an object (even when empty) so a table's first check shows up as
+                    // an add on /checks/<id> rather than the whole map appearing at once.
+                    checks: Object.fromEntries(
+                        (table.checks ?? []).map(check => [check.id, check])
                     ),
                     indices: Object.fromEntries(
                         table.indices.map(index => [index.id, {

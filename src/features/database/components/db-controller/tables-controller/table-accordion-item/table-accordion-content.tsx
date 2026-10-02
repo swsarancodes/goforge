@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import FieldList from "./field/field-list";
 import IndexesList from "./index/indexes-list";
+import ChecksList from "./check/checks-list";
 import { TableType } from "@/lib/schemas/table-schema";
 import {  useDatabaseOperations } from "@/providers/database-provider/database-provider";
 import { getNextSequence } from "@/utils/field";
@@ -10,7 +11,7 @@ import { v4 } from "uuid";
 import { IndexInsertType } from "@/lib/schemas/index-schema";
 import { FieldInsertType } from "@/lib/schemas/field-schema";
 import { AccordionContent, Accordion, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
-import { IconBolt , IconFolder,  IconMessageCircle,  } from "@tabler/icons-react";
+import { IconBolt , IconFolder,  IconMessageCircle, IconShieldCheck } from "@tabler/icons-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import ColorPicker from "@/components/color-picker";
@@ -79,6 +80,11 @@ const TableAccordionContent: React.FC<TableAccordionBodyProps> = ({ table, keys 
             setSelectedItems([...selectedItems, "indexes"])
     }, [table.indices.length])
 
+    useEffect(() => {
+        if ((table.checks?.length ?? 0) > 0)
+            setSelectedItems((items) => items.includes("checks") ? items : [...items, "checks"])
+    }, [table.checks?.length])
+
   
     return (
         <AccordionContent className=" p-0 ">
@@ -111,6 +117,19 @@ const TableAccordionContent: React.FC<TableAccordionBodyProps> = ({ table, keys 
                     </AccordionTrigger>
                     <AccordionContent className="pb-2">
                         <IndexesList indices={table.indices} fields={table.fields} tableId={table.id} />
+                    </AccordionContent>
+                </AccordionItem>
+
+                <AccordionItem value="checks" className="border-none">
+                    <AccordionTrigger className=" py-1  rounded-none text-muted-foreground pr-1.5" position="right">
+                        <div className="w-full flex gap-1 items-center">
+                            <IconShieldCheck className="size-4" />
+                            {t("db_controller.checks", { defaultValue: "Checks" })}
+                            {(table.checks?.length ?? 0) > 0 && <span className="text-xs">({table.checks!.length})</span>}
+                        </div>
+                    </AccordionTrigger>
+                    <AccordionContent className="pb-2">
+                        <ChecksList checks={table.checks ?? []} tableId={table.id} tableName={table.name} />
                     </AccordionContent>
                 </AccordionItem>
 

@@ -9,6 +9,7 @@ import { TableType } from "@/lib/schemas/table-schema";
 import { BaseSQLRenderer } from "./base-sql-renderer";
 import { ASTStatment, noteText } from "./base-database-renderer";
 import { IndexType } from "@/lib/schemas/index-schema";
+import { CheckConstraintType } from "@/lib/schemas/check-constraint-schema";
 
 
 export default class MysqlRenderer extends BaseSQLRenderer {
@@ -39,6 +40,17 @@ ${this.commit()}
             throw error;
         }
 
+    }
+
+    protected quoteName(name: string): string {
+        return `\`${name.replace(/`/g, "``")}\``;
+    }
+
+    protected dropCheckStatement(table: TableType, check: CheckConstraintType): ASTStatment {
+        // MySQL's own spelling; MariaDB uses the generic DROP CONSTRAINT.
+        if (this.dialect === DatabaseDialect.MYSQL)
+            return this.terminate(`ALTER TABLE ${this.qualifiedName(table)} DROP CHECK ${this.quoteName(check.name)}`);
+        return super.dropCheckStatement(table, check);
     }
 
     protected getFieldDefinition(field: FieldType, table: TableType, ignorePkContraint: boolean): AST {

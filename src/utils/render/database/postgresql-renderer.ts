@@ -77,6 +77,15 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
     }
  
  
+    protected quoteName(name: string): string {
+        return `"${name.replace(/"/g, '""')}"`;
+    }
+
+    // astToSQL above appends the ';' for string statements itself.
+    protected terminate(sql: string): string {
+        return sql;
+    }
+
     protected noteStatements(table: TableType): string[] {
         const quote = (identifier: string) => `"${identifier.replace(/"/g, '""')}"`;
         const tableName = table.namespace ? `${quote(table.namespace)}.${quote(table.name)}` : quote(table.name);

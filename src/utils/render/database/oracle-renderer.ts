@@ -32,10 +32,13 @@ export default class OracleRenderer extends BaseDatabaseRenderer {
         else
             pk_constraint = "";
         let indexes: string = ast.indices_ast.filter((index: string) => index != null).join("\n")
+        const checkConstraints: string = (ast.checks as { name: string; expression: string }[])
+            .map((check) => `,\nCONSTRAINT ${check.name} CHECK (${check.expression.trim()})`)
+            .join("");
         return `
         CREATE TABLE ${qualifiedTableName(table)} (
             ${(ast as any).field_definitions.join(",\n")}
-            ${pk_constraint}
+            ${pk_constraint}${checkConstraints}
         );
         ${indexes}
         ` ;

@@ -11,6 +11,8 @@ import { extractViewDependencies, ViewInsertType } from '@/lib/schemas/view-sche
 import { SequenceInsertType } from '@/lib/schemas/sequence-schema';
 import { init, parse, ReferentialAction } from '@guanmingchiu/sqlparser-ts';
 import { v4 } from 'uuid';
+import { CheckConstraintInsertType, CHECK_NAME_PATTERN, nextCheckName, validateCheckExpression } from '@/lib/schemas/check-constraint-schema';
+import { ExtractedCheck, extractCheckFromAlterTable, extractChecksFromCreateTable } from './check-extractor';
 
 
 export class BaseSqlImporter {
@@ -52,8 +54,10 @@ export class BaseSqlImporter {
                             fk_constraints: tableFkConstraints,
                             indexes: tableIndexes,
                         } = this.astToTable(astStatment);
-                        if (table)
+                        if (table) {
                             tables.push(table);
+                            this.attachChecks(table, extractChecksFromCreateTable(statment), errors);
+                        }
                         errors.push(...tableErrors);
                         indexes.push(...tableIndexes);
 
@@ -83,6 +87,15 @@ export class BaseSqlImporter {
             }
             for (const statment of alterTableStatements) {
                 try {
+                    // CHECK constraints are read from the statement text (see check-extractor.ts)
+                    // rather than the parser's expression tree, so they round-trip verbatim.
+                    const alterCheck = extractCheckFromAlterTable(statment);
+                    if (alterCheck) {
+                        const checkTable = this.findTable(tables, alterCheck.tableName);
+                        if (checkTable) this.attachChecks(checkTable, [alterCheck], errors);
+                        else errors.push(new Error(`Skipped CHECK constraint on unknown table "${alterCheck.tableName}"`));
+                        continue;
+                    }
                     const astStatment: any = parse(statment, this.dialect as any)?.pop();
 
                     if (astStatment?.AlterTable) {
@@ -195,6 +208,35 @@ export class BaseSqlImporter {
         }
 
 
+    }
+
+    /**
+     * Adds CHECK constraints found in the SQL text to `table`. Unusable ones (unsafe
+     * expression text) are skipped with a warning instead of failing the whole import;
+     * names the app cannot store are sanitized, and unnamed or clashing names get a
+     * generated one so every check stays addressable.
+     */
+    protected attachChecks(table: TableInsertType, extracted: ExtractedCheck[], errors: Error[]) {
+        if (extracted.length === 0) return;
+        const checks: CheckConstraintInsertType[] = table.checks ?? [];
+        for (const candidate of extracted) {
+            const problem = validateCheckExpression(candidate.expression);
+            if (problem) {
+                errors.push(new Error(`Skipped CHECK constraint${candidate.name ? ` "${candidate.name}"` : ''} on "${table.name}": ${problem}`));
+                continue;
+            }
+            let name = candidate.name;
+            if (name && !CHECK_NAME_PATTERN.test(name)) {
+                const sanitized = name.replace(/[^A-Za-z0-9_$]/g, '_').replace(/^(\d)/, '_$1');
+                errors.push(new Error(`CHECK constraint name "${name}" on "${table.name}" was renamed to "${sanitized}"`));
+                name = sanitized;
+            }
+            if (!name || checks.some((existing) => existing.name.toLowerCase() === name!.toLowerCase())) {
+                name = nextCheckName(table.name, checks);
+            }
+            checks.push({ id: v4(), tableId: table.id as string, name, expression: candidate.expression });
+        }
+        table.checks = checks;
     }
 
     protected astToTable(ast: any): ParsedTable {

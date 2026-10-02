@@ -29,7 +29,7 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
     protected createTableAst(table: TableType): ASTStatment[] | ASTStatment {
         // get the tale defintion from parent render that contain only the field defintion and primary keys contraints
         // this definition is commun amount (Mysql , MariaDB , Sqlite) , for postgres we need to override it and handle enums
-        const { field_definitions, constraints, indices_ast } = super.createTableAst(table) as any
+        const { field_definitions, constraints, indices_ast, checks } = super.createTableAst(table) as any
         // wrape those defintion with create table AST 
         return [{
             keyword: "table",
@@ -38,7 +38,20 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
                 db: table.namespace ?? null,
                 table: table.name,
             }],
-            create_definitions: [...field_definitions, ...constraints]
+            create_definitions: [
+                ...field_definitions,
+                ...constraints,
+                // The expression is written verbatim ("default" nodes print their value as-is)
+                // so what the user typed is what lands in the DDL.
+                ...checks.map((check: { name: string; expression: string }) => ({
+                    constraint_type: "check",
+                    keyword: "constraint",
+                    constraint: check.name,
+                    index_type: null,
+                    definition: [{ type: "default", value: check.expression.trim() }],
+                    resource: "constraint",
+                })),
+            ]
         }, ...indices_ast] as any
     }
 

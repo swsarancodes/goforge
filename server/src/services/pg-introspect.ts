@@ -19,6 +19,7 @@ export interface IntrospectedTable {
     columns: IntrospectedColumn[];
     primaryKeyColumns: string[];
     uniqueConstraints: { name: string; columns: string[] }[];
+    checkConstraints: { name: string; expression: string }[];
 }
 
 export interface IntrospectedForeignKey {
@@ -92,6 +93,19 @@ const UNIQUE_CONSTRAINTS_QUERY = `
   ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position;
 `;
 
+// Table-level CHECK constraints only: conrelid = 0 are domain checks, and conislocal
+// skips constraints a table merely inherited from a parent.
+const CHECK_CONSTRAINTS_QUERY = `
+  SELECT n.nspname AS table_schema, t.relname AS table_name, c.conname AS constraint_name,
+         pg_get_expr(c.conbin, c.conrelid, true) AS expression
+  FROM pg_constraint c
+  JOIN pg_class t ON t.oid = c.conrelid
+  JOIN pg_namespace n ON n.oid = t.relnamespace
+  WHERE c.contype = 'c' AND c.conislocal
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY n.nspname, t.relname, c.conname;
+`;
+
 const FOREIGN_KEYS_QUERY = `
   SELECT tc.constraint_name, tc.table_schema AS src_schema, tc.table_name AS src_table, kcu.column_name AS src_col,
          kcu.referenced_table_schema AS tgt_schema, kcu.referenced_table_name AS tgt_table, kcu.referenced_column_name AS tgt_col,
@@ -148,10 +162,11 @@ const SEQUENCES_QUERY = `
 `;
 
 export async function introspectPostgres(client: Client): Promise<IntrospectionResult> {
-    const [columnsRes, pkRes, uniqueRes, fkRes, indexRes, enumRes, viewsRes, sequencesRes] = await Promise.all([
+    const [columnsRes, pkRes, uniqueRes, checksRes, fkRes, indexRes, enumRes, viewsRes, sequencesRes] = await Promise.all([
         client.query(COLUMNS_QUERY),
         client.query(PRIMARY_KEYS_QUERY),
         client.query(UNIQUE_CONSTRAINTS_QUERY),
+        client.query(CHECK_CONSTRAINTS_QUERY),
         client.query(FOREIGN_KEYS_QUERY),
         client.query(INDEXES_QUERY),
         client.query(ENUMS_QUERY),
@@ -165,7 +180,7 @@ export async function introspectPostgres(client: Client): Promise<IntrospectionR
         const key = `${namespace}.${name}`;
         let table = tablesByName.get(key);
         if (!table) {
-            table = { name, namespace, columns: [], primaryKeyColumns: [], uniqueConstraints: [] };
+            table = { name, namespace, columns: [], primaryKeyColumns: [], uniqueConstraints: [], checkConstraints: [] };
             tablesByName.set(key, table);
         }
         return table;
@@ -204,6 +219,10 @@ export async function introspectPostgres(client: Client): Promise<IntrospectionR
     }
     for (const entry of uniqueByConstraint.values()) {
         getTable(entry.namespace, entry.table).uniqueConstraints.push({ name: entry.name, columns: entry.columns });
+    }
+
+    for (const row of checksRes.rows) {
+        getTable(row.table_schema, row.table_name).checkConstraints.push({ name: row.constraint_name, expression: row.expression });
     }
 
     const foreignKeys: IntrospectedForeignKey[] = fkRes.rows.map((row) => ({

@@ -17,6 +17,7 @@ import { validateRelationshipFields } from "@/lib/schemas/relationship_field-sch
 import { ViewType } from "@/lib/schemas/view-schema";
 import { SequenceType } from "@/lib/schemas/sequence-schema";
 import { qualifiedTableName } from "@/lib/schemas/table-schema";
+import { CheckConstraintType, checkConstraintValues, validateCheckExpression, validateCheckName } from "@/lib/schemas/check-constraint-schema";
 
 export default abstract class BaseDatabaseRenderer {
 
@@ -158,6 +159,23 @@ export default abstract class BaseDatabaseRenderer {
                 return [this.dropViewStatement(operation.view), this.createViewStatement(updatedView)];
             }
 
+            case "CREATE_CHECK":
+                return operation.table ? this.addCheckStatement(operation.table, operation.check) : null;
+
+            case "DELETE_CHECK":
+                return operation.table && operation.check ? this.dropCheckStatement(operation.table, operation.check) : null;
+
+            case "UPDATE_CHECK": {
+                if (!operation.table || !operation.check) return null;
+                // A constraint cannot be edited in place, so replace it. The previous
+                // table name is still current here: table renames are ordered last.
+                const updatedCheck = { ...operation.check, ...operation.changes } as CheckConstraintType;
+                return [
+                    this.dropCheckStatement(operation.table, operation.check),
+                    this.addCheckStatement(operation.table, updatedCheck),
+                ];
+            }
+
             case "CREATE_SEQUENCE":
                 return this.createSequenceStatement(operation.sequence);
 
@@ -172,6 +190,42 @@ export default abstract class BaseDatabaseRenderer {
  
         }
         return null;
+    }
+
+    /** Identifier quoting for hand-built statements; dialects that quote override this. */
+    protected quoteName(name: string): string {
+        return name;
+    }
+
+    protected qualifiedName(table: { name: string; namespace?: string | null }): string {
+        return table.namespace ? `${this.quoteName(table.namespace)}.${this.quoteName(table.name)}` : this.quoteName(table.name);
+    }
+
+    /** Ends a hand-built statement; dialects whose astToSQL already adds ';' override this. */
+    protected terminate(sql: string): string {
+        return `${sql};`;
+    }
+
+    /**
+     * The table's CHECK constraints, validated. Expressions are emitted verbatim, so an
+     * invalid one must never reach the DDL even if it got past the UI and the provider.
+     */
+    protected getChecks(table: TableType): CheckConstraintType[] {
+        const checks = checkConstraintValues<CheckConstraintType>(table.checks as any);
+        for (const check of checks) {
+            const problem = validateCheckName(check.name) ?? validateCheckExpression(check.expression);
+            if (problem) throw new Error(`Invalid CHECK constraint "${check.name}" on table "${table.name}": ${problem}`);
+        }
+        return checks;
+    }
+
+    protected addCheckStatement(table: TableType, check: CheckConstraintType): ASTStatment {
+        const [valid] = this.getChecks({ ...table, checks: [check] } as TableType);
+        return this.terminate(`ALTER TABLE ${this.qualifiedName(table)} ADD CONSTRAINT ${this.quoteName(valid.name)} CHECK (${valid.expression.trim()})`);
+    }
+
+    protected dropCheckStatement(table: TableType, check: CheckConstraintType): ASTStatment {
+        return this.terminate(`ALTER TABLE ${this.qualifiedName(table)} DROP CONSTRAINT ${this.quoteName(check.name)}`);
     }
 
     protected createViewStatement(view: ViewType): ASTStatment {
@@ -223,7 +277,8 @@ export default abstract class BaseDatabaseRenderer {
         return {
             field_definitions,
             constraints,
-            indices_ast
+            indices_ast,
+            checks: this.getChecks(table)
         } as any;
     }
  

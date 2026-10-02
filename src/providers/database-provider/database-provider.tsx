@@ -19,12 +19,96 @@ import { v4 } from "uuid";
 import { DataType } from "@/lib/schemas/data-type-schema";
 import { deleteFieldsWithCascade, deleteIndicesWithCascade, deleteTablesWithCascade } from "@/utils/cascade";
 import { DatabaseDialect } from "@/lib/database";
+import { CheckConstraintInsertType, check_constraints, checkConstraintValues, validateCheck } from "@/lib/schemas/check-constraint-schema";
 import { ViewInsertType, views as viewsModel } from "@/lib/schemas/view-schema";
 import { SequenceInsertType, sequences as sequencesModel } from "@/lib/schemas/sequence-schema";
 
 const TYPE_ORDER = ["integer", "text", "boolean", "numeric", "time", "enum"] as const;
 
 
+
+// Inserts tables (with fields), relationships, indices, views and sequences into
+// `databaseId`. Shared by "import SQL into the current project" and "import a whole
+// project file as a new project".
+const insertSchemaRows = async (
+    tx: any,
+    databaseId: string,
+    importedTables: TableInsertType[],
+    importedRelationships: RelationshipInsertType[],
+    importedIndices: IndexInsertType[],
+    importedViews: ViewInsertType[] = [],
+    importedSequences: SequenceInsertType[] = [],
+) => {
+    const operations: Promise<any>[] = [];
+    for (const table of importedTables) {
+        operations.push(tx.insert(tables).values({
+            ...table,
+            databaseId,
+            createdAt: table.createdAt || getTimestamp()
+        } as TableInsertType));
+
+        if (table.fields && table.fields.length > 0) {
+            operations.push(
+                tx.insert(fields).values(
+                    table.fields.map((field: FieldInsertType) => ({ ...field, tableId: table.id }))
+                )
+            );
+        }
+        const tableChecks = checkConstraintValues<CheckConstraintInsertType>(table.checks as any);
+        if (tableChecks.length > 0) {
+            operations.push(
+                tx.insert(check_constraints).values(
+                    tableChecks.map((check) => ({ ...check, tableId: table.id, createdAt: check.createdAt || getTimestamp() }))
+                )
+            );
+        }
+    }
+    for (const relationship of importedRelationships) {
+        const relationshipFieldValuesToInsert = validateRelationshipFields(
+            relationship.relationshipFields,
+            relationship.sourceFieldId,
+            relationship.targetFieldId,
+        );
+        const { relationshipFields: _relationshipFields, ...relationshipRow } = relationship;
+        operations.push(tx.insert(relationships).values({
+            ...relationshipRow,
+            databaseId,
+            createdAt: relationship.createdAt || getTimestamp(),
+        }));
+        if (relationshipFieldValuesToInsert.length > 0) {
+            operations.push(tx.insert(relationship_fields).values(
+                relationshipFieldValuesToInsert.map((relationshipField) => ({ ...relationshipField, relationshipId: relationship.id }))
+            ));
+        }
+    }
+
+    for (const index of importedIndices) {
+        operations.push(tx.insert(indices).values({
+            ...index,
+            createdAt: index.createdAt ? index.createdAt : getTimestamp()
+        }));
+        if (index.fieldIndices && index.fieldIndices.length > 0) {
+            operations.push(tx.insert(field_indices).values(
+                index.fieldIndices.map((fieldIndex: FieldIndexInsertType) => ({ ...fieldIndex, indexId: index.id }))
+            ))
+        }
+    }
+    for (const view of importedViews) {
+        operations.push(tx.insert(viewsModel).values({
+            ...view,
+            databaseId,
+            createdAt: view.createdAt || getTimestamp(),
+        }));
+    }
+    for (const sequence of importedSequences) {
+        operations.push(tx.insert(sequencesModel).values({
+            ...sequence,
+            databaseId,
+            createdAt: sequence.createdAt || getTimestamp(),
+        }));
+    }
+    await Promise.all(operations);
+};
 
 interface Props { children: React.ReactNode }
 
@@ -59,6 +143,10 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                                 with: {
                                     fieldIndices: true
                                 }
+                            },
+
+                            checks: {
+                                orderBy: asc(check_constraints.createdAt)
                             }
                         }
                     },
@@ -169,6 +257,12 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                         table.fields.map((field: FieldInsertType) => ({ ...field, tableId: table.id }))
                     );
                 }
+                const tableChecks = checkConstraintValues<CheckConstraintInsertType>(table.checks as any);
+                if (tableChecks.length > 0) {
+                    await tx.insert(check_constraints).values(
+                        tableChecks.map((check) => ({ ...check, tableId: table.id, createdAt: check.createdAt || getTimestamp() }))
+                    );
+                }
             });
         } else {
             throw Error("No Database selected");
@@ -265,6 +359,36 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
 
     const editIndex = useCallback(async (index: IndexInsertType): Promise<QueryResult> => {
         return await db.update(indices).set(index).where(eq(indices.id, index.id));
+    }, [db]);
+
+    // CRUD operations for CHECK constraints. Validation lives here (not only in the UI) so
+    // no code path can persist an expression that would break the generated DDL.
+    const findCheckSiblings = useCallback((tableId: string) => {
+        const table = (database as any)?.tables?.find((candidate: TableType) => candidate.id === tableId);
+        return table?.checks ?? [];
+    }, [database]);
+
+    const createCheck = useCallback(async (check: CheckConstraintInsertType): Promise<QueryResult> => {
+        const problem = validateCheck(check, findCheckSiblings(check.tableId));
+        if (problem) throw new Error(problem);
+        return await db.insert(check_constraints).values({
+            ...check,
+            name: check.name.trim(),
+            expression: check.expression.trim(),
+            createdAt: check.createdAt ? check.createdAt : getTimestamp()
+        });
+    }, [db, findCheckSiblings]);
+
+    const editCheck = useCallback(async (check: CheckConstraintInsertType): Promise<QueryResult> => {
+        const problem = validateCheck(check, findCheckSiblings(check.tableId));
+        if (problem) throw new Error(problem);
+        return await db.update(check_constraints)
+            .set({ name: check.name.trim(), expression: check.expression.trim() })
+            .where(eq(check_constraints.id, check.id));
+    }, [db, findCheckSiblings]);
+
+    const deleteCheck = useCallback(async (id: string): Promise<void> => {
+        await db.delete(check_constraints).where(eq(check_constraints.id, id));
     }, [db]);
 
     const editFieldIndices = useCallback((indexId: string, fieldIds: string[]): Promise<void> => {
@@ -383,6 +507,14 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                                 tx.insert(fields).values(Object.values(operation.table.fields))
                             );
                         }
+                        const createdChecks = checkConstraintValues<CheckConstraintInsertType>(operation.table.checks as any);
+                        if (createdChecks.length > 0) {
+                            operations.push(
+                                tx.insert(check_constraints).values(
+                                    createdChecks.map((check) => ({ ...check, tableId: operation.table.id, createdAt: check.createdAt || getTimestamp() }))
+                                )
+                            );
+                        }
                         if (operation.table.indices && Object.values(operation.table.indices).length > 0) {
                             const indexes = Object.values(operation.table.indices);
                             for (const index of indexes) {
@@ -498,6 +630,16 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                     else if (operation.type === "UPDATE_SEQUENCE") {
                         operations.push(tx.update(sequencesModel).set(operation.changes).where(eq(sequencesModel.id, operation.sequenceId)));
                     }
+                    else if (operation.type == "CREATE_CHECK") {
+                        const { id, tableId, name, expression, createdAt } = operation.check;
+                        operations.push(tx.insert(check_constraints).values({ id, tableId, name, expression, createdAt: createdAt || getTimestamp() }));
+                    }
+                    else if (operation.type == "DELETE_CHECK") {
+                        operations.push(tx.delete(check_constraints).where(eq(check_constraints.id, operation.checkId)));
+                    }
+                    else if (operation.type == "UPDATE_CHECK") {
+                        operations.push(tx.update(check_constraints).set(operation.changes).where(eq(check_constraints.id, operation.checkId)));
+                    }
                     else if (operation.type == "CREATE_INDEX") {
                         operations.push(
                             tx.insert(indices).values(operation.index)
@@ -545,68 +687,7 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
     const importDatabase = useCallback(async (importedTables: TableInsertType[], importedRelationships: RelationshipInsertType[], importedIndices: IndexInsertType[], importedViews: ViewInsertType[] = [], importedSequences: SequenceInsertType[] = []) => {
         if (currentDatabaseId) {
             return await db.transaction(async (tx) => {
-                let operations: Promise<any>[] = [];
-                for (const table of importedTables) {
-
-                    operations.push(tx.insert(tables).values({
-                        ...table,
-                        databaseId: currentDatabaseId,
-                        createdAt: table.createdAt || getTimestamp()
-                    } as TableInsertType));
-
-                    if (table.fields) {
-                        operations.push(
-                            tx.insert(fields).values(
-                                table.fields.map((field: FieldInsertType) => ({ ...field, tableId: table.id }))
-                            )
-                        );
-                    }
-                }
-                for (const relationship of importedRelationships) {
-                    const relationshipFieldValuesToInsert = validateRelationshipFields(
-                        relationship.relationshipFields,
-                        relationship.sourceFieldId,
-                        relationship.targetFieldId,
-                    );
-                    const { relationshipFields: _relationshipFields, ...relationshipRow } = relationship;
-                    operations.push(tx.insert(relationships).values({
-                        ...relationshipRow,
-                        databaseId: currentDatabaseId,
-                        createdAt: relationship.createdAt || getTimestamp(),
-                    }));
-                    if (relationshipFieldValuesToInsert.length > 0) {
-                        operations.push(tx.insert(relationship_fields).values(
-                            relationshipFieldValuesToInsert.map((relationshipField) => ({ ...relationshipField, relationshipId: relationship.id }))
-                        ));
-                    }
-                }
-
-                for (const index of importedIndices) {
-                    operations.push(tx.insert(indices).values({
-                        ...index,
-                        createdAt: index.createdAt ? index.createdAt : getTimestamp()
-                    }));
-                    if (index.fieldIndices) {
-                        operations.push(tx.insert(field_indices).values(
-                            index.fieldIndices.map((fieldIndex: FieldIndexInsertType) => ({ ...fieldIndex, indexId: index.id }))
-                        ))
-                    }
-                }
-                for (const view of importedViews) {
-                    operations.push(tx.insert(viewsModel).values({
-                        ...view,
-                        databaseId: currentDatabaseId,
-                        createdAt: view.createdAt || getTimestamp(),
-                    }));
-                }
-                for (const sequence of importedSequences) {
-                    operations.push(tx.insert(sequencesModel).values({
-                        ...sequence,
-                        databaseId: currentDatabaseId,
-                        createdAt: sequence.createdAt || getTimestamp(),
-                    }));
-                }
-                await Promise.all(operations);
+                await insertSchemaRows(tx, currentDatabaseId, importedTables, importedRelationships, importedIndices, importedViews, importedSequences);
                 await updateDbNumTables(currentDatabaseId, tx)
             });
         } else {
@@ -637,6 +718,9 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
         createIndex,
         editIndex,
         deleteIndex,
+        createCheck,
+        editCheck,
+        deleteCheck,
         editFieldIndices,
         importDatabase,
         data_types,
@@ -664,6 +748,9 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
         createIndex,
         editIndex,
         deleteIndex,
+        createCheck,
+        editCheck,
+        deleteCheck,
         editFieldIndices,
         importDatabase,
         data_types,

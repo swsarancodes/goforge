@@ -4,6 +4,7 @@ import { fields, FieldType } from './field-schema';
 import { relationships, RelationshipType } from './relationship-schema';
 import { databases } from './database-schema';
 import { IndexType, indices } from './index-schema';
+import { CheckConstraintInsertType, CheckConstraintType, check_constraints } from './check-constraint-schema';
 
 export const tables = sqliteTable('tables', {
     id: text('id')
@@ -37,6 +38,7 @@ export const tablesRelations = relations(tables, ({ many, one }) => ({
         references: [databases.id],
     }) , 
     indices : many(indices) , 
+    checks : many(check_constraints) ,
     
     
 }));
@@ -46,6 +48,8 @@ export const tablesRelations = relations(tables, ({ many, one }) => ({
 export interface TableType extends InferSelectModel<typeof tables> {
     fields: FieldType[];
     indices : IndexType[] ; 
+    // Table-level CHECK constraints. Optional so older snapshots and fixtures stay valid.
+    checks? : CheckConstraintType[] ;
     
     sourceRelations? :RelationshipType[] ; 
     targetRelations? : RelationshipType[] ; 
@@ -56,6 +60,7 @@ export interface TableType extends InferSelectModel<typeof tables> {
 
 export interface TableInsertType extends InferInsertModel<typeof tables> {
     fields?: FieldType[];
+    checks?: CheckConstraintInsertType[];
     
 };
 

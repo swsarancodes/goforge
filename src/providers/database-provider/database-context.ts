@@ -3,6 +3,7 @@ import { DataType } from "@/lib/schemas/data-type-schema";
 import { DatabaseInsertType, DatabaseType } from "@/lib/schemas/database-schema";
 import { FieldInsertType, FieldType } from "@/lib/schemas/field-schema";
 import { IndexInsertType } from "@/lib/schemas/index-schema";
+import { CheckConstraintInsertType } from "@/lib/schemas/check-constraint-schema";
 import { RelationshipInsertType } from "@/lib/schemas/relationship-schema";
 import { ViewInsertType } from "@/lib/schemas/view-schema";
 import { SequenceInsertType } from "@/lib/schemas/sequence-schema";
@@ -53,6 +54,10 @@ interface DatabaseOperationsContextType {
     createIndex: (index: IndexInsertType) => Promise<QueryResult>,
     editIndex: (index: IndexInsertType) => Promise<QueryResult>,
     deleteIndex: (id: string) => Promise<void>,
+    // check constraint operations
+    createCheck: (check: CheckConstraintInsertType) => Promise<QueryResult>,
+    editCheck: (check: CheckConstraintInsertType) => Promise<QueryResult>,
+    deleteCheck: (id: string) => Promise<void>,
     editFieldIndices: (indexId: string, fieldIds: string[]) => Promise<void>,
     // relationship operations
     createRelationship: (relationship: RelationshipInsertType) => Promise<QueryResult>,

@@ -95,12 +95,15 @@ const getDefaultTableOverlapping = (table: TableType, tables: TableType[]): bool
 
 
 const cloneTable = (table: TableType): TableType => {
+    const id = v4();
 
     return {
         ...table,
-        id: v4(),
+        id,
         name: `${table.name}_copy`,
         fields: table.fields.map((field: FieldType) => cloneField(field)),
+        // Constraint names must stay unique in several dialects, so copies get a suffix.
+        checks: (table.checks ?? []).map((check) => ({ ...check, id: v4(), tableId: id, name: `${check.name}_copy` })),
         posX: table.posX - 360,
 
         createdAt: getTimestamp()

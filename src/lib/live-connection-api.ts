@@ -39,6 +39,8 @@ export interface IntrospectedTable {
     columns: IntrospectedColumn[];
     primaryKeyColumns: string[];
     uniqueConstraints: { name: string; columns: string[] }[];
+    // Optional: servers from before CHECK support do not send it.
+    checkConstraints?: { name: string; expression: string }[];
 }
 
 export interface IntrospectedForeignKey {

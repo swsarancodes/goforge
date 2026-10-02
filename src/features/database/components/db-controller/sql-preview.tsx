@@ -34,6 +34,9 @@ const SQL_OPERATION_LABELS: Record<string, string> = {
     CREATE_INDEX: "index(es) added",
     DELETE_INDEX: "index(es) removed",
     UPDATE_INDEX: "index(es) updated",
+    CREATE_CHECK: "check constraint(s) added",
+    DELETE_CHECK: "check constraint(s) removed",
+    UPDATE_CHECK: "check constraint(s) changed",
     UPDATE_FIELD_INDICES: "index column set(s) updated",
     UPDATE_NUM_TABLES: "table count update(s)",
 };
@@ -55,6 +58,7 @@ const summarizeDestructiveOperations = (prepared: PreparedSqlSchemaChange) => {
         DELETE_FIELD: "field(s)",
         DELETE_RELATIONSHIP: "relationship(s)",
         DELETE_INDEX: "index(es)",
+        DELETE_CHECK: "check constraint(s)",
     };
     const counts = prepared.destructiveOperations.reduce<Record<string, number>>((summary, operation) => {
         summary[operation.type] = (summary[operation.type] ?? 0) + 1;
@@ -96,6 +100,12 @@ const describeSqlOperation = (operation: DBDiffOperation, currentDatabase: Datab
             return `Remove relationship ${operation.relationshipId}`;
         case "UPDATE_RELATIONSHIP":
             return `Update relationship: ${Object.keys(operation.changes).join(", ")}`;
+        case "CREATE_CHECK":
+            return `Add check ${operation.check.name} to ${tableName(operation.tableId)}: ${operation.check.expression}`;
+        case "DELETE_CHECK":
+            return `Remove check ${operation.check?.name ?? operation.checkId} from ${tableName(operation.tableId)}`;
+        case "UPDATE_CHECK":
+            return `Change check ${operation.check?.name ?? operation.checkId} on ${tableName(operation.tableId)}: ${Object.keys(operation.changes).join(", ")}`;
         case "UPDATE_FIELD_INDICES":
             return `Update index columns on ${tableName(operation.tableId)}`;
         case "UPDATE_NUM_TABLES":

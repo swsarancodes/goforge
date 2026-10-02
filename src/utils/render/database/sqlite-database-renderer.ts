@@ -8,6 +8,7 @@ import { ASTStatment } from "./base-database-renderer";
 import { BaseSQLRenderer } from "./base-sql-renderer";
 import { FieldType } from "@/lib/schemas/field-schema";
 import { TableType } from "@/lib/schemas/table-schema";
+import { CheckConstraintType } from "@/lib/schemas/check-constraint-schema";
 import { DBDiffOperation } from "@/utils/database";
 import { RenderableTable, SortableTable, toRenderableTable, toSortableTable } from "@/lib/table";
 import { DatabaseType } from "@/lib/schemas/database-schema";
@@ -59,6 +60,13 @@ ${this.commit()}
 
         const relationshipOperations: DBDiffOperation[] = operations.filter((operation: DBDiffOperation) => operation.type == "CREATE_RELATIONSHIP");
 
+        // This renderer only builds CREATE TABLE statements, so changes to the checks of an
+        // existing table would silently vanish from the output. Fail loudly instead.
+        for (const operation of operations) {
+            if (operation.type === "CREATE_CHECK") this.addCheckStatement(operation.table as TableType, operation.check);
+            if ((operation.type === "DELETE_CHECK" || operation.type === "UPDATE_CHECK") && operation.check) this.dropCheckStatement(operation.table as TableType, operation.check);
+        }
+
         // we basiclly loop over all operations , and turn them into ast . 
         // some operation can return multiple statments . 
         // so for that we need to check our input if its one AST or an object AST 
@@ -90,6 +98,18 @@ ${this.commit()}
                 ast.push(statmentAst);
         }
         return ast;
+    }
+
+    protected quoteName(name: string): string {
+        return `"${name.replace(/"/g, '""')}"`;
+    }
+
+    protected addCheckStatement(table: TableType, check: CheckConstraintType): ASTStatment {
+        throw new Error(`SQLite cannot add the CHECK constraint "${check.name}" to the existing table "${table.name}" - SQLite only allows CHECK constraints in CREATE TABLE. Recreate the table to change it.`);
+    }
+
+    protected dropCheckStatement(table: TableType, check: CheckConstraintType): ASTStatment {
+        throw new Error(`SQLite cannot drop the CHECK constraint "${check.name}" from the existing table "${table.name}" - SQLite only allows CHECK constraints in CREATE TABLE. Recreate the table to change it.`);
     }
 
     protected createRelationshipAst(relationship: RelationshipType): ASTStatment {

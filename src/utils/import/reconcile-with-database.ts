@@ -6,6 +6,7 @@ import { DatabaseType } from "@/lib/schemas/database-schema";
 import { DataType } from "@/lib/schemas/data-type-schema";
 import { ViewInsertType } from "@/lib/schemas/view-schema";
 import { SequenceInsertType } from "@/lib/schemas/sequence-schema";
+import { canonicalCheckExpression, CheckConstraintInsertType, CheckConstraintType, checkConstraintValues } from "@/lib/schemas/check-constraint-schema";
 
 export interface ParsedDatabaseResult {
     tables: TableInsertType[];
@@ -44,6 +45,43 @@ const areEquivalentDataTypes = (left: DataType | undefined, right: DataType | un
     const leftNames = dataTypeNames(left);
     const rightNames = dataTypeNames(right);
     return [...leftNames].some((name) => rightNames.has(name));
+};
+
+/**
+ * Re-attaches parsed CHECK constraints to the ids of the ones already stored: first by
+ * name, then by identical expression (a pure rename). When an expression only differs
+ * in whitespace/formatting - SQL goes through a formatter on the way out - the stored
+ * text wins, so applying unchanged SQL is a no-op instead of a phantom edit.
+ */
+const reconcileChecks = (parsedChecks: CheckConstraintInsertType[] | undefined, existingChecks: CheckConstraintType[], tableId: string): CheckConstraintInsertType[] => {
+    const remaining = [...existingChecks];
+    const take = (predicate: (check: CheckConstraintType) => boolean) => {
+        const index = remaining.findIndex(predicate);
+        return index >= 0 ? remaining.splice(index, 1)[0] : undefined;
+    };
+    const resolved = checkConstraintValues<CheckConstraintInsertType>(parsedChecks as any);
+    const matches = new Map<CheckConstraintInsertType, CheckConstraintType>();
+    for (const parsedCheck of resolved) {
+        const match = take((existing) => existing.name.toLowerCase() === parsedCheck.name.toLowerCase());
+        if (match) matches.set(parsedCheck, match);
+    }
+    for (const parsedCheck of resolved) {
+        if (matches.has(parsedCheck)) continue;
+        const wanted = canonicalCheckExpression(parsedCheck.expression);
+        const match = take((existing) => canonicalCheckExpression(existing.expression) === wanted);
+        if (match) matches.set(parsedCheck, match);
+    }
+    return resolved.map((parsedCheck) => {
+        const existing = matches.get(parsedCheck);
+        const sameMeaning = existing && canonicalCheckExpression(existing.expression) === canonicalCheckExpression(parsedCheck.expression);
+        return {
+            id: existing?.id ?? (parsedCheck.id as string),
+            tableId,
+            name: parsedCheck.name,
+            expression: sameMeaning ? existing.expression : parsedCheck.expression,
+            createdAt: existing?.createdAt ?? null,
+        };
+    });
 };
 
 export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatabase: DatabaseType, dataTypes: DataType[] = []): ParsedDatabaseResult {
@@ -103,6 +141,7 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
             note: existingTable?.note ?? null,
             createdAt: existingTable ? existingTable.createdAt : (parsedTable.createdAt ?? null),
             fields,
+            checks: reconcileChecks(parsedTable.checks, existingTable?.checks ?? [], resolvedTableId),
         } as TableInsertType;
     });
 

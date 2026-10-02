@@ -15,7 +15,7 @@ export interface PreparedSqlSchemaChange {
     warnings: string[];
 }
 
-const DESTRUCTIVE_SQL_OPERATION_TYPES = new Set<DBDiffOperation["type"]>(["DELETE_TABLE", "DELETE_FIELD", "DELETE_RELATIONSHIP", "DELETE_INDEX", "DELETE_VIEW", "DELETE_SEQUENCE"]);
+const DESTRUCTIVE_SQL_OPERATION_TYPES = new Set<DBDiffOperation["type"]>(["DELETE_TABLE", "DELETE_FIELD", "DELETE_RELATIONSHIP", "DELETE_INDEX", "DELETE_CHECK", "DELETE_VIEW", "DELETE_SEQUENCE"]);
 
 export const isDestructiveSqlOperation = (operation: DBDiffOperation) => DESTRUCTIVE_SQL_OPERATION_TYPES.has(operation.type);
 

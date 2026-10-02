@@ -10,6 +10,7 @@ import { field_indices, fieldIndicesRelationships } from './field_index-schema';
 import { relationship_fields, relationshipFieldsRelations } from './relationship_field-schema';
 import { views, viewRelations } from './view-schema';
 import { sequences, sequenceRelations } from './sequence-schema';
+import { check_constraints, checkConstraintRelations } from './check-constraint-schema';
 
 export const drizzleSchema = {
   data_types ,
@@ -22,6 +23,7 @@ export const drizzleSchema = {
   relationship_fields ,
   views ,
   sequences ,
+  check_constraints ,
 
   // relationships
   tablesRelations ,
@@ -33,7 +35,8 @@ export const drizzleSchema = {
   fieldIndicesRelationships ,
   relationshipFieldsRelations,
   viewRelations,
-  sequenceRelations
+  sequenceRelations,
+  checkConstraintRelations
 };
 
 // Infer the PowerSync schema from your Drizzle schema

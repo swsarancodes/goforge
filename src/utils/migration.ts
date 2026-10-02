@@ -11,6 +11,7 @@ import { FieldIndexType } from "@/lib/schemas/field_index-schema";
 import { DatabaseDialect } from "@/lib/database";
 import { ViewType } from "@/lib/schemas/view-schema";
 import { SequenceType } from "@/lib/schemas/sequence-schema";
+import { CheckConstraintType, checkConstraintValues } from "@/lib/schemas/check-constraint-schema";
 
 
 export const prepareForMigration = (db: DatabaseType) => {
@@ -83,6 +84,8 @@ export const optimizeOps = (operations: DBDiffOperation[], currentDatabase: Data
                 fieldIndices: Object.values(indice.fieldIndices),
 
             }))
+            operation.table.checks = checkConstraintValues<CheckConstraintType>(operation.table.checks as any);
+
             operation.table.indices = operation.table.indices.map((index: IndexType) => ({
                 ...index,
                 fields: index.fieldIndices.map((fieldIndex: FieldIndexType) => operation.table.fields.find((field: FieldType) => field.id == fieldIndex.fieldId)) as FieldType[]
@@ -181,6 +184,24 @@ export const optimizeOps = (operations: DBDiffOperation[], currentDatabase: Data
             };
         }
 
+        if (operation.type == "CREATE_CHECK") {
+            operation.table = findTable(operation.tableId);
+        }
+
+        if (operation.type == "DELETE_CHECK" || operation.type == "UPDATE_CHECK") {
+            const table = previousDatabase.tables.find((t: TableType) => t.id == operation.tableId);
+            operation.table = table ?? findTable(operation.tableId);
+            const previousChecks = table?.checks ?? [];
+            if (operation.type == "DELETE_CHECK" && operation.checkId === "*") {
+                // The table's whole checks map was removed: fan out one delete per check.
+                for (const check of previousChecks) {
+                    ops.push({ type: "DELETE_CHECK", tableId: operation.tableId, checkId: check.id, table: operation.table, check });
+                }
+                continue;
+            }
+            operation.check = previousChecks.find((check: CheckConstraintType) => check.id == operation.checkId);
+        }
+
         if (operation.type == "DELETE_VIEW") {
             operation.view = previousDatabase.views?.find((view: ViewType) => view.id === operation.viewId);
         }
@@ -212,6 +233,7 @@ const orderOperations = (ops: DBDiffOperation[]): DBDiffOperation[] => {
     const OPERATION_ORDER = [
         // Drops/deletes first, so a dropped index/column never collides with a same-named create.
         'DELETE_INDEX',
+        'DELETE_CHECK',
         'DELETE_VIEW',
         'DELETE_SEQUENCE',
         'DELETE_RELATIONSHIP',
@@ -225,6 +247,9 @@ const orderOperations = (ops: DBDiffOperation[]): DBDiffOperation[] => {
         // index/relationship/table-rename statement that references the column, since
         // those come later and would otherwise refer to a name that no longer exists.
         'UPDATE_FIELD',
+        // CHECK constraints may reference columns added or renamed above
+        'UPDATE_CHECK',
+        'CREATE_CHECK',
         // Relationships/indexes need their tables and columns to exist first
         'CREATE_RELATIONSHIP',
         'CREATE_VIEW',

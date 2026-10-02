@@ -8,6 +8,7 @@ import { qualifiedTableName, TableInsertType } from "@/lib/schemas/table-schema"
 import { extractViewDependencies, ViewInsertType } from "@/lib/schemas/view-schema";
 import { SequenceInsertType } from "@/lib/schemas/sequence-schema";
 import { ForeignKeyActions } from "@/lib/field";
+import { CHECK_NAME_PATTERN, CheckConstraintInsertType, nextCheckName, validateCheckExpression } from "@/lib/schemas/check-constraint-schema";
 import { PostgreSqlImporter, PostgreSQLType } from "./postgresql-importer";
 import type {
     IntrospectionResult,
@@ -238,11 +239,29 @@ function buildTable(
         }
     }
 
+    const checks: CheckConstraintInsertType[] = [];
+    for (const live of table.checkConstraints ?? []) {
+        const problem = validateCheckExpression(live.expression);
+        if (problem) {
+            errors.push(new Error(`Skipped CHECK constraint "${live.name}" on ${table.name}: ${problem}`));
+            continue;
+        }
+        let name = live.name;
+        if (!CHECK_NAME_PATTERN.test(name)) {
+            const sanitized = name.replace(/[^A-Za-z0-9_$]/g, "_").replace(/^(\d)/, "_$1");
+            errors.push(new Error(`CHECK constraint name "${name}" on ${table.name} was renamed to "${sanitized}"`));
+            name = sanitized;
+        }
+        if (checks.some((existing) => existing.name.toLowerCase() === name.toLowerCase())) name = nextCheckName(table.name, checks);
+        checks.push({ id: v4(), tableId, name, expression: live.expression.trim() });
+    }
+
     return {
         id: tableId,
         name: table.name,
         namespace: table.namespace ?? undefined,
         fields,
+        checks,
         color: randomColor(),
     } as TableInsertType;
 }
