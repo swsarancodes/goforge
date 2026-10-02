@@ -8,7 +8,7 @@ import { getPostgresEnumName } from "../render-uttils";
 import { Cardinality, RelationshipType } from "@/lib/schemas/relationship-schema";
 import { IndexType } from "@/lib/schemas/index-schema";
 import { Statement, toSql } from "pgsql-ast-parser";
-import { ASTStatment } from "./base-database-renderer";
+import { ASTStatment, noteText, sqlStringLiteral } from "./base-database-renderer";
 import { format } from "sql-formatter";
 import { DBDiffOperation } from "@/utils/database";
 import { DataTypes } from "@/lib/field";
@@ -77,6 +77,19 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
     }
  
  
+    protected noteStatements(table: TableType): string[] {
+        const quote = (identifier: string) => `"${identifier.replace(/"/g, '""')}"`;
+        const tableName = table.namespace ? `${quote(table.namespace)}.${quote(table.name)}` : quote(table.name);
+        const statements: string[] = [];
+        const tableNote = noteText(table.note);
+        if (tableNote) statements.push(`COMMENT ON TABLE ${tableName} IS ${sqlStringLiteral(tableNote)}`);
+        for (const field of table.fields) {
+            const fieldNote = noteText(field.note);
+            if (fieldNote) statements.push(`COMMENT ON COLUMN ${tableName}.${quote(field.name)} IS ${sqlStringLiteral(fieldNote)}`);
+        }
+        return statements;
+    }
+
     protected getFieldDefinition(field: FieldType, table: TableType, ignorePkContraint: boolean): AST {
         // we get the base field definition from the parent renderer 
         const definition: any = super.getFieldDefinition(field, table, ignorePkContraint);

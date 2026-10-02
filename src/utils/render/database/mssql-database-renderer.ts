@@ -1,7 +1,7 @@
 
 import { FieldType } from "@/lib/schemas/field-schema";
 import { qualifiedTableName, TableType } from "@/lib/schemas/table-schema";
-import BaseDatabaseRenderer, { ASTStatment } from "./base-database-renderer";
+import BaseDatabaseRenderer, { ASTStatment, noteText, sqlStringLiteral } from "./base-database-renderer";
 import { DEFAULT_LENGTH_PARAM, ForeignKeyActions, Modifiers } from "@/lib/field";
 import { IndexType } from "@/lib/schemas/index-schema";
 import { RelationshipType } from "@/lib/schemas/relationship-schema";
@@ -51,6 +51,27 @@ ${this.commit()}
         ` ;
     }
 
+
+    protected noteStatements(table: TableType): string[] {
+        // SQL Server has no COMMENT syntax; the convention (used by SSMS and most tools)
+        // is the MS_Description extended property.
+        const nText = (value: string) => `N${sqlStringLiteral(value)}`;
+        const schema = nText(table.namespace || "dbo");
+        // Arguments are positional (name, value, level0 type/name, level1 type/name,
+        // level2 type/name) because the output goes through a formatter that cannot
+        // tokenize `@name = value` pairs.
+        const property = (note: string, column?: string) =>
+            `EXEC sp_addextendedproperty N'MS_Description', ${nText(note)}, N'SCHEMA', ${schema}, N'TABLE', ${nText(table.name)}` +
+            (column ? `, N'COLUMN', ${nText(column)};` : ";");
+        const statements: string[] = [];
+        const tableNote = noteText(table.note);
+        if (tableNote) statements.push(property(tableNote));
+        for (const field of table.fields) {
+            const fieldNote = noteText(field.note);
+            if (fieldNote) statements.push(property(fieldNote, field.name));
+        }
+        return statements;
+    }
 
     protected getFieldDefinition(field: FieldType, table: TableType, ignorePkContraint: boolean = false, dropDefaultValue: boolean = false): ASTStatment {
 

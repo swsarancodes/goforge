@@ -2,7 +2,7 @@
 import { FieldType } from "@/lib/schemas/field-schema";
 import { qualifiedTableName, TableType } from "@/lib/schemas/table-schema";
 import { AST } from "node-sql-parser";
-import BaseDatabaseRenderer, { ASTStatment } from "./base-database-renderer";
+import BaseDatabaseRenderer, { ASTStatment, noteText, sqlStringLiteral } from "./base-database-renderer";
 import { DEFAULT_LENGTH_PARAM, ForeignKeyActions, Modifiers } from "@/lib/field";
 import { IndexType } from "@/lib/schemas/index-schema";
 import { RelationshipType } from "@/lib/schemas/relationship-schema";
@@ -39,6 +39,17 @@ export default class OracleRenderer extends BaseDatabaseRenderer {
         );
         ${indexes}
         ` ;
+    }
+
+    protected noteStatements(table: TableType): string[] {
+        const statements: string[] = [];
+        const tableNote = noteText(table.note);
+        if (tableNote) statements.push(`COMMENT ON TABLE ${qualifiedTableName(table)} IS ${sqlStringLiteral(tableNote)};`);
+        for (const field of table.fields) {
+            const fieldNote = noteText(field.note);
+            if (fieldNote) statements.push(`COMMENT ON COLUMN ${qualifiedTableName(table)}.${field.name} IS ${sqlStringLiteral(fieldNote)};`);
+        }
+        return statements;
     }
 
     protected getFieldDefinition(field: FieldType, table: TableType, ignorePkContraint: boolean = false, dropDefaultValue: boolean = false): ASTStatment {

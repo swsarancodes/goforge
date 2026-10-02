@@ -97,15 +97,39 @@ export default abstract class BaseDatabaseRenderer {
         // some operation can return multiple statments . 
         // so for that we need to check our input if its one AST or an object AST 
         for (const operation of operations) {
-            const statmentAst = this.operationToAst(operation);
+            let statmentAst = this.operationToAst(operation);
             if (!statmentAst)
                 continue;
-            else if (Array.isArray(statmentAst))
+            // Notes are stripped from the diffed copy of the schema (so editing a note
+            // never looks like a schema change), which means they have to be read from
+            // the original database here. Only newly created tables carry them.
+            if (operation.type === "CREATE_TABLE" && database) {
+                const originalTable = database.tables.find((candidate: TableType) => candidate.id === operation.table.id);
+                if (originalTable && hasNotes(originalTable))
+                    statmentAst = this.withTableNotes(statmentAst, originalTable);
+            }
+            if (Array.isArray(statmentAst))
                 ast.push(...statmentAst);
             else
                 ast.push(statmentAst);
         }
         return ast;
+    }
+
+    /**
+     * Adds the table's and its columns' notes to the statements that create it. The
+     * default appends `noteStatements()` after the CREATE TABLE; dialects that comment
+     * inline (MySQL, MariaDB) override this instead. SQLite has no comment syntax, so
+     * it keeps both defaults and the notes stay canvas-only.
+     */
+    protected withTableNotes(statements: ASTStatment | ASTStatment[], table: TableType): ASTStatment | ASTStatment[] {
+        const extra = this.noteStatements(table);
+        if (extra.length === 0) return statements;
+        return [...(Array.isArray(statements) ? statements : [statements]), ...extra];
+    }
+
+    protected noteStatements(_table: TableType): string[] {
+        return [];
     }
 
     protected operationToAst(operation: DBDiffOperation): ASTStatment | ASTStatment[] | null {
@@ -473,6 +497,18 @@ export default abstract class BaseDatabaseRenderer {
         return null;
     }
 }
+
+/** A note counts only when it has visible text. */
+export const noteText = (note: string | null | undefined): string | undefined => {
+    const trimmed = note?.trim();
+    return trimmed ? trimmed : undefined;
+};
+
+export const hasNotes = (table: TableType): boolean =>
+    Boolean(noteText(table.note)) || table.fields.some((field: FieldType) => Boolean(noteText(field.note)));
+
+/** SQL string literal for dialects where only the quote needs escaping. */
+export const sqlStringLiteral = (value: string): string => `'${value.replace(/'/g, "''")}'`;
 
 export interface DBRenderOutput {
     schema: DatabaseType,

@@ -7,6 +7,7 @@ import { format } from 'sql-formatter';
 import { Modifiers } from "@/lib/field";
 import { TableType } from "@/lib/schemas/table-schema";
 import { BaseSQLRenderer } from "./base-sql-renderer";
+import { ASTStatment, noteText } from "./base-database-renderer";
 import { IndexType } from "@/lib/schemas/index-schema";
 
 
@@ -83,6 +84,39 @@ ${this.commit()}
         }
         return definition;
 
+    }
+
+    // MySQL/MariaDB can only attach comments inline, so instead of extra statements the
+    // notes are written into the CREATE TABLE AST: one COMMENT per column plus the
+    // table-level COMMENT option.
+    protected withTableNotes(statements: ASTStatment | ASTStatment[], table: TableType): ASTStatment | ASTStatment[] {
+        const list = Array.isArray(statements) ? statements : [statements];
+        const create: any = list.find((statement: any) => statement && typeof statement === "object" && statement.type === "create" && statement.keyword === "table");
+        if (!create) return statements;
+
+        // sqlify writes string values verbatim, so quotes and backslashes are escaped here.
+        const escape = (value: string) => value.replace(/\\/g, "\\\\").replace(/'/g, "''");
+        for (const definition of create.create_definitions ?? []) {
+            if (definition.resource !== "column") continue;
+            const field = table.fields.find((candidate: FieldType) => candidate.name === definition.column?.column?.expr?.value);
+            const note = noteText(field?.note);
+            if (note) {
+                definition.comment = {
+                    type: "comment",
+                    keyword: "comment",
+                    symbol: "",
+                    value: { type: "single_quote_string", value: escape(note) },
+                };
+            }
+        }
+        const tableNote = noteText(table.note);
+        if (tableNote) {
+            create.table_options = [
+                ...(create.table_options ?? []),
+                { keyword: "comment", symbol: "=", value: `'${escape(tableNote)}'` },
+            ];
+        }
+        return statements;
     }
 
     protected getUsingAst(table: TableType, field: FieldType, dataType: DataType): AST | null {
