@@ -108,7 +108,7 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
         setConnectingId(id);
         try {
             const introspection = await introspectSavedConnection(id);
-            const { tables, relationships, indexes, errors } = fromIntrospection(introspection, data_types);
+            const { tables, relationships, indexes, views, sequences, errors } = fromIntrospection(introspection, data_types);
 
             if (errors.length > 0) {
                 console.warn("fromIntrospection encountered non-fatal issues:", errors);
@@ -122,7 +122,7 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
                 adjustedTables[index].sequence = nextTableSequence + index;
             }
 
-            await importDatabase(adjustedTables, relationships, indexes);
+            await importDatabase(adjustedTables, relationships, indexes, views, sequences);
             onOpenChange && onOpenChange(false);
         } catch (error) {
             setConnectError(error instanceof Error ? error.message : String(error));

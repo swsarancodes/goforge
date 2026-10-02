@@ -48,7 +48,7 @@ const PushLiveChangesModal: React.FC<ModalProps> = (props) => {
         setApplySuccess(false);
         try {
             const introspection = await introspectSavedConnection(id);
-            const { tables, relationships, indexes, errors } = fromIntrospection(introspection, data_types);
+            const { tables, relationships, indexes, views, sequences, errors } = fromIntrospection(introspection, data_types);
             if (errors.length > 0) console.warn("fromIntrospection encountered non-fatal issues:", errors);
 
             for (const table of tables) {
@@ -63,6 +63,8 @@ const PushLiveChangesModal: React.FC<ModalProps> = (props) => {
                 createdAt: null,
                 tables: tables as any,
                 relationships: relationships as any,
+                views: views as any,
+                sequences: sequences as any,
             } as DatabaseType;
 
             const renderer = getRenderer(database.dialect, data_types);

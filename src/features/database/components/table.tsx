@@ -129,13 +129,13 @@ const Table: React.FC<NodeProps<TableProps>> = (props) => {
             >
                 <IconTableFilled className="size-3.5 shrink-0 text-primary " style={{ color: table.color as string }} />
                 {!editMode ? <>
-                    <label
+                    <span
                         className=" w-full text-editable truncate  py-0.5 text-sm font-bold  text-primary"
                         onDoubleClick={() => !aiPreviewActive && setEditMode(true)}
                         style={{ color: table.color as string }}
                     >
-                        {tableName}
-                    </label>
+                        {table.namespace ? `${table.namespace}.${tableName}` : tableName}
+                    </span>
                     {aiDiffStatus && <Badge variant={aiDiffStatus === "deleted" ? "destructive" : "secondary"} className="h-5 text-[9px] capitalize">{aiDiffStatus}</Badge>}
                     {!aiPreviewActive && <div className="flex gap-1 hidden shrink-0 flex-row group-hover:flex  ">
                         

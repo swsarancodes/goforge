@@ -14,6 +14,9 @@ export const tables = sqliteTable('tables', {
     databaseId: text("databaseId").notNull().references(() => databases.id, { onDelete: "cascade" }),
 
     name: text('name').notNull(),
+    // Optional SQL namespace/schema. `name` remains the unqualified identifier
+    // used by the canvas and legacy projects.
+    namespace: text('namespace'),
     posX: real('posX').notNull().default(0),
     posY: real('posY').notNull().default(0),
 
@@ -54,4 +57,8 @@ export interface TableType extends InferSelectModel<typeof tables> {
 export interface TableInsertType extends InferInsertModel<typeof tables> {
     fields?: FieldType[];
     
-}; 
+};
+
+export function qualifiedTableName(table: Pick<TableType, 'name' | 'namespace'> | Pick<TableInsertType, 'name' | 'namespace'>): string {
+    return table.namespace ? `${table.namespace}.${table.name}` : table.name;
+}

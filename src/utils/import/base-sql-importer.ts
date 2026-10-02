@@ -6,7 +6,9 @@ import { DataType } from '@/lib/schemas/data-type-schema';
 import { FieldInsertType } from '@/lib/schemas/field-schema';
 import { IndexInsertType } from '@/lib/schemas/index-schema';
 import { Cardinality, RelationshipInsertType } from '@/lib/schemas/relationship-schema';
-import { TableInsertType  } from '@/lib/schemas/table-schema';
+import { qualifiedTableName, TableInsertType  } from '@/lib/schemas/table-schema';
+import { extractViewDependencies, ViewInsertType } from '@/lib/schemas/view-schema';
+import { SequenceInsertType } from '@/lib/schemas/sequence-schema';
 import { init, parse, ReferentialAction } from '@guanmingchiu/sqlparser-ts';
 import { v4 } from 'uuid';
 
@@ -29,11 +31,13 @@ export class BaseSqlImporter {
         const tables: TableInsertType[] = [];
         const relationships: RelationshipInsertType[] = [];
         const indexes: IndexInsertType[] = [];
+        const views: ViewInsertType[] = [];
+        const sequences: SequenceInsertType[] = [];
         const fk_constraints: any[] = [];
 
         const cleaned = this.cleanSql(sql);
 
-        const { createIndexStatements, alterTableStatements, createTableStatements } = this.extractStatments(cleaned);
+        const { createIndexStatements, alterTableStatements, createTableStatements, createViewStatements, createSequenceStatements } = this.extractStatments(cleaned);
 
         try {
             for (const statment of createTableStatements) {
@@ -42,19 +46,40 @@ export class BaseSqlImporter {
                     const astStatment: any = parse(statment, this.dialect as any)?.pop();
 
                     if (astStatment?.CreateTable) {
-                        const { table, errors: tableErrors, fk_constraints: tableFkConstraints } = this.astToTable(astStatment);
+                        const {
+                            table,
+                            errors: tableErrors,
+                            fk_constraints: tableFkConstraints,
+                            indexes: tableIndexes,
+                        } = this.astToTable(astStatment);
                         if (table)
                             tables.push(table);
                         errors.push(...tableErrors);
+                        indexes.push(...tableIndexes);
 
                         if (tableFkConstraints)
                             fk_constraints.push(...tableFkConstraints);
 
                     }
-                } catch (error) { 
-                    errors.push(error as Error);
+                } catch (error) {
+                    errors.push(this.statementError(error, statment, cleaned));
                 }
 
+            }
+            for (const statment of createViewStatements ?? []) {
+                try {
+                    const astStatment: any = parse(statment, this.dialect as any)?.pop();
+                    if (astStatment?.CreateView) views.push(this.astToView(astStatment.CreateView, statment));
+                } catch (error) {
+                    errors.push(this.statementError(error, statment, cleaned));
+                }
+            }
+            for (const statment of createSequenceStatements ?? []) {
+                try {
+                    sequences.push(this.sequenceFromStatement(statment));
+                } catch (error) {
+                    errors.push(this.statementError(error, statment, cleaned));
+                }
             }
             for (const statment of alterTableStatements) {
                 try {
@@ -66,7 +91,7 @@ export class BaseSqlImporter {
 
                             if (operation.AddConstraint?.constraint?.ForeignKey) {
 
-                                const targetTableName: string | undefined = astStatment.AlterTable.name?.at(-1)?.Identifier?.value;
+                                const targetTableName = this.qualifiedIdentifier(astStatment.AlterTable.name);
                                 if (!targetTableName)
                                     continue;
 
@@ -78,26 +103,24 @@ export class BaseSqlImporter {
                             }
                             else if (operation.AddConstraint?.constraint?.Unique) {
 
-                                const table: TableInsertType | undefined = tables.find((table: TableInsertType) => table.name == astStatment.AlterTable.name?.at(-1)?.Identifier?.value);
+                                const table: TableInsertType | undefined = this.findTable(tables, this.qualifiedIdentifier(astStatment.AlterTable.name));
 
                                 const columns: any[] | undefined = operation.AddConstraint?.constraint?.Unique?.columns;
 
                                 if (!table || !columns) {
                                     continue;
                                 }
-                                if (columns && columns.length > 0 && table.fields) {
-
-                                    for (const { column } of columns) {
-                                        const index = table.fields.findIndex((field: FieldInsertType) => field.name == column?.expr?.Identifier?.value);
-                                        if (index >= 0) {
-                                            table.fields[index].unique = true;
-                                        }
+                                if (columns.length > 0 && table.fields) {
+                                    const uniqueIndex = this.uniqueConstraintToIndex(operation.AddConstraint.constraint.Unique, table);
+                                    indexes.push(uniqueIndex);
+                                    if (uniqueIndex.fieldIndices.length === 1) {
+                                        const uniqueField = table.fields.find((field) => field.id === uniqueIndex.fieldIndices[0].fieldId);
+                                        if (uniqueField) uniqueField.unique = true;
                                     }
-
                                 }
                             } else if (operation.AddConstraint?.constraint.PrimaryKey) {
 
-                                const table: TableInsertType | undefined = tables.find((table: TableInsertType) => table.name == astStatment.AlterTable.name?.at(-1)?.Identifier?.value);
+                                const table: TableInsertType | undefined = this.findTable(tables, this.qualifiedIdentifier(astStatment.AlterTable.name));
 
                                 const columns: any[] | undefined = operation.AddConstraint?.constraint?.PrimaryKey?.columns;
 
@@ -116,7 +139,7 @@ export class BaseSqlImporter {
                         }
                     }
                 } catch (error) {
-                    errors.push(error as Error)
+                    errors.push(this.statementError(error, statment, cleaned))
                     continue;
                 }
 
@@ -136,7 +159,7 @@ export class BaseSqlImporter {
                             indexes.push(index)
                     }
                 } catch (error) {
-                    errors.push(error as Error);
+                    errors.push(this.statementError(error, statment, cleaned));
                 }
             }
             for (const constraint of fk_constraints) {
@@ -147,12 +170,23 @@ export class BaseSqlImporter {
                 }
             } 
 
-            if (tables.length == 0)
-                throw Error("Can't parse sql") 
+            if (tables.length === 0 && views.length === 0 && sequences.length === 0) {
+                const details = errors
+                    .map((error) => error instanceof Error ? error.message : String(error))
+                    .filter((message) => message.trim().length > 0);
+
+                throw Error(
+                    details.length > 0
+                        ? `SQL parsing failed: ${details.join("; ")}`
+                        : "No supported SQL schema statements found. Add a CREATE TABLE, CREATE VIEW, or CREATE SEQUENCE statement.",
+                );
+            }
             return {
                 tables,
                 relationships,
                 indexes,
+                views,
+                sequences,
                 errors
             }
 
@@ -165,9 +199,14 @@ export class BaseSqlImporter {
 
     protected astToTable(ast: any): ParsedTable {
         const errors: Error[] = []
-        const tableName: string | undefined = ast.CreateTable.name?.at(-1)?.Identifier?.value;
+        const tableParts = ast.CreateTable.name as any[] | undefined;
+        const tableName: string | undefined = tableParts?.at(-1)?.Identifier?.value;
+        const namespace = tableParts && tableParts.length > 1
+            ? tableParts.slice(0, -1).map((part) => part?.Identifier?.value).filter(Boolean).join('.')
+            : undefined;
         const columns: any[] = ast.CreateTable.columns;
         const fk_constraints: any[] = [];
+        const indexes: IndexInsertType[] = [];
 
 
         if (!tableName || !columns)
@@ -187,7 +226,7 @@ export class BaseSqlImporter {
                         columns: [{
                             value: field.name
                         }],
-                        target_table: tableName
+                        target_table: this.qualifiedIdentifier(tableParts)
                     })
                 }
             } catch (error) {
@@ -201,7 +240,7 @@ export class BaseSqlImporter {
                 if (constraint.ForeignKey) {
                     fk_constraints.push({
                         ...constraint.ForeignKey,
-                        target_table: tableName
+                        target_table: this.qualifiedIdentifier(tableParts)
                     });
                 }
                 else if (constraint.PrimaryKey) {
@@ -216,29 +255,39 @@ export class BaseSqlImporter {
                         }
                     }
                 } else if (constraint.Unique) {
-                    const columns: any[] | undefined = constraint.Unique?.columns;
-                    if (columns && columns.length > 0) {
-
-                        for (const { column } of columns) {
-                            const index = fields.findIndex((field: FieldInsertType) => field.name == column?.expr?.Identifier?.value);
-                            if (index >= 0) {
-                                fields[index].unique = true;
-                            }
+                    try {
+                        const uniqueIndex = this.uniqueConstraintToIndex(constraint.Unique, {
+                            id: "pending",
+                            name: tableName,
+                            fields,
+                        } as TableInsertType);
+                        indexes.push(uniqueIndex);
+                        if (uniqueIndex.fieldIndices.length === 1) {
+                            const uniqueField = fields.find((field) => field.id === uniqueIndex.fieldIndices[0].fieldId);
+                            if (uniqueField) uniqueField.unique = true;
                         }
-
+                    } catch (error) {
+                        errors.push(error as Error);
                     }
                 }
             }
         }
-        return {
-            table: {
-                id: v4(),
+        const tableId = v4();
+        const table = {
+                id: tableId,
                 name: tableName,
+                namespace,
                 fields: fields,
                 color: randomColor()
-            } as TableInsertType,
+            } as TableInsertType;
+        indexes.forEach((index) => {
+            index.tableId = tableId;
+        });
+        return {
+            table,
             errors,
-            fk_constraints
+            fk_constraints,
+            indexes,
         }
     }
 
@@ -416,12 +465,33 @@ export class BaseSqlImporter {
     protected astToRelationship(ast: any, tables: TableInsertType[]): RelationshipInsertType {
 
 
-        let targetTable: TableInsertType | undefined = tables.find((table: TableInsertType) => table.name == ast.target_table);
-        let sourceTable: TableInsertType | undefined = tables.find((table: TableInsertType) => table.name == ast.foreign_table?.at(-1)?.Identifier?.value);
-        let sourceField: FieldInsertType | undefined = sourceTable?.fields?.find((field: FieldInsertType) => field.name == ast.referred_columns?.[0]?.value);
-        let targetField: FieldInsertType | undefined = targetTable?.fields?.find((field: FieldInsertType) => field.name == ast.columns?.[0]?.value);
+        let targetTable: TableInsertType | undefined = this.findTable(tables, ast.target_table);
+        let sourceTable: TableInsertType | undefined = this.findTable(tables, this.qualifiedIdentifier(ast.foreign_table));
 
-        if (!sourceTable || !sourceField || !targetField || !targetTable) {
+        // referred_columns are the parent-table (source) columns, columns are the
+        // FK-holding (target) columns; a composite FK lists more than one of each,
+        // matched up pairwise in declaration order.
+        const referredColumnNames: string[] = (ast.referred_columns ?? [])
+            .map((column: any) => column?.value)
+            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0);
+        const columnNames: string[] = (ast.columns ?? [])
+            .map((column: any) => column?.value)
+            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0);
+
+        const sourceFieldsByName = new Map((sourceTable?.fields ?? []).map((field) => [field.name, field]));
+        const targetFieldsByName = new Map((targetTable?.fields ?? []).map((field) => [field.name, field]));
+
+        const sourceFields: (FieldInsertType | undefined)[] = referredColumnNames.map((name) => sourceFieldsByName.get(name));
+        const targetFields: (FieldInsertType | undefined)[] = columnNames.map((name) => targetFieldsByName.get(name));
+
+        const sourceField: FieldInsertType | undefined = sourceFields[0];
+        const targetField: FieldInsertType | undefined = targetFields[0];
+
+        if (
+            !sourceTable || !sourceField || !targetField || !targetTable ||
+            sourceFields.length !== targetFields.length ||
+            sourceFields.some((field) => !field) || targetFields.some((field) => !field)
+        ) {
             throw Error("Inavlid FK Constraint")
 
         }
@@ -429,9 +499,21 @@ export class BaseSqlImporter {
         const onDelete: ForeignKeyActions | undefined = ast.on_delete ? this.astToForiegnKeyAction(ast.on_delete) : undefined;
         const onUpdate: ForeignKeyActions | undefined = ast.on_update ? this.astToForiegnKeyAction(ast.on_update) : undefined;
         const name: string | undefined = ast.name?.value;
+        const relationshipId = v4();
+
+        // Extra column pairs beyond the first are captured as relationshipFields;
+        // sourceFieldId/targetFieldId above always carry that first pair so every
+        // single-column consumer keeps working unchanged.
+        const relationshipFields = sourceFields.slice(1).map((field, index) => ({
+            id: v4(),
+            relationshipId,
+            sourceFieldId: (field as FieldInsertType).id,
+            targetFieldId: (targetFields[index + 1] as FieldInsertType).id,
+            sequence: index + 1,
+        }));
 
         return {
-            id: v4(),
+            id: relationshipId,
             name,
             sourceFieldId: sourceField.id,
             targetFieldId: targetField.id,
@@ -439,13 +521,15 @@ export class BaseSqlImporter {
             targetTableId: targetTable.id,
             cardinality: targetField.unique ? Cardinality.one_to_one : Cardinality.one_to_many,
             onDelete,
-            onUpdate
+            onUpdate,
+            relationshipFields: relationshipFields.length > 0 ? relationshipFields : undefined,
         } as RelationshipInsertType
     }
     protected astToIndex(ast: any, tables: TableInsertType[]): ParsedIndex {
 
+        const qualifiedName = this.qualifiedIdentifier(ast.CreateIndex.table_name);
         const tableName: string = ast.CreateIndex.table_name?.at(-1)?.Identifier?.value;
-        const table: TableInsertType | undefined = tables.find((table: TableInsertType) => table.name == tableName);
+        const table: TableInsertType | undefined = this.findTable(tables, qualifiedName);
 
         if (!table)
             throw Error("index table not found");
@@ -453,8 +537,13 @@ export class BaseSqlImporter {
         const columnNames: string[] = ast.CreateIndex.columns.map(({ column }: any) => column.expr?.Identifier?.value)
             .filter((column: string | undefined) => column != undefined);
 
-        const fieldIds: string[] = (table.fields?.filter((field: FieldInsertType) => columnNames.includes(field.name)) as FieldInsertType[])
-            .map((field: FieldInsertType) => field.id);
+        const fieldIds: string[] = columnNames.map((columnName) =>
+            table.fields?.find((field: FieldInsertType) => field.name === columnName)?.id
+        ).filter((id): id is string => Boolean(id));
+
+        if (columnNames.length === 0 || fieldIds.length !== columnNames.length) {
+            throw Error(`Index ${ast.CreateIndex.name?.[0]?.Identifier?.value ?? ""} references an unknown column`);
+        }
 
         let indexName: string = ast.CreateIndex.name?.[0]?.Identifier?.value;
         if (!indexName) {
@@ -467,13 +556,80 @@ export class BaseSqlImporter {
                 name: indexName,
                 tableId: table.id,
                 unique: ast.CreateIndex.unique,
-                fieldIndices: fieldIds?.map((id: string) => ({
+                fieldIndices: fieldIds.map((id: string) => ({
                     id: v4(),
                     fieldId: id
                 }))
             } as IndexInsertType,
             error: undefined
         }
+    }
+
+    protected astToView(ast: any, statement: string): ViewInsertType {
+        const nameParts = ast.name as any[] | undefined;
+        const name = nameParts?.at(-1)?.Identifier?.value;
+        if (!name) throw new Error('Invalid view definition');
+
+        const asMatch = statement.match(/\s+AS\s+/i);
+        if (!asMatch || asMatch.index === undefined) throw new Error(`View ${name} is missing AS`);
+        const definition = statement.slice(asMatch.index + asMatch[0].length).replace(/;\s*$/, '').trim();
+        if (!definition) throw new Error(`View ${name} is missing a query definition`);
+
+        return {
+            id: v4(),
+            name,
+            namespace: nameParts && nameParts.length > 1
+                ? nameParts.slice(0, -1).map((part) => part?.Identifier?.value).filter(Boolean).join('.')
+                : undefined,
+            materialized: Boolean(ast.materialized),
+            definition,
+            dependencies: JSON.stringify(extractViewDependencies(definition)),
+        } as ViewInsertType;
+    }
+
+    protected sequenceFromStatement(statement: string): SequenceInsertType {
+        const identifier = '(?:"[^"]+"|`[^`]+`|\\[[^\\]]+\\]|[A-Za-z_][\\w$]*)';
+        const match = statement.match(new RegExp(
+            `^CREATE\\s+(?:OR\\s+REPLACE\\s+)?SEQUENCE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(${identifier}(?:\\s*\\.\\s*${identifier}){0,2})([\\s\\S]*)$`,
+            'i',
+        ));
+        if (!match) throw new Error('Invalid sequence definition');
+
+        const parts = match[1].split(/\s*\.\s*/).map((part) => part.replace(/^["`\[]|["`\]]$/g, ''));
+        const name = parts.at(-1);
+        if (!name) throw new Error('Invalid sequence name');
+
+        return {
+            id: v4(),
+            name,
+            namespace: parts.length > 1 ? parts.slice(0, -1).join('.') : undefined,
+            definition: match[2].replace(/;\s*$/, '').trim(),
+        } as SequenceInsertType;
+    }
+
+    protected uniqueConstraintToIndex(constraint: any, table: TableInsertType): IndexInsertType {
+        const columnNames: string[] = (constraint.columns ?? [])
+            .map(({ column }: any) => column?.expr?.Identifier?.value)
+            .filter((name: unknown): name is string => typeof name === "string" && name.length > 0);
+        const fieldsByName = new Map((table.fields ?? []).map((field) => [field.name, field]));
+        const constraintFields = columnNames.map((name) => fieldsByName.get(name));
+
+        if (columnNames.length === 0 || constraintFields.some((field) => !field)) {
+            throw new Error(`Unique constraint on "${table.name}" references an unknown column`);
+        }
+
+        const indexId = v4();
+        return {
+            id: indexId,
+            name: constraint.name?.value ?? `${table.name}_${columnNames.join("_")}_key`,
+            tableId: table.id,
+            unique: true,
+            fieldIndices: constraintFields.map((field) => ({
+                id: v4(),
+                indexId,
+                fieldId: field?.id,
+            })),
+        } as IndexInsertType;
     }
 
     protected astToForiegnKeyAction(ast: ReferentialAction): ForeignKeyActions {
@@ -488,6 +644,20 @@ export class BaseSqlImporter {
                 return ForeignKeyActions.SET_DEFAULT;
         }
         return ForeignKeyActions.NO_ACTION;
+    }
+
+    protected qualifiedIdentifier(parts: any[] | undefined): string {
+        return (parts ?? [])
+            .map((part) => part?.Identifier?.value)
+            .filter((value): value is string => typeof value === 'string' && value.length > 0)
+            .join('.');
+    }
+
+    protected findTable(tables: TableInsertType[], identifier: string | undefined): TableInsertType | undefined {
+        if (!identifier) return undefined;
+        const exact = tables.find((table) => qualifiedTableName(table) === identifier);
+        if (exact || identifier.includes('.')) return exact;
+        return tables.find((table) => table.name === identifier);
     }
 
     protected processDataType(typeName: string): DataType | undefined   {
@@ -553,13 +723,209 @@ export class BaseSqlImporter {
 
 
     protected cleanSql(sql: string): string {
-        // Clean up SQL: remove comments and normalize
-        const cleanedSql = sql
-            .replace(/--.*$/gm, '')         // remove single-line comments
-            .replace(/\/\*[\s\S]*?\*\//g, '') // remove multi-line comments
-            .replace(/\s+/g, ' ')           // normalize whitespace
-            .replace(/;\s*/g, ';\n');       // separate statements
-        return cleanedSql;
+        // Remove comments without changing line breaks. Keeping line breaks lets
+        // parser errors report a useful line/column in the original input.
+        return this.stripSqlComments(sql)
+            .replace(/\r\n?/g, '\n')
+            .trim();
+    }
+
+    protected stripSqlComments(sql: string): string {
+        let output = '';
+        let state: 'normal' | 'single' | 'double' | 'backtick' | 'bracket' | 'dollar' | 'line-comment' | 'block-comment' = 'normal';
+        let dollarTag = '';
+
+        for (let index = 0; index < sql.length; index++) {
+            const character = sql[index];
+            const next = sql[index + 1];
+
+            if (state === 'dollar') {
+                if (sql.startsWith(dollarTag, index)) {
+                    output += dollarTag;
+                    index += dollarTag.length - 1;
+                    dollarTag = '';
+                    state = 'normal';
+                } else {
+                    output += character;
+                }
+                continue;
+            }
+
+            if (state === 'line-comment') {
+                if (character === '\n') {
+                    output += character;
+                    state = 'normal';
+                } else {
+                    output += ' ';
+                }
+                continue;
+            }
+
+            if (state === 'block-comment') {
+                if (character === '*' && next === '/') {
+                    output += '  ';
+                    index++;
+                    state = 'normal';
+                } else {
+                    output += character === '\n' ? '\n' : ' ';
+                }
+                continue;
+            }
+
+            if (state === 'normal') {
+                if (character === '-' && next === '-') {
+                    output += '  ';
+                    index++;
+                    state = 'line-comment';
+                } else if (character === '/' && next === '*') {
+                    output += '  ';
+                    index++;
+                    state = 'block-comment';
+                } else {
+                    output += character;
+                    if (character === "'") state = 'single';
+                    else if (character === '"') state = 'double';
+                    else if (character === '`') state = 'backtick';
+                    else if (character === '[') state = 'bracket';
+                    else if (character === '$') {
+                        const match = sql.slice(index).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/);
+                        if (match) {
+                            dollarTag = match[0];
+                            output = output.slice(0, -1) + dollarTag;
+                            index += dollarTag.length - 1;
+                            state = 'dollar';
+                        }
+                    }
+                }
+                continue;
+            }
+
+            output += character;
+            if (state === 'single' && character === "'") {
+                if (next === "'") {
+                    output += next;
+                    index++;
+                } else {
+                    state = 'normal';
+                }
+            } else if (state === 'double' && character === '"') {
+                if (next === '"') {
+                    output += next;
+                    index++;
+                } else {
+                    state = 'normal';
+                }
+            } else if (state === 'backtick' && character === '`') {
+                if (next === '`') {
+                    output += next;
+                    index++;
+                } else {
+                    state = 'normal';
+                }
+            } else if (state === 'bracket' && character === ']') {
+                if (next === ']') {
+                    output += next;
+                    index++;
+                } else {
+                    state = 'normal';
+                }
+            }
+        }
+
+        return output;
+    }
+
+    protected splitStatements(sql: string): string[] {
+        // SQL Server exports commonly use GO as a batch separator. Treat only
+        // standalone GO lines as separators; GO inside quoted text is untouched.
+        const source = sql.replace(/^[ \t]*GO[ \t]*$/gim, ';');
+        const statements: string[] = [];
+        let statementStart = 0;
+        let quote: 'single' | 'double' | 'backtick' | 'bracket' | 'dollar' | undefined;
+        let dollarTag = '';
+
+        const pushStatement = (end: number) => {
+            const statement = source.slice(statementStart, end).trim();
+            if (statement) statements.push(statement);
+        };
+
+        for (let index = 0; index < source.length; index++) {
+            const character = source[index];
+            const next = source[index + 1];
+
+            if (quote === 'dollar') {
+                if (source.startsWith(dollarTag, index)) {
+                    index += dollarTag.length - 1;
+                    quote = undefined;
+                    dollarTag = '';
+                }
+                continue;
+            }
+
+            if (quote === 'single') {
+                if (character === "'") {
+                    if (next === "'") index++;
+                    else quote = undefined;
+                }
+                continue;
+            }
+            if (quote === 'double') {
+                if (character === '"') {
+                    if (next === '"') index++;
+                    else quote = undefined;
+                }
+                continue;
+            }
+            if (quote === 'backtick') {
+                if (character === '`') {
+                    if (next === '`') index++;
+                    else quote = undefined;
+                }
+                continue;
+            }
+            if (quote === 'bracket') {
+                if (character === ']') {
+                    if (next === ']') index++;
+                    else quote = undefined;
+                }
+                continue;
+            }
+
+            if (character === "'") quote = 'single';
+            else if (character === '"') quote = 'double';
+            else if (character === '`') quote = 'backtick';
+            else if (character === '[') quote = 'bracket';
+            else if (character === '$') {
+                const match = source.slice(index).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/);
+                if (match) {
+                    quote = 'dollar';
+                    dollarTag = match[0];
+                    index += dollarTag.length - 1;
+                }
+            } else if (character === ';') {
+                pushStatement(index);
+                statementStart = index + 1;
+            }
+        }
+
+        pushStatement(source.length);
+        return statements;
+    }
+
+    protected statementError(error: unknown, statement: string, source: string): Error {
+        const message = error instanceof Error
+            ? error.message
+            : (typeof error === 'object' && error !== null && 'message' in error)
+                ? String((error as { message: unknown }).message)
+                : String(error);
+        const index = source.indexOf(statement);
+        if (index < 0) return new Error(message);
+
+        const beforeStatement = source.slice(0, index);
+        const line = beforeStatement.split('\n').length;
+        const lineStart = beforeStatement.lastIndexOf('\n') + 1;
+        const column = index - lineStart + 1;
+        return new Error(`Line ${line}, column ${column}: ${message}`);
     }
 
     protected extractStatments(sql: string): ExtractedStatments {
@@ -567,19 +933,21 @@ export class BaseSqlImporter {
         const createTableStatements: string[] = [];
         const alterTableStatements: string[] = [];
         const createIndexStatements: string[] = [];
+        const createViewStatements: string[] = [];
+        const createSequenceStatements: string[] = [];
 
-        // Split into individual statements
-        const statements = sql
-            .split('\n')
-            .map(s => s.trim())
-            .filter(Boolean);
+        const statements = this.splitStatements(sql);
 
 
         for (const stmt of statements) {
             const upper = stmt.toUpperCase();
 
-            if (upper.startsWith('CREATE TABLE')) {
+            if (/^CREATE\s+(?:(?:GLOBAL\s+|LOCAL\s+)?TEMPORARY\s+|UNLOGGED\s+)?TABLE\b/i.test(stmt)) {
                 createTableStatements.push(stmt);
+            } else if (/^CREATE\s+(OR\s+REPLACE\s+)?(MATERIALIZED\s+)?VIEW\b/i.test(stmt)) {
+                createViewStatements.push(stmt);
+            } else if (/^CREATE\s+(?:OR\s+REPLACE\s+)?SEQUENCE\b/i.test(stmt)) {
+                createSequenceStatements.push(stmt);
             } else if (upper.startsWith('ALTER TABLE')) {
                 alterTableStatements.push(stmt);
             } else if (upper.startsWith('CREATE INDEX') || upper.startsWith('CREATE UNIQUE INDEX')) {
@@ -589,7 +957,9 @@ export class BaseSqlImporter {
         return {
             createTableStatements,
             alterTableStatements,
-            createIndexStatements
+            createIndexStatements,
+            createViewStatements,
+            createSequenceStatements,
         } as ExtractedStatments;
     }
 
@@ -599,6 +969,8 @@ export type ParsedDatabaase = {
     tables: TableInsertType[],
     relationships: RelationshipInsertType[],
     indexes: IndexInsertType[],
+    views: ViewInsertType[],
+    sequences: SequenceInsertType[],
     errors: Error[]
 }
 
@@ -606,6 +978,7 @@ export type ParsedTable = {
     table: TableInsertType;
     errors: Error[];
     fk_constraints: any[] | undefined,
+    indexes: IndexInsertType[],
 }
 
 export type ParsedIndex = {
@@ -623,6 +996,8 @@ export type ExtractedStatments = {
     createTableStatements: string[],
     alterTableStatements: string[],
     createIndexStatements: string[],
+    createViewStatements: string[],
+    createSequenceStatements: string[],
     createPostgresTypesStatements?: string[],
     alterSequenceStatments?: string[]
 }

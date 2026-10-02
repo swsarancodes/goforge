@@ -9,6 +9,8 @@ import { DataType } from "@/lib/schemas/data-type-schema";
 import { IndexType } from "@/lib/schemas/index-schema";
 import { FieldIndexType } from "@/lib/schemas/field_index-schema";
 import { DatabaseDialect } from "@/lib/database";
+import { ViewType } from "@/lib/schemas/view-schema";
+import { SequenceType } from "@/lib/schemas/sequence-schema";
 
 
 export const prepareForMigration = (db: DatabaseType) => {
@@ -122,6 +124,11 @@ export const optimizeOps = (operations: DBDiffOperation[], currentDatabase: Data
 
             operation.relationship.sourceField = sourceField as FieldType;
             operation.relationship.targetField = targetField as FieldType;
+
+            // normalizeDatabase() keys relationshipFields by id (an object map, like
+            // indices' fieldIndices) so array order never produces a spurious diff -
+            // convert it back to an ordered array for renderers/consumers to use.
+            operation.relationship.relationshipFields = Object.values(operation.relationship.relationshipFields ?? {});
         }
 
         // For everything below: the entity being changed/removed lives in previousDatabase
@@ -174,6 +181,18 @@ export const optimizeOps = (operations: DBDiffOperation[], currentDatabase: Data
             };
         }
 
+        if (operation.type == "DELETE_VIEW") {
+            operation.view = previousDatabase.views?.find((view: ViewType) => view.id === operation.viewId);
+        }
+
+        if (operation.type == "UPDATE_VIEW") {
+            operation.view = previousDatabase.views?.find((view: ViewType) => view.id === operation.viewId);
+        }
+
+        if (operation.type == "DELETE_SEQUENCE" || operation.type == "UPDATE_SEQUENCE") {
+            operation.sequence = previousDatabase.sequences?.find((sequence: SequenceType) => sequence.id === operation.sequenceId);
+        }
+
         if (operation.type == "DELETE_INDEX") {
             const table = previousDatabase.tables.find((t: TableType) => t.id == operation.tableId);
             operation.table = table ?? findTable(operation.tableId);
@@ -193,10 +212,13 @@ const orderOperations = (ops: DBDiffOperation[]): DBDiffOperation[] => {
     const OPERATION_ORDER = [
         // Drops/deletes first, so a dropped index/column never collides with a same-named create.
         'DELETE_INDEX',
+        'DELETE_VIEW',
+        'DELETE_SEQUENCE',
         'DELETE_RELATIONSHIP',
         'DELETE_FIELD',
         'DELETE_TABLE',
         // Structural creates
+        'CREATE_SEQUENCE',
         'CREATE_TABLE',
         'CREATE_FIELD',
         // In-place column alters (may include a column rename) - must run before any
@@ -205,6 +227,9 @@ const orderOperations = (ops: DBDiffOperation[]): DBDiffOperation[] => {
         'UPDATE_FIELD',
         // Relationships/indexes need their tables and columns to exist first
         'CREATE_RELATIONSHIP',
+        'CREATE_VIEW',
+        'UPDATE_VIEW',
+        'UPDATE_SEQUENCE',
         'CREATE_INDEX',
         // Table rename runs dead last - every other statement above still needs the
         // table's original name to resolve; renaming any earlier breaks all of them.
@@ -215,9 +240,6 @@ const orderOperations = (ops: DBDiffOperation[]): DBDiffOperation[] => {
             OPERATION_ORDER.indexOf(a.type) - OPERATION_ORDER.indexOf(b.type)
     );
 }
-
-
-
 
 
 

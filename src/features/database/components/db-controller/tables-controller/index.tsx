@@ -2,7 +2,7 @@
 
 import { ClipboardPaste, Code } from "lucide-react"
 import { useTranslation } from "react-i18next";
-import { Ref, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, Ref, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
 import { TableInsertType, TableType } from "@/lib/schemas/table-schema";
 import { v4 } from "uuid";
@@ -34,7 +34,7 @@ const TablesController: React.FC = ({ }) => {
 
     const { database } = useDatabase();
     const { createTable, getInteger, orderTables } = useDatabaseOperations();
-    const { getViewport } = useReactFlow();
+    const { getViewport, fitView } = useReactFlow();
     const { tables: allTables } = database || { tables: [] };
     const [tables, setTables] = useState<TableType[]>(allTables);
     const { t } = useTranslation();
@@ -51,7 +51,11 @@ const TablesController: React.FC = ({ }) => {
     function handleDragEnd(event: any) {
         const { active, over } = event;
 
-        if (active.id !== over?.id) {
+        if (!over || active.id === over.id) {
+            return;
+        }
+
+        if (active.id !== over.id) {
 
             setTables((items) => {
 
@@ -76,13 +80,17 @@ const TablesController: React.FC = ({ }) => {
         const newTableId: string = v4();
         const viewport = getViewport();
         const { x, y, zoom } = viewport;
+        let nextTableNumber = 1;
+        while (allTables.some((table) => table.name === `table_${nextTableNumber}`)) {
+            nextTableNumber += 1;
+        }
 
         const posX = -x / zoom + (PADDING_X / zoom);
         const posY = -y / zoom + (PADDING_Y / zoom);
 
         await createTable({
             id: newTableId,
-            name: `table_${tables.length + 1}`,
+            name: `table_${nextTableNumber}`,
             posX,
             posY,
             sequence: getTableNextSequence(tables),
@@ -97,7 +105,7 @@ const TablesController: React.FC = ({ }) => {
         } as TableInsertType);
 
         setFocusedTableId(newTableId);
-    }, [database, tables, getViewport, getInteger]);
+    }, [allTables, createTable, getViewport, getInteger, setFocusedTableId]);
 
     useEffect(() => {
        if (focusedTableId) {
@@ -134,6 +142,7 @@ const TablesController: React.FC = ({ }) => {
                             variant={"ghost"}
                             size={"icon"}
                             className="rounded-md h-8 w-8"
+                            aria-label={showSqlPreview ? "Show tables" : t("db_controller.show_code")}
                             onClick={toggleSqlPreview}
                         >
                             {showSqlPreview ? (
@@ -160,6 +169,7 @@ const TablesController: React.FC = ({ }) => {
                             variant={"default"}
                             size={"icon"}
                             className="rounded-md h-8 w-8"
+                            aria-label={t("db_controller.add_table")}
                             onClick={addNewTable}
                         >
                             <IconPlus className="size-4 " />
@@ -192,10 +202,10 @@ const TablesController: React.FC = ({ }) => {
                             >
 
                                 {tables.map((table: TableType) => (
-                                    <>
+                                    <Fragment key={table.id}>
                                         <TableAccordionItem table={table} key={table.id} />
                                         <Separator className="my-1" />
-                                    </>
+                                    </Fragment>
                                 ))}
                             </SortableContext>
 
@@ -211,6 +221,10 @@ const TablesController: React.FC = ({ }) => {
                         tableFilterIds={tableFilterIds}
                         editable={tables.length === allTables.length}
                         startEditing={allTables.length === 0}
+                        onApplied={() => {
+                            setShowSqlPreview(false);
+                            setTimeout(() => fitView({ duration: 500, padding: 0.15 }), 150);
+                        }}
                         className="rounded-none  border-0 border-t-1"
                     />
                 </div>

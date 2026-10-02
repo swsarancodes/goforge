@@ -174,13 +174,9 @@ export class PostgreSqlImporter extends BaseSqlImporter {
 
         const createPostgresTypesStatements: string[] = [];
         const alterSequenceStatments: string[] = [];
-        const { createIndexStatements, createTableStatements, alterTableStatements } = super.extractStatments(sql);
+        const { createIndexStatements, createTableStatements, alterTableStatements, createViewStatements, createSequenceStatements } = super.extractStatments(sql);
 
-        // Split into individual statements
-        const statements = sql
-            .split('\n')
-            .map(s => s.trim())
-            .filter(Boolean);
+        const statements = this.splitStatements(sql);
 
         for (const stmt of statements) {
             const upper = stmt.toUpperCase();
@@ -196,6 +192,8 @@ export class PostgreSqlImporter extends BaseSqlImporter {
             createIndexStatements,
             createTableStatements,
             alterTableStatements,
+            createViewStatements,
+            createSequenceStatements,
             createPostgresTypesStatements,
             alterSequenceStatments
         };

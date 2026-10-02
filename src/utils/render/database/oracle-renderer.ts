@@ -1,6 +1,6 @@
 
 import { FieldType } from "@/lib/schemas/field-schema";
-import { TableType } from "@/lib/schemas/table-schema";
+import { qualifiedTableName, TableType } from "@/lib/schemas/table-schema";
 import { AST } from "node-sql-parser";
 import BaseDatabaseRenderer, { ASTStatment } from "./base-database-renderer";
 import { DEFAULT_LENGTH_PARAM, ForeignKeyActions, Modifiers } from "@/lib/field";
@@ -33,7 +33,7 @@ export default class OracleRenderer extends BaseDatabaseRenderer {
             pk_constraint = "";
         let indexes: string = ast.indices_ast.filter((index: string) => index != null).join("\n")
         return `
-        CREATE TABLE ${table.name} (
+        CREATE TABLE ${qualifiedTableName(table)} (
             ${(ast as any).field_definitions.join(",\n")}
             ${pk_constraint}
         );
@@ -148,22 +148,25 @@ export default class OracleRenderer extends BaseDatabaseRenderer {
         if (columns.length == 0)
             return null;
         columns = `(${columns.join(",")})`
-        return `CREATE${unique} INDEX ${index.name} ON ${table.name} ${columns} ;`
+        return `CREATE${unique} INDEX ${index.name} ON ${qualifiedTableName(table)} ${columns} ;`
 
     }
 
     protected createRelationshipAst(relationship: RelationshipType): ASTStatment {
-        const { primaryKey, foreignKey, sourceTable, targetTable } = super.createRelationshipAst(relationship) as any;
+        const { primaryKeys, foreignKeys, sourceTable, targetTable } = super.createRelationshipAst(relationship) as any;
 
         const constraintName: string = relationship.name ? " CONSTRAINT " + relationship.name : "";
 
         const FKAction: string | null = this.foreignKeyActionToAst(relationship.onDelete as ForeignKeyActions);
         const onDeleteAction: string = FKAction ? `ON DELETE ${FKAction}` : ""
 
+        const foreignColumns: string = foreignKeys.map((field: FieldType) => field.name).join(",");
+        const primaryColumns: string = primaryKeys.map((field: FieldType) => field.name).join(",");
+
         return `
-            ALTER TABLE ${targetTable.name}
-            ADD ${constraintName} FOREIGN KEY (${foreignKey.name})
-            REFERENCES ${sourceTable.name}(${primaryKey.name}) ${onDeleteAction};
+            ALTER TABLE ${qualifiedTableName(targetTable)}
+            ADD ${constraintName} FOREIGN KEY (${foreignColumns})
+            REFERENCES ${qualifiedTableName(sourceTable)}(${primaryColumns}) ${onDeleteAction};
         `
     }
 
@@ -193,4 +196,4 @@ export default class OracleRenderer extends BaseDatabaseRenderer {
     protected commit(): string {
         throw new Error("Method not implemented.");
     }
-} 
+}

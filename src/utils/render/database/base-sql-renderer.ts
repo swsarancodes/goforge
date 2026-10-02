@@ -19,9 +19,10 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
         // other renderers can override this method to handle the parsing based on the dielact
         await this.readyPromise ;  
 
-        let sql: string = this.parser.sqlify(ast as AST[], {
-            database: getDatabaseByDialect(this.dialect).name
-        });
+        const sqlParts = ast.map((statement) => typeof statement === 'string'
+            ? statement
+            : `${this.parser.sqlify(statement as AST, { database: getDatabaseByDialect(this.dialect).name })};`);
+        let sql: string = sqlParts.join('\n');
         return format(sql, { language: 'sql' });
     }
 
@@ -34,7 +35,8 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
             keyword: "table",
             type: "create",
             table: [{
-                table: table.name
+                db: table.namespace ?? null,
+                table: table.name,
             }],
             create_definitions: [...field_definitions, ...constraints]
         }, ...indices_ast] as any
@@ -93,8 +95,8 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
     }
 
     protected createRelationshipAst(relationship: RelationshipType): ASTStatment  {
-        // get the foriegn key , primary key source table and target table from the parent renderer 
-        const { primaryKey, foreignKey, sourceTable, targetTable } = super.createRelationshipAst(relationship) as any;
+        // get the foriegn key , primary key source table and target table from the parent renderer
+        const { primaryKeys, foreignKeys, sourceTable, targetTable } = super.createRelationshipAst(relationship) as any;
         let on_action: any[] = [];
         // get the foriegn key actions for on delete and on cascade 
         if (relationship.onDelete) {
@@ -128,6 +130,7 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
             table: [
                 {
 
+                    db: targetTable.namespace ?? null,
                     table: targetTable.name
                 }
             ],
@@ -135,37 +138,33 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
                 action: "add",
                 create_definitions: {
                     constraint: relationship.name,
-                    definition: [
-                        {
+                    definition: foreignKeys.map((field: FieldType) => ({
+                        type: "column_ref",
+                        table: null,
+                        column: {
+                            expr: {
+                                type: "default",
+                                value: field.name
+                            }
+                        },
+                    })),
+                    constraint_type: "FOREIGN KEY",
+                    keyword: "constraint",
+                    resource: "constraint",
+                    reference_definition: {
+                        definition: primaryKeys.map((field: FieldType) => ({
                             type: "column_ref",
                             table: null,
                             column: {
                                 expr: {
                                     type: "default",
-                                    value: foreignKey.name
+                                    value: field.name
                                 }
                             },
-                        }
-                    ],
-                    constraint_type: "FOREIGN KEY",
-                    keyword: "constraint",
-                    resource: "constraint",
-                    reference_definition: {
-                        definition: [
-                            {
-                                type: "column_ref",
-                                table: null,
-                                column: {
-                                    expr: {
-                                        type: "default",
-                                        value: primaryKey.name
-                                    }
-                                },
-                            }
-                        ],
+                        })),
                         table: [
                             {
-                                db: null,
+                                db: sourceTable.namespace ?? null,
                                 table: sourceTable.name
                             }
                         ],
@@ -216,7 +215,7 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
         return {
             index: index.name,
             type: "create",
-            table: { table: table.name },
+            table: { db: table.namespace ?? null, table: table.name },
             keyword: "index",
             on_kw: "on",
             index_type: index.unique ? "unique" : null,

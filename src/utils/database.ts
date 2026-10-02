@@ -6,6 +6,9 @@ import { TableType } from "@/lib/schemas/table-schema";
 import { excludeFields } from "./utils";
 import { IndexType } from "@/lib/schemas/index-schema";
 import { FieldIndexType } from "@/lib/schemas/field_index-schema";
+import { RelationshipFieldType } from "@/lib/schemas/relationship_field-schema";
+import { ViewType } from "@/lib/schemas/view-schema";
+import { SequenceType } from "@/lib/schemas/sequence-schema";
 
 // Define the possible operations that can be performed when diffing databases
 export type DBDiffOperation =
@@ -19,6 +22,13 @@ export type DBDiffOperation =
     | { type: 'CREATE_RELATIONSHIP'; relationship: RelationshipType }
     | { type: 'DELETE_RELATIONSHIP'; relationshipId: string }
     | { type: 'UPDATE_RELATIONSHIP'; relationshipId: string; changes: Partial<RelationshipType> }
+    | { type: 'UPDATE_RELATIONSHIP_FIELDS'; relationshipId: string; create: RelationshipFieldType[]; delete: string[]; update: { id: string; changes: Partial<RelationshipFieldType> }[] }
+    | { type: 'CREATE_VIEW'; view: ViewType }
+    | { type: 'DELETE_VIEW'; viewId: string; view?: ViewType }
+    | { type: 'UPDATE_VIEW'; viewId: string; changes: Partial<ViewType>; view?: ViewType }
+    | { type: 'CREATE_SEQUENCE'; sequence: SequenceType }
+    | { type: 'DELETE_SEQUENCE'; sequenceId: string; sequence?: SequenceType }
+    | { type: 'UPDATE_SEQUENCE'; sequenceId: string; changes: Partial<SequenceType>; sequence?: SequenceType }
     // New index-related operations:
     | { type: 'CREATE_INDEX'; tableId: string; index: IndexType; table?: TableType }
     | { type: 'DELETE_INDEX'; tableId: string; indexId: string; table?: TableType; index?: IndexType }
@@ -40,6 +50,17 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
     const relationshipChanges: Record<string, Partial<RelationshipType>> = {};
     const relationshipCreates: RelationshipType[] = [];
     const relationshipDeletes: string[] = [];
+    const relationshipFieldMutations: Record<string, {
+        create: RelationshipFieldType[];
+        delete: string[];
+        update: { id: string; changes: Partial<RelationshipFieldType> }[];
+    }> = {};
+    const viewChanges: Record<string, Partial<ViewType>> = {};
+    const viewCreates: ViewType[] = [];
+    const viewDeletes: string[] = [];
+    const sequenceChanges: Record<string, Partial<SequenceType>> = {};
+    const sequenceCreates: SequenceType[] = [];
+    const sequenceDeletes: string[] = [];
 
     // Keep track of index changes
     const indexChanges: Record<string, Record<string, Partial<IndexType>>> = {};
@@ -161,11 +182,53 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
                 }
             }
 
+            // Composite pairs are normalized as relationshipFields/<id> rows. Keep
+            // their mutations separate because they live in a child table.
+            else if (parts[2] === 'relationshipFields') {
+                const relationshipFieldId = parts[3];
+                relationshipFieldMutations[relationshipId] ??= { create: [], delete: [], update: [] };
+                const mutation = relationshipFieldMutations[relationshipId];
+
+                if (parts.length === 4 && op.op === 'add') {
+                    mutation.create.push(op.value);
+                } else if (parts.length === 4 && op.op === 'remove') {
+                    mutation.delete.push(relationshipFieldId);
+                } else if (parts.length > 4 && ['add', 'remove', 'replace'].includes(op.op)) {
+                    mutation.update.push({
+                        id: relationshipFieldId,
+                        changes: { [parts.slice(4).join('/')]: op.op === 'remove' ? null : op.value },
+                    });
+                }
+            }
             // Update relationship properties (e.g., type, constraints)
             else if (['add', 'remove', 'replace'].includes(op.op)) {
                 const attr = parts.slice(2).join('/');
                 relationshipChanges[relationshipId] ??= {};
                 relationshipChanges[relationshipId][attr as keyof RelationshipType] = op.op === 'remove' ? null : op.value;
+            }
+        }
+
+        else if (parts[0] === 'views') {
+            const viewId = parts[1];
+            if (parts.length === 2) {
+                if (op.op === 'add') viewCreates.push(op.value);
+                else if (op.op === 'remove') viewDeletes.push(viewId);
+            } else if (['add', 'remove', 'replace'].includes(op.op)) {
+                const attr = parts.slice(2).join('/');
+                viewChanges[viewId] ??= {};
+                viewChanges[viewId][attr as keyof ViewType] = op.op === 'remove' ? null : op.value;
+            }
+        }
+
+        else if (parts[0] === 'sequences') {
+            const sequenceId = parts[1];
+            if (parts.length === 2) {
+                if (op.op === 'add') sequenceCreates.push(op.value);
+                else if (op.op === 'remove') sequenceDeletes.push(sequenceId);
+            } else if (['add', 'remove', 'replace'].includes(op.op)) {
+                const attr = parts.slice(2).join('/');
+                sequenceChanges[sequenceId] ??= {};
+                sequenceChanges[sequenceId][attr as keyof SequenceType] = op.op === 'remove' ? null : op.value;
             }
         }
     }
@@ -264,6 +327,17 @@ export function mapDiffToDBDiffOperation(patch: any[]): DBDiffOperation[] {
         operations.push({ type: 'UPDATE_RELATIONSHIP', relationshipId, changes });
     }
 
+    for (const [relationshipId, mutation] of Object.entries(relationshipFieldMutations)) {
+        operations.push({ type: 'UPDATE_RELATIONSHIP_FIELDS', relationshipId, ...mutation });
+    }
+
+    for (const view of viewCreates) operations.push({ type: 'CREATE_VIEW', view });
+    for (const viewId of viewDeletes) operations.push({ type: 'DELETE_VIEW', viewId });
+    for (const [viewId, changes] of Object.entries(viewChanges)) operations.push({ type: 'UPDATE_VIEW', viewId, changes });
+    for (const sequence of sequenceCreates) operations.push({ type: 'CREATE_SEQUENCE', sequence });
+    for (const sequenceId of sequenceDeletes) operations.push({ type: 'DELETE_SEQUENCE', sequenceId });
+    for (const [sequenceId, changes] of Object.entries(sequenceChanges)) operations.push({ type: 'UPDATE_SEQUENCE', sequenceId, changes });
+
     return operations;
 }
 
@@ -301,12 +375,17 @@ export function normalizeDatabase(db: DatabaseType): any {
         relationships: Object.fromEntries(
             db.relationships.map((rel: RelationshipType) => [
                 rel.id,
-                excludeFields(rel, {
-                    root: ["sourceField", "targetField", "sourceTable", "targetTable"]
-                })
+                {
+                    ...excludeFields(rel, {
+                        root: ["sourceField", "targetField", "sourceTable", "targetTable", "relationshipFields"]
+                    }),
+                    relationshipFields: Object.fromEntries(
+                        (rel.relationshipFields ?? []).map((relationshipField) => [relationshipField.id, relationshipField])
+                    ),
+                }
             ])
-        )
+        ),
+        views: Object.fromEntries((db.views ?? []).map((view) => [view.id, view])),
+        sequences: Object.fromEntries((db.sequences ?? []).map((sequence) => [sequence.id, sequence])),
     };
 }
-
-

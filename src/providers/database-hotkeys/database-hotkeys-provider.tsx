@@ -8,6 +8,11 @@ import { useDiagramOps } from "../diagram-provider/diagram-provider";
 
 const DatabaseHotkeysContext = createContext<null>(null);
 
+const isTextEditingTarget = (event: KeyboardEvent) => {
+    const target = event.target;
+    return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true'], .cm-content"));
+};
+
 interface Props {
     children: React.ReactNode;
 }
@@ -19,16 +24,19 @@ const DatabaseHotkeysProvider: React.FC<Props> = ({ children }) => {
     const { open } = useModal();
 
     useHotkeys(["Control+z", "Meta+z"], (event: KeyboardEvent) => {
+        if (isTextEditingTarget(event)) return;
         event.preventDefault()
         canUndo && undo();
     });
 
     useHotkeys(["Control+Shift+z", "Meta+Shift+z", "Control+y"], (event: KeyboardEvent) => {
+        if (isTextEditingTarget(event)) return;
         event.preventDefault()
         canRedo && redo();
     });
 
     useHotkeys(["Control+a", "Meta+a"], (event: KeyboardEvent) => {
+        if (isTextEditingTarget(event)) return;
         event.preventDefault()
 
         fitView({
@@ -39,12 +47,14 @@ const DatabaseHotkeysProvider: React.FC<Props> = ({ children }) => {
     });
 
     useHotkeys(["Control+o", "Meta+o"], (event: KeyboardEvent) => {
+        if (isTextEditingTarget(event)) return;
         event.preventDefault()
         open(Modals.OPEN_DATABASE);
     });
 
 
     useHotkeys(["Control+b", "Meta+b"], (event: KeyboardEvent) => {
+        if (isTextEditingTarget(event)) return;
         event.preventDefault()
         openController(!showController)
     });

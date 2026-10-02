@@ -36,7 +36,9 @@ const adjustTablesPositions = async (
             height: node.measured?.height ?? ((node.data?.table as TableType)?.fields?.length * 32 + 36),
         })),
         edges: relationships.map((rel) => ({
-            id: `${rel.sourceTableId}->${rel.targetTableId}`,
+            // Multiple foreign keys may connect the same two tables. ELK edge
+            // IDs must still be unique or the layout can drop/merge edges.
+            id: rel.id,
             sources: [rel.sourceTableId],
             targets: [rel.targetTableId],
         })),

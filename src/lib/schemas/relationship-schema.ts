@@ -6,6 +6,7 @@ import { InferInsertModel, InferSelectModel, relations } from 'drizzle-orm';
 import { tables, TableType } from './table-schema';
 import { fields, FieldType } from './field-schema';
 import { databases } from './database-schema';
+import { relationship_fields, RelationshipFieldInsertType, RelationshipFieldType } from './relationship_field-schema';
 
 export const relationships = sqliteTable('relationships', {
     id: text('id').primaryKey().notNull(),
@@ -67,7 +68,7 @@ export const relationships = sqliteTable('relationships', {
 });
 
 
-export const relationshipRelations = relations(relationships, ({ one }) => ({
+export const relationshipRelations = relations(relationships, ({ one, many }) => ({
     sourceTable: one(tables, {
         fields: [relationships.sourceTableId],
         references: [tables.id],
@@ -87,7 +88,8 @@ export const relationshipRelations = relations(relationships, ({ one }) => ({
     database: one(databases, {
         fields: [relationships.databaseId],
         references: [databases.id],
-    })
+    }),
+    relationshipFields: many(relationship_fields),
 }));
 
 
@@ -96,9 +98,15 @@ export interface RelationshipType extends InferSelectModel<typeof relationships>
     targetTable: TableType,
     sourceField: FieldType,
     targetField: FieldType,
+    // Ordered source/target column pairs for a composite foreign key, beyond the
+    // first pair already carried by sourceFieldId/targetFieldId above. Empty or
+    // undefined for an ordinary single-column relationship.
+    relationshipFields?: RelationshipFieldType[],
 };
 
-export interface RelationshipInsertType extends InferInsertModel<typeof relationships> { };
+export interface RelationshipInsertType extends InferInsertModel<typeof relationships> {
+    relationshipFields?: RelationshipFieldInsertType[],
+};
 
 
 export enum Cardinality {

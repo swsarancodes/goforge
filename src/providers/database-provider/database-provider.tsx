@@ -14,10 +14,13 @@ import { DatabaseInsertType, DatabaseType, databases as databaseModel } from "@/
 import { getTimestamp, groupBy } from "@/utils/utils";
 import { IndexInsertType, indices } from "@/lib/schemas/index-schema";
 import { field_indices, FieldIndexInsertType } from "@/lib/schemas/field_index-schema";
+import { relationship_fields, validateRelationshipFields, validateRelationshipFieldRows, RelationshipFieldInsertType } from "@/lib/schemas/relationship_field-schema";
 import { v4 } from "uuid";
 import { DataType } from "@/lib/schemas/data-type-schema";
 import { deleteFieldsWithCascade, deleteIndicesWithCascade, deleteTablesWithCascade } from "@/utils/cascade";
 import { DatabaseDialect } from "@/lib/database";
+import { ViewInsertType, views as viewsModel } from "@/lib/schemas/view-schema";
+import { SequenceInsertType, sequences as sequencesModel } from "@/lib/schemas/sequence-schema";
 
 const TYPE_ORDER = ["integer", "text", "boolean", "numeric", "time", "enum"] as const;
 
@@ -29,14 +32,14 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
 
     const [currentDatabaseId, setCurrentDatabaseId] = useState<string | undefined>(localStorage.getItem("database_id") as string | undefined);
     // Fetch all databases
-    const { data: databases, isLoading: loadingDatabases } = useQuery(toCompilableQuery(
+    const { data: databases = [], isLoading: loadingDatabases } = useQuery(toCompilableQuery(
         db.query.databases.findMany({
             orderBy: desc(databaseModel.createdAt)
         })
     ));
 
     // Fetch the current database with nested tables, fields, and relationships
-    let { data: database, isLoading: loadingCurrentDatabase } = useQuery(
+    let { data: database = [], isLoading: loadingCurrentDatabase } = useQuery(
         toCompilableQuery(
             db.query.databases.findMany({
                 where: (databases, { eq }) => eq(databases.id, currentDatabaseId as string),
@@ -66,9 +69,13 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                             targetTable: true,
                             sourceField: true,
                             targetField: true,
+                            relationshipFields: true,
                         },
                         orderBy: desc(relationships.createdAt)
                     }
+                    ,
+                    views: true,
+                    sequences: true
                 }
             })
         ), [], { runQueryOnce: false },
@@ -93,14 +100,14 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
 
 
     // Fetch all data types 
-    let { data: data_types, isLoading: loadingDataTypes, isFetching: fetchingDatatypes } = useQuery(toCompilableQuery(
+    let { data: data_types = [], isLoading: loadingDataTypes, isFetching: fetchingDatatypes } = useQuery(toCompilableQuery(
         db.query.data_types.findMany({
             where: (data_types, { eq }) => eq(data_types.dialect, (database as any)?.dialect)
         })
     ));
 
     // orderding data types
-    data_types = data_types.sort((a, b) => {
+    data_types = [...data_types].sort((a, b) => {
         const ia = TYPE_ORDER.indexOf(a.type as any);
         const ib = TYPE_ORDER.indexOf(b.type as any);
         return (ia === -1 ? TYPE_ORDER.length : ia) -
@@ -128,7 +135,10 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
     }, [db]);
 
     const deleteDatabase = useCallback(async (id: string): Promise<void> => {
-        await db.delete(databaseModel).where(eq(databaseModel.id, id));
+        await db.transaction(async (tx) => {
+            await tx.delete(viewsModel).where(eq(viewsModel.databaseId, id));
+            await tx.delete(databaseModel).where(eq(databaseModel.id, id));
+        });
     }, [db]);
 
     const updateDbNumTables = useCallback(async (databaseId: string, tx: any) => {
@@ -271,25 +281,61 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
     // CRUD operations for Relationships
     const createRelationship = useCallback(async (relationship: RelationshipInsertType): Promise<QueryResult> => {
         if (currentDatabaseId) {
-            return await db.insert(relationships).values({
-                ...relationship,
-                databaseId: currentDatabaseId,
-                createdAt: relationship.createdAt || getTimestamp()
+            const relationshipFieldValuesToInsert = validateRelationshipFields(
+                relationship.relationshipFields,
+                relationship.sourceFieldId,
+                relationship.targetFieldId,
+            );
+            const { relationshipFields: _relationshipFields, ...relationshipRow } = relationship;
+            return await db.transaction(async (tx) => {
+                const result = await tx.insert(relationships).values({
+                    ...relationshipRow,
+                    databaseId: currentDatabaseId,
+                    createdAt: relationship.createdAt || getTimestamp()
+                });
+                if (relationshipFieldValuesToInsert.length > 0) {
+                    await tx.insert(relationship_fields).values(
+                        relationshipFieldValuesToInsert.map((field) => ({ ...field, relationshipId: relationship.id }))
+                    );
+                }
+                return result;
             });
         }
         throw Error("No database selected");
     }, [db, currentDatabaseId]);
 
     const editRelationship = useCallback(async (relationship: RelationshipInsertType): Promise<QueryResult> => {
-        return await db.update(relationships).set(relationship).where(eq(relationships.id, relationship.id));
+        const hasRelationshipFields = Object.prototype.hasOwnProperty.call(relationship, 'relationshipFields');
+        const relationshipFieldValuesToInsert = hasRelationshipFields
+            ? validateRelationshipFields(relationship.relationshipFields, relationship.sourceFieldId, relationship.targetFieldId)
+            : [];
+        const { relationshipFields: _relationshipFields, ...relationshipRow } = relationship;
+        return await db.transaction(async (tx) => {
+            const result = await tx.update(relationships).set(relationshipRow).where(eq(relationships.id, relationship.id));
+            if (hasRelationshipFields) {
+                await tx.delete(relationship_fields).where(eq(relationship_fields.relationshipId, relationship.id));
+                if (relationshipFieldValuesToInsert.length > 0) {
+                    await tx.insert(relationship_fields).values(
+                        relationshipFieldValuesToInsert.map((field) => ({ ...field, relationshipId: relationship.id }))
+                    );
+                }
+            }
+            return result;
+        });
     }, [db]);
 
     const deleteRelationship = useCallback(async (id: string): Promise<QueryResult> => {
-        return await db.delete(relationships).where(eq(relationships.id, id));
+        return await db.transaction(async (tx) => {
+            await tx.delete(relationship_fields).where(eq(relationship_fields.relationshipId, id));
+            return await tx.delete(relationships).where(eq(relationships.id, id));
+        });
     }, [db]);
 
     const deleteMultiRelationships = useCallback(async (ids: string[]): Promise<QueryResult> => {
-        return await db.delete(relationships).where(inArray(relationships.id, ids));
+        return await db.transaction(async (tx) => {
+            await tx.delete(relationship_fields).where(inArray(relationship_fields.relationshipId, ids));
+            return await tx.delete(relationships).where(inArray(relationships.id, ids));
+        });
     }, [db]);
 
     // Update table positions (for UI layout)
@@ -374,19 +420,83 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                         );
 
                     } else if (operation.type === "CREATE_RELATIONSHIP") {
-                        operations.push(
-                            tx.insert(relationships).values(operation.relationship)
+                        const relationshipFieldValuesToInsert = validateRelationshipFields(
+                            operation.relationship.relationshipFields,
+                            operation.relationship.sourceFieldId,
+                            operation.relationship.targetFieldId,
                         );
+                        const {
+                            relationshipFields: _relationshipFields,
+                            sourceTable: _sourceTable,
+                            targetTable: _targetTable,
+                            sourceField: _sourceField,
+                            targetField: _targetField,
+                            ...relationshipRow
+                        } = operation.relationship as any;
+                        operations.push(
+                            tx.insert(relationships).values(relationshipRow)
+                        );
+                        if (relationshipFieldValuesToInsert.length > 0) {
+                            operations.push(
+                                tx.insert(relationship_fields).values(
+                                    relationshipFieldValuesToInsert.map((relationshipField) => ({ ...relationshipField, relationshipId: operation.relationship.id }))
+                                )
+                            );
+                        }
 
                     } else if (operation.type === "DELETE_RELATIONSHIP") {
+                        operations.push(
+                            tx.delete(relationship_fields).where(eq(relationship_fields.relationshipId, operation.relationshipId))
+                        );
                         operations.push(
                             tx.delete(relationships).where(eq(relationships.id, operation.relationshipId))
                         );
 
                     } else if (operation.type === "UPDATE_RELATIONSHIP") {
+                        // relationshipFields isn't a column on `relationships`; pair
+                        // mutations are handled by UPDATE_RELATIONSHIP_FIELDS below.
+                        const { relationshipFields: _relationshipFields, ...changes } = operation.changes as any;
                         operations.push(
-                            tx.update(relationships).set(operation.changes).where(eq(relationships.id, operation.relationshipId))
+                            tx.update(relationships).set(changes).where(eq(relationships.id, operation.relationshipId))
                         );
+                    }
+                    else if (operation.type === "UPDATE_RELATIONSHIP_FIELDS") {
+                        validateRelationshipFieldRows(operation.create);
+                        if (operation.delete.length > 0) {
+                            operations.push(tx.delete(relationship_fields).where(inArray(relationship_fields.id, operation.delete)));
+                        }
+                        if (operation.create.length > 0) {
+                            operations.push(tx.insert(relationship_fields).values(
+                                operation.create.map((field: RelationshipFieldInsertType) => ({ ...field, relationshipId: operation.relationshipId }))
+                            ));
+                        }
+                        for (const update of operation.update) {
+                            operations.push(tx.update(relationship_fields).set(update.changes).where(eq(relationship_fields.id, update.id)));
+                        }
+                    }
+                    else if (operation.type === "CREATE_VIEW") {
+                        const { id, name, namespace, materialized, definition, dependencies, note, databaseId, createdAt } = operation.view;
+                        operations.push(tx.insert(viewsModel).values({
+                            id, name, namespace, materialized, definition, dependencies, note, databaseId, createdAt,
+                        }));
+                    }
+                    else if (operation.type === "DELETE_VIEW") {
+                        operations.push(tx.delete(viewsModel).where(eq(viewsModel.id, operation.viewId)));
+                    }
+                    else if (operation.type === "UPDATE_VIEW") {
+                        operations.push(tx.update(viewsModel).set(operation.changes).where(eq(viewsModel.id, operation.viewId)));
+                    }
+                    else if (operation.type === "CREATE_SEQUENCE") {
+                        const { id, name, namespace, definition, note, databaseId, createdAt } = operation.sequence;
+                        operations.push(tx.insert(sequencesModel).values({
+                            id, name, namespace, definition, note, databaseId, createdAt,
+                        }));
+                    }
+                    else if (operation.type === "DELETE_SEQUENCE") {
+                        operations.push(tx.delete(sequencesModel).where(eq(sequencesModel.id, operation.sequenceId)));
+                    }
+                    else if (operation.type === "UPDATE_SEQUENCE") {
+                        operations.push(tx.update(sequencesModel).set(operation.changes).where(eq(sequencesModel.id, operation.sequenceId)));
                     }
                     else if (operation.type == "CREATE_INDEX") {
                         operations.push(
@@ -432,7 +542,7 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
         return data_types.find((dataType: DataType) => dataType.name == "integer" || (dataType.name == "int" && dataType.dialect == DatabaseDialect.MSSQL));
     }, [data_types]);
 
-    const importDatabase = useCallback(async (importedTables: TableInsertType[], importedRelationships: RelationshipInsertType[], importedIndices: IndexInsertType[]) => {
+    const importDatabase = useCallback(async (importedTables: TableInsertType[], importedRelationships: RelationshipInsertType[], importedIndices: IndexInsertType[], importedViews: ViewInsertType[] = [], importedSequences: SequenceInsertType[] = []) => {
         if (currentDatabaseId) {
             return await db.transaction(async (tx) => {
                 let operations: Promise<any>[] = [];
@@ -453,11 +563,22 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                     }
                 }
                 for (const relationship of importedRelationships) {
+                    const relationshipFieldValuesToInsert = validateRelationshipFields(
+                        relationship.relationshipFields,
+                        relationship.sourceFieldId,
+                        relationship.targetFieldId,
+                    );
+                    const { relationshipFields: _relationshipFields, ...relationshipRow } = relationship;
                     operations.push(tx.insert(relationships).values({
-                        ...relationship,
+                        ...relationshipRow,
                         databaseId: currentDatabaseId,
-                        createdAt: relationship.createdAt || getTimestamp()
+                        createdAt: relationship.createdAt || getTimestamp(),
                     }));
+                    if (relationshipFieldValuesToInsert.length > 0) {
+                        operations.push(tx.insert(relationship_fields).values(
+                            relationshipFieldValuesToInsert.map((relationshipField) => ({ ...relationshipField, relationshipId: relationship.id }))
+                        ));
+                    }
                 }
 
                 for (const index of importedIndices) {
@@ -470,6 +591,20 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
                             index.fieldIndices.map((fieldIndex: FieldIndexInsertType) => ({ ...fieldIndex, indexId: index.id }))
                         ))
                     }
+                }
+                for (const view of importedViews) {
+                    operations.push(tx.insert(viewsModel).values({
+                        ...view,
+                        databaseId: currentDatabaseId,
+                        createdAt: view.createdAt || getTimestamp(),
+                    }));
+                }
+                for (const sequence of importedSequences) {
+                    operations.push(tx.insert(sequencesModel).values({
+                        ...sequence,
+                        databaseId: currentDatabaseId,
+                        createdAt: sequence.createdAt || getTimestamp(),
+                    }));
                 }
                 await Promise.all(operations);
                 await updateDbNumTables(currentDatabaseId, tx)

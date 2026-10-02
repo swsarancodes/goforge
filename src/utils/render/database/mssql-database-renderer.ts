@@ -1,6 +1,6 @@
 
 import { FieldType } from "@/lib/schemas/field-schema";
-import { TableType } from "@/lib/schemas/table-schema";
+import { qualifiedTableName, TableType } from "@/lib/schemas/table-schema";
 import BaseDatabaseRenderer, { ASTStatment } from "./base-database-renderer";
 import { DEFAULT_LENGTH_PARAM, ForeignKeyActions, Modifiers } from "@/lib/field";
 import { IndexType } from "@/lib/schemas/index-schema";
@@ -43,7 +43,7 @@ ${this.commit()}
             constraints = this.getPrimaryKeyContraint(primaryKeys, table)
         }
         return `
-        CREATE TABLE ${table.name} (
+        CREATE TABLE ${qualifiedTableName(table)} (
             ${(ast as any).field_definitions.join(",\n")}
             ${constraints ? ',\n' + constraints : ""}
         );
@@ -144,7 +144,7 @@ ${this.commit()}
     }
     
     protected createRelationshipAst(relationship: RelationshipType): ASTStatment {
-        const { primaryKey, foreignKey, sourceTable, targetTable } = super.createRelationshipAst(relationship) as any;
+        const { primaryKeys, foreignKeys, sourceTable, targetTable } = super.createRelationshipAst(relationship) as any;
 
         const constraintName: string = relationship.name ? " CONSTRAINT " + relationship.name : "";
 
@@ -156,10 +156,13 @@ ${this.commit()}
 
         const FKActions: string = [onDeleteAction, onUpdateAction].join(" ");
 
+        const foreignColumns: string = foreignKeys.map((field: FieldType) => field.name).join(",");
+        const primaryColumns: string = primaryKeys.map((field: FieldType) => field.name).join(",");
+
         return `
-            ALTER TABLE ${targetTable.name}
-            ADD ${constraintName} FOREIGN KEY (${foreignKey.name})
-            REFERENCES ${sourceTable.name}(${primaryKey.name}) ${FKActions};
+            ALTER TABLE ${qualifiedTableName(targetTable)}
+            ADD ${constraintName} FOREIGN KEY (${foreignColumns})
+            REFERENCES ${qualifiedTableName(sourceTable)}(${primaryColumns}) ${FKActions};
         `
     }
 
@@ -183,13 +186,13 @@ ${this.commit()}
         if (columns.length == 0)
             return null;
         columns = `(${columns.join(",")})`
-        return `CREATE${unique} INDEX ${index.name} ON ${table.name} ${columns} ;`
+        return `CREATE${unique} INDEX ${index.name} ON ${qualifiedTableName(table)} ${columns} ;`
 
     }
   
     protected getPrimaryKeyContraint(fields: FieldType[], table?: TableType): ASTStatment {
         const pks: string[] = fields.map((field: FieldType) => field.name);
-        return `CONSTRAINT PK_${table?.name} PRIMARY KEY (${pks.join(",")})`
+        return `CONSTRAINT PK_${table?.name ?? ""} PRIMARY KEY (${pks.join(",")})`
     } 
      
     protected startTransaction(): string {
@@ -200,4 +203,4 @@ ${this.commit()}
     }
  
    
-} 
+}

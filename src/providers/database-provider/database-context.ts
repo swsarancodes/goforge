@@ -4,6 +4,8 @@ import { DatabaseInsertType, DatabaseType } from "@/lib/schemas/database-schema"
 import { FieldInsertType, FieldType } from "@/lib/schemas/field-schema";
 import { IndexInsertType } from "@/lib/schemas/index-schema";
 import { RelationshipInsertType } from "@/lib/schemas/relationship-schema";
+import { ViewInsertType } from "@/lib/schemas/view-schema";
+import { SequenceInsertType } from "@/lib/schemas/sequence-schema";
 import { TableInsertType, TableType } from "@/lib/schemas/table-schema";
 import { DBDiffOperation } from "@/utils/database";
 import { QueryResult } from "@powersync/web";
@@ -61,11 +63,9 @@ interface DatabaseOperationsContextType {
     executeDbDiffOps: (operations: DBDiffOperation[]) => Promise<void>,
     
     // insert databse tables , relationships , indices in one operation 
-    importDatabase : (tables  : TableInsertType[] , relationships : RelationshipInsertType[] , indices : IndexInsertType[]) => Promise<any> ; 
+    importDatabase : (tables  : TableInsertType[] , relationships : RelationshipInsertType[] , indices : IndexInsertType[], views?: ViewInsertType[], sequences?: SequenceInsertType[]) => Promise<any> ;
      
 }
 
 export const DatabaseDataContext = createContext<DatabaseDataContextType>({} as DatabaseDataContextType);
 export const DatabaseOperationsContext = createContext<DatabaseOperationsContextType>({} as DatabaseOperationsContextType);
-
-

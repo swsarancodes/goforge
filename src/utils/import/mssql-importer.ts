@@ -128,11 +128,10 @@ export class MSSQLImporter extends BaseSqlImporter {
     }
 
     protected cleanSql(sql: string): string {
-        const cleanedSql = sql  // remove GO batches
-            .replace(/([^;\s])\s*\r?\nGO\b/gm, '$1;')
-            .replace(/^\s*GO\s*$/gm, '')
-
-
+        const cleanedSql = sql
+            // Standalone GO batches are split by BaseSqlImporter after comment
+            // removal. Do not remove them here: \s* can consume newlines and
+            // accidentally join the preceding CREATE with the next statement.
             // remove WITH CHECK
             .replace(/\bWITH\s+CHECK\b\s*/gi, '')
 

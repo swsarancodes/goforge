@@ -260,6 +260,193 @@ describe("getImporter().parseSql - CREATE TABLE across dialects", () => {
 });
 
 describe("getImporter().parseSql - realistic and malformed input", () => {
+  it("imports regular and materialized views with qualified names and definitions", () => {
+    const result = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      CREATE VIEW reporting.active_users AS SELECT id, email FROM auth.users WHERE active = true;
+      CREATE MATERIALIZED VIEW reporting.user_rollup AS SELECT count(*) AS total FROM auth.users;
+    `);
+
+    expect(result.errors).toEqual([]);
+    expect(result.tables).toHaveLength(0);
+    expect(result.views).toHaveLength(2);
+    expect(result.views[0]).toMatchObject({
+      name: "active_users",
+      namespace: "reporting",
+      materialized: false,
+      definition: "SELECT id, email FROM auth.users WHERE active = true",
+    });
+    expect(result.views[1].materialized).toBe(true);
+  });
+
+  it("imports namespaced sequences and preserves their options", () => {
+    const result = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      CREATE SEQUENCE reporting.order_seq START WITH 100 INCREMENT BY 5 CACHE 10;
+    `);
+
+    expect(result.errors).toEqual([]);
+    expect(result.sequences).toHaveLength(1);
+    expect(result.sequences[0]).toMatchObject({
+      name: "order_seq",
+      namespace: "reporting",
+      definition: "START WITH 100 INCREMENT BY 5 CACHE 10",
+    });
+  });
+
+  it("preserves namespaces while resolving qualified foreign keys", () => {
+    const result = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      CREATE TABLE auth.users (
+        id integer PRIMARY KEY
+      );
+      CREATE TABLE blog.posts (
+        id integer PRIMARY KEY,
+        user_id integer NOT NULL,
+        CONSTRAINT posts_user_fk FOREIGN KEY (user_id) REFERENCES auth.users (id)
+      );
+    `);
+
+    const users = result.tables.find((table) => table.name === "users");
+    const posts = result.tables.find((table) => table.name === "posts");
+    expect(result.errors).toEqual([]);
+    expect(users?.namespace).toBe("auth");
+    expect(posts?.namespace).toBe("blog");
+    expect(result.relationships[0]).toMatchObject({
+      sourceTableId: users?.id,
+      targetTableId: posts?.id,
+    });
+  });
+
+  it("preserves composite primary keys and named multi-column unique constraints", () => {
+    const result = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      CREATE TABLE memberships (
+        tenant_id integer NOT NULL,
+        user_id integer NOT NULL,
+        role varchar(40) NOT NULL,
+        CONSTRAINT memberships_pk PRIMARY KEY (tenant_id, user_id),
+        CONSTRAINT memberships_tenant_role_key UNIQUE (tenant_id, role)
+      );
+    `);
+    const memberships = result.tables[0];
+    const tenantId = getField(memberships, "tenant_id");
+    const userId = getField(memberships, "user_id");
+    const role = getField(memberships, "role");
+    const uniqueConstraint = result.indexes.find(
+      (index) => index.name === "memberships_tenant_role_key",
+    );
+
+    expect(result.errors).toEqual([]);
+    expect([tenantId.isPrimary, userId.isPrimary]).toEqual([true, true]);
+    expect([tenantId.unique, role.unique]).toEqual([false, false]);
+    expect(uniqueConstraint?.unique).toBe(true);
+    expect(uniqueConstraint?.fieldIndices?.map((item) => item.fieldId)).toEqual([
+      tenantId.id,
+      role.id,
+    ]);
+  });
+
+  it("preserves multi-column unique constraints added with ALTER TABLE", () => {
+    const result = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      CREATE TABLE memberships (
+        tenant_id integer NOT NULL,
+        external_id integer NOT NULL
+      );
+      ALTER TABLE memberships
+        ADD CONSTRAINT memberships_external_key UNIQUE (tenant_id, external_id);
+    `);
+
+    expect(result.errors).toEqual([]);
+    expect(result.indexes).toHaveLength(1);
+    expect(result.indexes[0]).toMatchObject({
+      name: "memberships_external_key",
+      unique: true,
+      tableId: result.tables[0].id,
+    });
+  });
+
+  it("preserves composite foreign keys declared inline on CREATE TABLE", () => {
+    const result = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      CREATE TABLE memberships (
+        tenant_id integer NOT NULL,
+        user_id integer NOT NULL,
+        role varchar(40) NOT NULL,
+        CONSTRAINT memberships_pk PRIMARY KEY (tenant_id, user_id)
+      );
+      CREATE TABLE membership_roles (
+        tenant_id integer NOT NULL,
+        user_id integer NOT NULL,
+        granted_by varchar(40) NOT NULL,
+        CONSTRAINT membership_roles_fk FOREIGN KEY (tenant_id, user_id)
+          REFERENCES memberships (tenant_id, user_id) ON DELETE CASCADE
+      );
+    `);
+
+    expect(result.errors).toEqual([]);
+    expect(result.relationships).toHaveLength(1);
+
+    const memberships = result.tables.find((t) => t.name === "memberships") as TableInsertType;
+    const membershipRoles = result.tables.find((t) => t.name === "membership_roles") as TableInsertType;
+    const tenantId = getField(memberships, "tenant_id");
+    const userId = getField(memberships, "user_id");
+    const roleTenantId = getField(membershipRoles, "tenant_id");
+    const roleUserId = getField(membershipRoles, "user_id");
+
+    const rel = result.relationships[0];
+    expect(rel.name).toBe("membership_roles_fk");
+    expect(rel.sourceTableId).toBe(memberships.id);
+    expect(rel.targetTableId).toBe(membershipRoles.id);
+    expect(rel.sourceFieldId).toBe(tenantId.id);
+    expect(rel.targetFieldId).toBe(roleTenantId.id);
+    expect(rel.onDelete).toBe("cascade");
+
+    // the first pair (tenant_id -> tenant_id) is carried by sourceFieldId/
+    // targetFieldId above; the second pair (user_id -> user_id) is the only
+    // entry in relationshipFields.
+    expect(rel.relationshipFields).toHaveLength(1);
+    expect(rel.relationshipFields?.[0]).toMatchObject({
+      sourceFieldId: userId.id,
+      targetFieldId: roleUserId.id,
+      sequence: 1,
+    });
+  });
+
+  it("rejects a foreign key whose column lists have mismatched length", () => {
+    const result = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      CREATE TABLE memberships (
+        tenant_id integer NOT NULL,
+        user_id integer NOT NULL,
+        CONSTRAINT memberships_pk PRIMARY KEY (tenant_id, user_id)
+      );
+      CREATE TABLE membership_roles (
+        tenant_id integer NOT NULL,
+        CONSTRAINT membership_roles_fk FOREIGN KEY (tenant_id)
+          REFERENCES memberships (tenant_id, user_id)
+      );
+    `);
+
+    expect(result.relationships).toHaveLength(0);
+    expect(result.errors).toHaveLength(1);
+  });
+
   it("parses the bundled PostgreSQL dump", () => {
     const r = getImporter(
       DatabaseDialect.POSTGRES,
@@ -281,6 +468,54 @@ describe("getImporter().parseSql - realistic and malformed input", () => {
 
     expect(r.tables.map((t) => t.name)).toContain("good");
     expect(r.errors.length).toBeGreaterThan(0);
+  });
+
+  it("handles mixed DDL, DML, comments, quoted semicolons, and case variations", () => {
+    const r = getImporter(
+      DatabaseDialect.POSTGRES,
+      getDataTypes(DatabaseDialect.POSTGRES),
+    ).parseSql(`
+      -- DML should be ignored by the schema importer
+      insert into audit_log(message) values ('keep;this;as;text');
+      /* A block comment should not hide the next schema statement. */
+      Create Table users (
+        id integer primary key,
+        note text default 'a;value'
+      );
+      UPDATE users SET note = 'updated';
+      cReAtE vIeW reporting.user_notes AS
+        select id, note from users;
+      COMMIT;
+    `);
+
+    expect(r.errors).toEqual([]);
+    expect(r.tables).toHaveLength(1);
+    expect(r.tables[0].name).toBe("users");
+    expect(r.views).toHaveLength(1);
+    expect(r.views[0].name).toBe("user_notes");
+    expect(r.views[0].definition).toContain("select id, note from users");
+  });
+
+  it("supports SQL Server GO batch separators without treating DML as an error", () => {
+    const r = getImporter(
+      DatabaseDialect.MSSQL,
+      getDataTypes(DatabaseDialect.MSSQL),
+    ).parseSql(`
+      CREATE TABLE [dbo].[users] (
+        [id] INT IDENTITY(1,1) PRIMARY KEY,
+        [name] NVARCHAR(100) NOT NULL
+      )
+      GO
+      INSERT INTO [dbo].[users] ([name]) VALUES ('Ada');
+      GO
+      CREATE TABLE [dbo].[posts] (
+        [id] INT IDENTITY(1,1) PRIMARY KEY,
+        [user_id] INT NOT NULL
+      );
+    `);
+
+    expect(r.errors).toEqual([]);
+    expect(r.tables.map((table) => table.name).sort()).toEqual(["posts", "users"]);
   });
 
   it("throws when there is nothing parseable", () => {

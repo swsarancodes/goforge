@@ -1,4 +1,4 @@
-import { Ref, useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, Ref, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RelationshipType } from "@/lib/schemas/relationship-schema";
 import { useDatabase } from "@/providers/database-provider/database-provider";
@@ -121,10 +121,10 @@ const RelationshipController: React.FC = ({ }) => {
                         onValueChange={setFocusedRelationshipId}
                     >
                         {relationships.map((relationship: RelationshipType) => (
-                            <>
+                            <Fragment key={relationship.id}>
                                 <RelationshipAccordionItem relationship={relationship} key={relationship.id} />
                                 <Separator className="my-1" />
-                            </>
+                            </Fragment>
                         ))}
                     </Accordion>
                 </ScrollArea>
@@ -144,5 +144,4 @@ const RelationshipController: React.FC = ({ }) => {
 }
 
 export default RelationshipController
-
 

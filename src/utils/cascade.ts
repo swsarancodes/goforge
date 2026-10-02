@@ -18,6 +18,7 @@ import { tables } from "@/lib/schemas/table-schema";
 import { relationships } from "@/lib/schemas/relationship-schema";
 import { field_indices } from "@/lib/schemas/field_index-schema";
 import { indices } from "@/lib/schemas/index-schema";
+import { relationship_fields } from "@/lib/schemas/relationship_field-schema";
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  deleteFieldsWithCascade
@@ -30,14 +31,40 @@ export const deleteFieldsWithCascade = async (
     ids: string[],
     tx: SQLiteTransaction<'async', QueryResult, any, ExtractTablesWithRelations<any>>
 ): Promise<QueryResult[]> => {
-    return Promise.all([
-        tx.delete(relationships).where(or(
-            inArray(relationships.sourceFieldId, ids),
-            inArray(relationships.targetFieldId, ids)
-        )),
-        tx.delete(field_indices).where(inArray(field_indices.fieldId, ids)),
-        tx.delete(fields).where(inArray(fields.id, ids)),
-    ]);
+    // Fetch relationships whose first column pair references one of these fields,
+    // so their relationship_fields (the extra composite-FK column pairs) get
+    // cleaned up too, not just the relationship row itself.
+    const affectedRelationships: { id: string }[] = await tx.select({
+        id: relationships.id
+    }).from(relationships).where(or(
+        inArray(relationships.sourceFieldId, ids),
+        inArray(relationships.targetFieldId, ids)
+    ));
+    const extraRelationshipRows: { relationshipId: string }[] = await tx.select({
+        relationshipId: relationship_fields.relationshipId,
+    }).from(relationship_fields).where(or(
+        inArray(relationship_fields.sourceFieldId, ids),
+        inArray(relationship_fields.targetFieldId, ids),
+    ));
+    const affectedRelationshipIds = [...new Set([
+        ...affectedRelationships.map((relationship) => relationship.id),
+        ...extraRelationshipRows.map((relationship) => relationship.relationshipId),
+    ])];
+
+    const results: QueryResult[] = [];
+    if (affectedRelationshipIds.length > 0) {
+        results.push(await tx.delete(relationship_fields).where(inArray(relationship_fields.relationshipId, affectedRelationshipIds)));
+        results.push(await tx.delete(relationships).where(inArray(relationships.id, affectedRelationshipIds)));
+    }
+    // A composite FK's extra column pairs can reference a field that isn't the
+    // relationship's first pair - those rows need direct cleanup too.
+    results.push(await tx.delete(relationship_fields).where(or(
+        inArray(relationship_fields.sourceFieldId, ids),
+        inArray(relationship_fields.targetFieldId, ids)
+    )));
+    results.push(await tx.delete(field_indices).where(inArray(field_indices.fieldId, ids)));
+    results.push(await tx.delete(fields).where(inArray(fields.id, ids)));
+    return results;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -69,22 +96,50 @@ export const deleteTablesWithCascade = async (
     fieldIds = fieldIds.map((fieldId) => fieldId.id);
     indicesIds = indicesIds.map((indexId) => indexId.id);
 
-    return Promise.all([
-        // Delete relationships where fields are involved
-        tx.delete(relationships).where(or(
-            inArray(relationships.sourceFieldId, fieldIds),
-            inArray(relationships.targetFieldId, fieldIds)
-        )),
+    // Fetch relationships whose first column pair references one of these fields,
+    // so their relationship_fields (the extra composite-FK column pairs) get
+    // cleaned up too, not just the relationship row itself.
+    const affectedRelationships: { id: string }[] = fieldIds.length > 0 ? await tx.select({
+        id: relationships.id
+    }).from(relationships).where(or(
+        inArray(relationships.sourceFieldId, fieldIds),
+        inArray(relationships.targetFieldId, fieldIds)
+    )) : [];
+    const extraRelationshipRows: { relationshipId: string }[] = fieldIds.length > 0 ? await tx.select({
+        relationshipId: relationship_fields.relationshipId,
+    }).from(relationship_fields).where(or(
+        inArray(relationship_fields.sourceFieldId, fieldIds),
+        inArray(relationship_fields.targetFieldId, fieldIds),
+    )) : [];
+    const affectedRelationshipIds = [...new Set([
+        ...affectedRelationships.map((relationship) => relationship.id),
+        ...extraRelationshipRows.map((relationship) => relationship.relationshipId),
+    ])];
 
+    const results: QueryResult[] = [];
+    if (affectedRelationshipIds.length > 0) {
+        results.push(await tx.delete(relationship_fields).where(inArray(relationship_fields.relationshipId, affectedRelationshipIds)));
+        results.push(await tx.delete(relationships).where(inArray(relationships.id, affectedRelationshipIds)));
+    }
+    // A composite FK's extra column pairs can reference a field that isn't the
+    // relationship's first pair - those rows need direct cleanup too.
+    if (fieldIds.length > 0) {
+        results.push(await tx.delete(relationship_fields).where(or(
+            inArray(relationship_fields.sourceFieldId, fieldIds),
+            inArray(relationship_fields.targetFieldId, fieldIds)
+        )));
         // Delete all fields in the table
-        tx.delete(fields).where(inArray(fields.id, fieldIds)),
+        results.push(await tx.delete(fields).where(inArray(fields.id, fieldIds)));
         // Delete field-index links for those fields
-        tx.delete(field_indices).where(inArray(field_indices.fieldId, fieldIds)),
+        results.push(await tx.delete(field_indices).where(inArray(field_indices.fieldId, fieldIds)));
+    }
+    if (indicesIds.length > 0) {
         // Delete all indices belonging to the table
-        tx.delete(indices).where(inArray(indices.id, indicesIds)),
-        // Finally, delete the table(s) themselves
-        tx.delete(tables).where(inArray(tables.id, ids)),
-    ]);
+        results.push(await tx.delete(indices).where(inArray(indices.id, indicesIds)));
+    }
+    // Finally, delete the table(s) themselves
+    results.push(await tx.delete(tables).where(inArray(tables.id, ids)));
+    return results;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

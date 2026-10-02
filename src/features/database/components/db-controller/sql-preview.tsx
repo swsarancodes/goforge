@@ -103,6 +103,51 @@ const describeSqlOperation = (operation: DBDiffOperation, currentDatabase: Datab
     }
 };
 
+const SchemaPreview: React.FC<{ database: DatabaseType }> = ({ database }) => {
+    const tables = database.tables ?? [];
+    const relationships = database.relationships ?? [];
+    const views = database.views ?? [];
+    const sequences = database.sequences ?? [];
+
+    return (
+        <div className="space-y-2 rounded-md border bg-background/70 p-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-medium">Schema preview</p>
+                <p className="text-muted-foreground">
+                    {tables.length} table(s) · {relationships.length} relationship(s)
+                    {views.length > 0 ? ` · ${views.length} view(s)` : ""}
+                    {sequences.length > 0 ? ` · ${sequences.length} sequence(s)` : ""}
+                </p>
+            </div>
+            {tables.length > 0 ? (
+                <div className="grid max-h-64 grid-cols-1 gap-2 overflow-auto sm:grid-cols-2">
+                    {tables.map((table) => (
+                        <div key={table.id} className="overflow-hidden rounded-md border bg-card">
+                            <div className="border-b bg-muted/50 px-2 py-1 font-medium">
+                                {table.namespace ? `${table.namespace}.` : ""}{table.name}
+                            </div>
+                            <ul className="divide-y text-xs">
+                                {(table.fields ?? []).map((field) => (
+                                    <li key={field.id} className="flex items-center justify-between gap-2 px-2 py-1">
+                                        <span className={field.isPrimary ? "font-semibold" : ""}>
+                                            {field.isPrimary ? "🔑 " : ""}{field.name}
+                                        </span>
+                                        <span className="text-muted-foreground">
+                                            {field.nullable === false ? "required" : "nullable"}
+                                        </span>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    ))}
+                </div>
+            ) : (
+                <p className="text-muted-foreground">No table nodes were found in this schema.</p>
+            )}
+        </div>
+    );
+};
+
 interface SqlPreviewProps {
     tableFilterIds?: string[];
     className?: string;
@@ -111,9 +156,10 @@ interface SqlPreviewProps {
     // applying edits from a partial view would read as deleting everything else.
     editable?: boolean;
     startEditing?: boolean;
+    onApplied?: () => void;
 }
 
-const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, editable = false, startEditing = false }) => {
+const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, editable = false, startEditing = false, onApplied }) => {
     const { database: currentDatabase } = useDatabase();
     const { data_types, executeDbDiffOps } = useDatabaseOperations();
     const [sqlCode, setSqlCode] = useState<string>("");
@@ -223,12 +269,13 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
             setIsEditing(false);
             setPreparedChange(undefined);
             setDestructiveAccepted(false);
+            onApplied?.();
         } catch (error) {
             setApplyError(error instanceof Error ? error.message : String(error));
         } finally {
             setIsApplying(false);
         }
-    }, [currentDatabase, data_types, destructiveAccepted, draftSql, executeDbDiffOps, preparedChange, raise]);
+    }, [currentDatabase, data_types, destructiveAccepted, draftSql, executeDbDiffOps, onApplied, preparedChange, raise]);
 
     if (circularDependency) return <CircularDependencyAlert error={circularDependency} />;
     else
@@ -278,6 +325,7 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
                     <div className="space-y-2 border-t bg-muted/30 px-3 py-2 text-xs">
                         <p className="font-medium">{preparedChange.operations.length} schema change(s) ready to apply</p>
                         <p className="text-muted-foreground">{summarizeOperations(preparedChange.operations)}</p>
+                        <SchemaPreview database={preparedChange.targetDatabase} />
                         <ul className="max-h-28 space-y-1 overflow-auto rounded-md border bg-background p-2 text-muted-foreground">
                             {preparedChange.operations.map((operation, index) => (
                                 <li key={`${operation.type}-${index}`}>

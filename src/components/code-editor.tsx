@@ -28,9 +28,18 @@ const createEditorRuntime = async () => {
         ".cm-line": { color: "#0f172b" },
     });
 
+    const editorKeyBoundary = view.EditorView.domEventHandlers({
+        keydown: (event) => {
+            // Keep editor editing shortcuts inside CodeMirror. Returning false
+            // lets CodeMirror continue handling selection and deletion normally.
+            event.stopPropagation();
+            return false;
+        },
+    });
+
     return {
         CodeMirror: codeMirror.default,
-        extensions: [sqlLanguage.sql()],
+        extensions: [sqlLanguage.sql(), editorKeyBoundary],
         darkTheme: [codeMirror.oneDark, darkOverride],
         lightTheme,
     };
@@ -79,7 +88,33 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
     }
 
     const { CodeMirror, extensions, darkTheme, lightTheme } = editor;
-    return <CodeMirror value={value ?? defaultValue ?? ""} className={cn("flex flex-1 w-full min-h-9 rounded-sm  h-full   bg-card border-1 border-border  !min-w-0 overflow-hidden", className)} extensions={extensions} readOnly={readOnly} autoFocus={autoFocus} theme={theme !== "dark" ? lightTheme : darkTheme} onChange={onChange} />;
+    return (
+        <CodeMirror
+            value={value ?? defaultValue ?? ""}
+            className={cn("flex flex-1 w-full min-h-9 rounded-sm  h-full   bg-card border-1 border-border  !min-w-0 overflow-hidden", className)}
+            extensions={extensions}
+            readOnly={readOnly}
+            autoFocus={autoFocus}
+            onCreateEditor={(view) => {
+                // The editor is loaded asynchronously, so CodeMirror's native
+                // autoFocus can run before its contenteditable exists. Focus it
+                // explicitly once the editor has been created so select-all,
+                // paste, and delete operate on SQL text.
+                if (autoFocus) view.focus();
+            }}
+            onKeyDown={(event) => {
+                // CodeMirror handles native editing at the contenteditable
+                // target. Stop the event at the editor boundary so canvas and
+                // window-level shortcuts cannot intercept Cmd/Ctrl+A, delete,
+                // word deletion, or line deletion.
+                if (event.target instanceof HTMLElement && event.target.closest(".cm-content")) {
+                    event.stopPropagation();
+                }
+            }}
+            theme={theme !== "dark" ? lightTheme : darkTheme}
+            onChange={onChange}
+        />
+    );
 };
 
 export default React.memo(CodeEditor);

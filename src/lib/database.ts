@@ -124,6 +124,8 @@ export const emptyDb = (database: DatabaseSchemaType) : DatabaseSchemaType => {
     let cloneDb : any = _.cloneDeep(database);
     cloneDb.tables = [];
     cloneDb.relationships = [];
+    cloneDb.views = [];
+    cloneDb.sequences = [];
     cloneDb.numOfTables = 0;
 
     return cloneDb as DatabaseSchemaType;

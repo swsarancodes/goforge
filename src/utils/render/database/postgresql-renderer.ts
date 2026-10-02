@@ -1,7 +1,7 @@
 import { DataType } from "@/lib/schemas/data-type-schema";
 import { DatabaseDialect, getDatabaseByDialect } from "@/lib/database";
 import { FieldType } from "@/lib/schemas/field-schema";
-import { TableType } from "@/lib/schemas/table-schema";
+import { qualifiedTableName, TableType } from "@/lib/schemas/table-schema";
 import { BaseSQLRenderer } from "./base-sql-renderer";
 import { AST  } from "node-sql-parser";
 import { getPostgresEnumName } from "../render-uttils";
@@ -35,7 +35,10 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
         let sql: string[] = [];
         
         for (const statment of ast) {
-            if (PG_STATEMENT_TYPES.has((statment as Statement)?.type)) {
+            if (typeof statment === "string") {
+                sql.push(statment + ";");
+            }
+            else if (PG_STATEMENT_TYPES.has((statment as Statement)?.type)) {
                 // statements built via pgsql-ast-parser (index/enum renaming, column renaming -
                 // node-sql-parser's postgres grammar doesn't support RENAME COLUMN at all)
                 sql.push(toSql.statement(statment as Statement) + ";");
@@ -99,7 +102,7 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
             type: "create",
             resource: "enum",
             name: {
-                schema: null,
+                schema: (field as any).table.namespace ?? null,
                 name: `${(field as any).table.name}_${field.name.toLowerCase()}_enum`
             },
             keyword: "type",
@@ -215,7 +218,7 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
                     type: "drop",
                     keyword: "table",
                     prefix: null,
-                    name: [{ db: null, table: operation.table.name, as: null }],
+                    name: [{ db: operation.table.namespace ?? null, table: operation.table.name, as: null }],
                 } as any;
             }
 
@@ -249,7 +252,7 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
         return {
             type: "alter",
             keyword: "table",
-            table: [{ db: null, table: table.name }],
+            table: [{ db: table.namespace ?? null, table: table.name }],
             expr: [expr],
         };
     }
@@ -329,7 +332,7 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
         if (changes.name) {
             statements.push({
                 type: "alter table",
-                table: { name: table.name },
+                table: { name: qualifiedTableName(table) },
                 changes: [
                     {
                         type: "rename column",

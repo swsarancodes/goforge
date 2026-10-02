@@ -35,6 +35,7 @@ export interface IntrospectedColumn {
 
 export interface IntrospectedTable {
     name: string;
+    namespace?: string | null;
     columns: IntrospectedColumn[];
     primaryKeyColumns: string[];
     uniqueConstraints: { name: string; columns: string[] }[];
@@ -58,6 +59,19 @@ export interface IntrospectedIndex {
     columns: string[];
 }
 
+export interface IntrospectedView {
+    name: string;
+    namespace?: string | null;
+    materialized: boolean;
+    definition: string;
+}
+
+export interface IntrospectedSequence {
+    name: string;
+    namespace?: string | null;
+    definition: string;
+}
+
 export interface IntrospectedEnum {
     name: string;
     values: string[];
@@ -68,6 +82,8 @@ export interface IntrospectionResult {
     foreignKeys: IntrospectedForeignKey[];
     indexes: IntrospectedIndex[];
     enums: IntrospectedEnum[];
+    views?: IntrospectedView[];
+    sequences?: IntrospectedSequence[];
 }
 
 class LiveConnectionApiError extends Error {

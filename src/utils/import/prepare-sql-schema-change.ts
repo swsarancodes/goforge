@@ -15,7 +15,7 @@ export interface PreparedSqlSchemaChange {
     warnings: string[];
 }
 
-const DESTRUCTIVE_SQL_OPERATION_TYPES = new Set<DBDiffOperation["type"]>(["DELETE_TABLE", "DELETE_FIELD", "DELETE_RELATIONSHIP", "DELETE_INDEX"]);
+const DESTRUCTIVE_SQL_OPERATION_TYPES = new Set<DBDiffOperation["type"]>(["DELETE_TABLE", "DELETE_FIELD", "DELETE_RELATIONSHIP", "DELETE_INDEX", "DELETE_VIEW", "DELETE_SEQUENCE"]);
 
 export const isDestructiveSqlOperation = (operation: DBDiffOperation) => DESTRUCTIVE_SQL_OPERATION_TYPES.has(operation.type);
 
@@ -36,7 +36,9 @@ export async function prepareSqlSchemaChange(draftSql: string, currentDatabase: 
     if (!importer) throw new Error(`SQL import is not available for ${currentDatabase.dialect}.`);
 
     const parsed = importer.parseSql(draftSql);
-    if (parsed.tables.length === 0) throw new Error("Could not find any CREATE TABLE statements in this SQL.");
+    if (parsed.tables.length === 0 && parsed.views.length === 0 && parsed.sequences.length === 0) {
+        throw new Error("Could not find any supported schema objects in this SQL.");
+    }
 
     const reconciled = reconcileWithDatabase(parsed, currentDatabase, dataTypes);
     const existingTableIds = new Set(currentDatabase.tables.map((table) => table.id));
@@ -63,6 +65,8 @@ export async function prepareSqlSchemaChange(draftSql: string, currentDatabase: 
             } as any;
         }),
         relationships: reconciled.relationships as any,
+        views: reconciled.views,
+        sequences: reconciled.sequences,
     };
 
     const differences = compare(normalizeDatabase(currentDatabase), normalizeDatabase(targetDatabase));

@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { useTranslation } from "react-i18next"
 import { DatabaseDialect, ImportDatabaseMethod, ImportDatabaseOption, ImportMethodType, MARIADB_DUMP_EXAMPLE, MARIADB_DUMP_INSTRUCTIONS, MYSQL_DUMP_EXAMPLE, MYSQL_DUMP_INSTRUCTIONS, PG_DUMP_EXAMPLE, PG_DUMP_INSTRUCTIONS, SQLITE_DUMP_EXAMPLE, SQLITE_DUMP_INSRUCTION } from "@/lib/database";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
-import { AlertCircleIcon, Code, HelpCircle } from "lucide-react";
+import { AlertCircleIcon, Code, HelpCircle, InfoIcon } from "lucide-react";
 import Clipboard from "@/components/clipboard";
 import { Trans } from 'react-i18next';
 import { Node, useReactFlow } from "@xyflow/react";
@@ -14,7 +14,7 @@ import { Label } from "@/components/ui/label";
 import { useTheme } from "@/providers/theme-provider/theme-provider";
 import { cn } from "@/lib/utils";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
-import { buttonVariants } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { BaseSqlImporter } from "@/utils/import/base-sql-importer";
 import { getImporter } from "@/utils/import/import-utils";
 import CodeEditor from "@/components/code-editor";
@@ -123,6 +123,73 @@ const options: ImportDatabaseOption[] = [{
 }
 ];
 
+const getParseErrorMessage = (error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    return message.replace(/^Error:\s*/i, "").trim() || "Unknown SQL parsing error.";
+};
+
+const getLeadingQueryType = (sql: string) => {
+    const withoutComments = sql
+        .replace(/--.*$/gm, "")
+        .replace(/\/\*[\s\S]*?\*\//g, "")
+        .trimStart();
+
+    const directQuery = withoutComments.match(/^(SELECT|INSERT|UPDATE|DELETE|MERGE)\b/i);
+    if (directQuery) return directQuery[1].toUpperCase();
+    if (!/^WITH\b/i.test(withoutComments)) return undefined;
+
+    let depth = 0;
+    let quote: 'single' | 'double' | 'backtick' | 'bracket' | undefined;
+
+    for (let index = 0; index < withoutComments.length; index++) {
+        const character = withoutComments[index];
+        const next = withoutComments[index + 1];
+
+        if (quote === 'single') {
+            if (character === "'") {
+                if (next === "'") index++;
+                else quote = undefined;
+            }
+            continue;
+        }
+        if (quote === 'double') {
+            if (character === '"') {
+                if (next === '"') index++;
+                else quote = undefined;
+            }
+            continue;
+        }
+        if (quote === 'backtick') {
+            if (character === '`') {
+                if (next === '`') index++;
+                else quote = undefined;
+            }
+            continue;
+        }
+        if (quote === 'bracket') {
+            if (character === ']') {
+                if (next === ']') index++;
+                else quote = undefined;
+            }
+            continue;
+        }
+
+        if (character === "'") quote = 'single';
+        else if (character === '"') quote = 'double';
+        else if (character === '`') quote = 'backtick';
+        else if (character === '[') quote = 'bracket';
+        else if (character === '(') depth++;
+        else if (character === ')') depth = Math.max(0, depth - 1);
+        else if (depth === 0) {
+            const query = withoutComments.slice(index).match(/^(SELECT|INSERT|UPDATE|DELETE|MERGE)\b/i);
+            if (query) return query[1].toUpperCase();
+        }
+    }
+
+    return undefined;
+};
+
+const isRawQuery = (sql: string) => getLeadingQueryType(sql) === "SELECT";
 
 const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => {
     const { t } = useTranslation();
@@ -133,6 +200,7 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
     const [sqlCode, setSqlCode] = useState<string>("");
     const [parsedDatabase, setParsedDatabase] = useState<any | undefined>(undefined)
     const [error, setError] = useState<boolean>(false);
+    const [parseError, setParseError] = useState<string | undefined>(undefined);
     const { fitView } = useReactFlow();
 
     const [importer, setImporter] = useState<BaseSqlImporter | undefined>(undefined);
@@ -166,6 +234,16 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
 
 
     const validateSql = useCallback((code: string) => {
+        setParseError(undefined);
+        if (isRawQuery(code)) {
+            // Raw queries are valid SQL, but they do not describe schema objects
+            // until the user explicitly converts them into a view definition.
+            setParsedDatabase(undefined);
+            setError(false);
+            setSqlCode(code);
+            return;
+        }
+
         if (importer)
             try {
                 const parsedDatabase = importer.parseSql(code);
@@ -175,6 +253,7 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
             } catch (error) { 
                 setError(true);
                 setParsedDatabase(undefined)
+                setParseError(getParseErrorMessage(error));
             }
         else {
             console.error("Importer not loaded");
@@ -203,7 +282,7 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                         nextTableSequence += 1;
                     }
 
-                    await importDatabase(adjustedTables, parsedDatabase.relationships, parsedDatabase.indexes);
+                    await importDatabase(adjustedTables, parsedDatabase.relationships, parsedDatabase.indexes, parsedDatabase.views, parsedDatabase.sequences);
 
                     onOpenChange && onOpenChange(false);
 
@@ -221,9 +300,18 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
             })
     }, [parsedDatabase, database]);
 
+    const convertRawQueryToView = useCallback(() => {
+        const query = sqlCode.trim().replace(/;\s*$/, "");
+        if (!query) return;
+
+        validateSql(`CREATE VIEW my_custom_view AS\n${query};`);
+    }, [sqlCode, validateSql]);
+
 
     if (isLoading || isSwitchingDatabase)
         return;
+
+    const rawQueryDetected = isRawQuery(sqlCode);
 
     return (
          <Modal
@@ -365,9 +453,31 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                         }
                         value={sqlCode}
                         onChange={validateSql}
+                        autoFocus
                     />
 
                     <div className="mt-4">
+                        {rawQueryDetected && (
+                            <Alert className="mb-4 border-blue-500/40 text-blue-700 dark:text-blue-300">
+                                <InfoIcon />
+                                <AlertTitle>
+                                    {t("modals.import_database.raw_query_title", { defaultValue: "Query detected" })}
+                                </AlertTitle>
+                                <AlertDescription>
+                                    <p>
+                                        {t("modals.import_database.raw_query_description", {
+                                            defaultValue: "This importer reads schema DDL only: CREATE TABLE, CREATE VIEW, and CREATE SEQUENCE. To import a query as a view, wrap it like this:",
+                                        })}
+                                    </p>
+                                    <code className="rounded-md border border-blue-500/30 bg-blue-500/5 px-2 py-1 font-mono text-xs">
+                                        CREATE VIEW my_view AS SELECT ...;
+                                    </code>
+                                    <Button type="button" size="sm" variant="outline" onClick={convertRawQueryToView}>
+                                        Convert to View
+                                    </Button>
+                                </AlertDescription>
+                            </Alert>
+                        )}
                         {
                             error &&
                             <Alert
@@ -380,6 +490,11 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                                 </AlertTitle>
                                 <AlertDescription>
                                     {t("modals.import_database.import_error_description")}
+                                    {parseError && (
+                                        <pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap rounded-md border border-destructive/30 bg-destructive/5 p-2 font-mono text-xs">
+                                            {parseError}
+                                        </pre>
+                                    )}
                                 </AlertDescription>
                             </Alert>
                         }
@@ -395,6 +510,13 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                                 </AlertTitle>
                                 <AlertDescription className="text-chart-4 ">
                                     {t("modals.import_database.import_warning_description")}
+                                    <ul className="mt-2 max-h-32 list-disc space-y-1 overflow-auto pl-4 font-mono text-xs">
+                                        {parsedDatabase.errors.map((parseIssue: unknown, index: number) => (
+                                            <li key={`${getParseErrorMessage(parseIssue)}-${index}`}>
+                                                {getParseErrorMessage(parseIssue)}
+                                            </li>
+                                        ))}
+                                    </ul>
                                 </AlertDescription>
 
                             </Alert>
@@ -407,4 +529,4 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
 }
 
 
-export default ImportDatabaseModal 
+export default ImportDatabaseModal

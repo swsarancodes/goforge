@@ -1,14 +1,18 @@
-import { TableInsertType } from "@/lib/schemas/table-schema";
+import { qualifiedTableName, TableInsertType } from "@/lib/schemas/table-schema";
 import { FieldIndexInsertType } from "@/lib/schemas/field_index-schema";
 import { IndexInsertType } from "@/lib/schemas/index-schema";
 import { RelationshipInsertType } from "@/lib/schemas/relationship-schema";
 import { DatabaseType } from "@/lib/schemas/database-schema";
 import { DataType } from "@/lib/schemas/data-type-schema";
+import { ViewInsertType } from "@/lib/schemas/view-schema";
+import { SequenceInsertType } from "@/lib/schemas/sequence-schema";
 
 export interface ParsedDatabaseResult {
     tables: TableInsertType[];
     relationships: RelationshipInsertType[];
     indexes: IndexInsertType[];
+    views: ViewInsertType[];
+    sequences: SequenceInsertType[];
 }
 
 /**
@@ -47,7 +51,7 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
     const fieldIdMap = new Map<string, string>();
 
     const tables: TableInsertType[] = parsed.tables.map((parsedTable) => {
-        const existingTable = currentDatabase.tables.find((t) => t.name === parsedTable.name);
+        const existingTable = currentDatabase.tables.find((t) => qualifiedTableName(t) === qualifiedTableName(parsedTable));
         const resolvedTableId = existingTable?.id ?? (parsedTable.id as string);
         tableIdMap.set(parsedTable.id as string, resolvedTableId);
 
@@ -110,6 +114,24 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
 
         const existingRelationship = currentDatabase.relationships.find((existing) => existing.sourceTableId === sourceTableId && existing.targetTableId === targetTableId && existing.sourceFieldId === sourceFieldId && existing.targetFieldId === targetFieldId);
 
+        // Remap the extra composite-FK column pairs the same way as the first pair
+        // above, matching each pair back to an existing relationship_fields row by
+        // its (already-remapped) field ids so ids stay stable across re-imports.
+        const remappedRelationshipFields = (rel.relationshipFields ?? []).map((relationshipField) => {
+            const remappedSourceFieldId = fieldIdMap.get(relationshipField.sourceFieldId as string) ?? relationshipField.sourceFieldId;
+            const remappedTargetFieldId = fieldIdMap.get(relationshipField.targetFieldId as string) ?? relationshipField.targetFieldId;
+            const existingRelationshipField = existingRelationship?.relationshipFields?.find(
+                (existing) => existing.sourceFieldId === remappedSourceFieldId && existing.targetFieldId === remappedTargetFieldId
+            );
+
+            return {
+                ...relationshipField,
+                id: existingRelationshipField?.id ?? relationshipField.id,
+                sourceFieldId: remappedSourceFieldId,
+                targetFieldId: remappedTargetFieldId,
+            };
+        });
+
         return {
             ...rel,
             id: existingRelationship?.id ?? rel.id,
@@ -120,6 +142,7 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
             targetTableId,
             sourceFieldId,
             targetFieldId,
+            relationshipFields: remappedRelationshipFields.length > 0 ? remappedRelationshipFields : undefined,
             name: rel.name ?? existingRelationship?.name ?? null,
             onDelete: rel.onDelete ?? "no_action",
             onUpdate: rel.onUpdate ?? "no_action",
@@ -157,5 +180,36 @@ export function reconcileWithDatabase(parsed: ParsedDatabaseResult, currentDatab
         } as IndexInsertType;
     });
 
-    return { tables, relationships, indexes };
+    const views: ViewInsertType[] = (parsed.views ?? []).map((parsedView) => {
+        const existingView = (currentDatabase.views ?? []).find((view) =>
+            view.name === parsedView.name && (view.namespace ?? null) === (parsedView.namespace ?? null)
+        );
+        return {
+            ...parsedView,
+            id: existingView?.id ?? parsedView.id,
+            databaseId: currentDatabase.id,
+            namespace: parsedView.namespace ?? null,
+            materialized: parsedView.materialized ?? false,
+            dependencies: parsedView.dependencies ?? existingView?.dependencies ?? null,
+            note: existingView?.note ?? null,
+            createdAt: existingView ? existingView.createdAt : (parsedView.createdAt ?? null),
+        };
+    });
+
+    const sequences: SequenceInsertType[] = (parsed.sequences ?? []).map((parsedSequence) => {
+        const existingSequence = (currentDatabase.sequences ?? []).find((sequence) =>
+            sequence.name === parsedSequence.name && (sequence.namespace ?? null) === (parsedSequence.namespace ?? null)
+        );
+        return {
+            ...parsedSequence,
+            id: existingSequence?.id ?? parsedSequence.id,
+            databaseId: currentDatabase.id,
+            namespace: parsedSequence.namespace ?? null,
+            definition: parsedSequence.definition ?? "",
+            note: existingSequence?.note ?? null,
+            createdAt: existingSequence ? existingSequence.createdAt : (parsedSequence.createdAt ?? null),
+        };
+    });
+
+    return { tables, relationships, indexes, views, sequences };
 }

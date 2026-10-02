@@ -7,24 +7,33 @@ import { relationshipRelations, relationships } from './relationship-schema';
 import { databaseRelations, databases } from './database-schema';
 import { indices, indicesRlationships } from './index-schema';
 import { field_indices, fieldIndicesRelationships } from './field_index-schema';
+import { relationship_fields, relationshipFieldsRelations } from './relationship_field-schema';
+import { views, viewRelations } from './view-schema';
+import { sequences, sequenceRelations } from './sequence-schema';
 
 export const drizzleSchema = {
-  data_types , 
-  tables , 
-  fields , 
+  data_types ,
+  tables ,
+  fields ,
   relationships ,
-  databases ,  
-  indices , 
-  field_indices , 
+  databases ,
+  indices ,
+  field_indices ,
+  relationship_fields ,
+  views ,
+  sequences ,
 
-  // relationships 
-  tablesRelations , 
-  fieldsRelations , 
-  relationshipRelations , 
-  dataTypeRelations , 
-  databaseRelations , 
-  indicesRlationships , 
-  fieldIndicesRelationships 
+  // relationships
+  tablesRelations ,
+  fieldsRelations ,
+  relationshipRelations ,
+  dataTypeRelations ,
+  databaseRelations ,
+  indicesRlationships ,
+  fieldIndicesRelationships ,
+  relationshipFieldsRelations,
+  viewRelations,
+  sequenceRelations
 };
 
 // Infer the PowerSync schema from your Drizzle schema

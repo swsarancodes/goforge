@@ -13,6 +13,10 @@ import { AST } from "node-sql-parser";
 import { Statement } from "pgsql-ast-parser";
 import { getPostgresEnumName } from "../render-uttils"; 
 import { emptyDb } from "@/lib/database";
+import { validateRelationshipFields } from "@/lib/schemas/relationship_field-schema";
+import { ViewType } from "@/lib/schemas/view-schema";
+import { SequenceType } from "@/lib/schemas/sequence-schema";
+import { qualifiedTableName } from "@/lib/schemas/table-schema";
 
 export default abstract class BaseDatabaseRenderer {
 
@@ -49,6 +53,20 @@ export default abstract class BaseDatabaseRenderer {
      * ALTER/CREATE/DROP statements needed to bring it in line with the canvas.
      */
     public async renderDiffDDL(currentDatabase: DatabaseType, previousDatabase: DatabaseType): Promise<string> {
+
+        if (this.dialect === DatabaseDialect.SQLITE && (
+            currentDatabase.tables.some((table) => table.namespace) ||
+            currentDatabase.views?.some((view) => view.namespace)
+        )) {
+            throw new Error('SQLite does not support SQL namespaces in GoForge schemas');
+        }
+        if (currentDatabase.views?.some((view) => view.materialized) && ![DatabaseDialect.POSTGRES, DatabaseDialect.ORACLE].includes(this.dialect)) {
+            throw new Error(`${this.dialect} does not support materialized views in GoForge schemas`);
+        }
+        if ((currentDatabase.sequences?.length || previousDatabase.sequences?.length) &&
+            ![DatabaseDialect.POSTGRES, DatabaseDialect.MARIADB, DatabaseDialect.MSSQL, DatabaseDialect.ORACLE].includes(this.dialect)) {
+            throw new Error(`${this.dialect} does not support sequences in GoForge schemas`);
+        }
 
         // we prepare both databases by enriching them and removing some UI elements that can interfear with json fast path
         const preparedCurrentDatabase = prepareForMigration(currentDatabase);
@@ -103,9 +121,53 @@ export default abstract class BaseDatabaseRenderer {
                 return this.createRelationshipAst(
                     operation.relationship,
                 );
+
+            case "CREATE_VIEW":
+                return this.createViewStatement(operation.view);
+
+            case "DELETE_VIEW":
+                return operation.view ? this.dropViewStatement(operation.view) : null;
+
+            case "UPDATE_VIEW": {
+                if (!operation.view) return null;
+                const updatedView = { ...operation.view, ...operation.changes } as ViewType;
+                return [this.dropViewStatement(operation.view), this.createViewStatement(updatedView)];
+            }
+
+            case "CREATE_SEQUENCE":
+                return this.createSequenceStatement(operation.sequence);
+
+            case "DELETE_SEQUENCE":
+                return operation.sequence ? this.dropSequenceStatement(operation.sequence) : null;
+
+            case "UPDATE_SEQUENCE": {
+                if (!operation.sequence) return null;
+                const updatedSequence = { ...operation.sequence, ...operation.changes } as SequenceType;
+                return [this.dropSequenceStatement(operation.sequence), this.createSequenceStatement(updatedSequence)];
+            }
  
         }
         return null;
+    }
+
+    protected createViewStatement(view: ViewType): ASTStatment {
+        const materialized = view.materialized ? 'MATERIALIZED ' : '';
+        const qualifiedName = qualifiedTableName(view);
+        return `CREATE ${materialized}VIEW ${qualifiedName} AS ${view.definition}`;
+    }
+
+    protected dropViewStatement(view: ViewType): ASTStatment {
+        const materialized = view.materialized ? 'MATERIALIZED ' : '';
+        return `DROP ${materialized}VIEW ${qualifiedTableName(view)}`;
+    }
+
+    protected createSequenceStatement(sequence: SequenceType): ASTStatment {
+        const options = sequence.definition?.trim();
+        return `CREATE SEQUENCE ${qualifiedTableName(sequence)}${options ? ` ${options}` : ''}`;
+    }
+
+    protected dropSequenceStatement(sequence: SequenceType): ASTStatment {
+        return `DROP SEQUENCE ${qualifiedTableName(sequence)}`;
     }
 
     protected abstract astToSQL(ast: ASTStatment[]): Promise<string>;
@@ -222,17 +284,41 @@ export default abstract class BaseDatabaseRenderer {
         let sourceTable: TableType = relationship.sourceTable;
         let targetTable: TableType = relationship.targetTable;
 
+        // Ordered pairs of (source/parent column, target/FK column) - the first pair
+        // is always sourceField/targetField above; relationshipFields carries any
+        // additional pairs for a composite foreign key, in declaration order.
+        const relationshipFields = validateRelationshipFields(
+            relationship.relationshipFields,
+            relationship.sourceFieldId,
+            relationship.targetFieldId,
+        );
+        let pairs: { source: FieldType; target: FieldType }[] = [
+            { source: relationship.sourceField, target: relationship.targetField },
+            ...relationshipFields.map((relationshipField) => {
+                const source = sourceTable.fields.find((field: FieldType) => field.id == relationshipField.sourceFieldId);
+                const target = targetTable.fields.find((field: FieldType) => field.id == relationshipField.targetFieldId);
+                if (!source || !target) {
+                    throw new Error('Composite foreign-key pair references an unknown field');
+                }
+                return { source, target };
+            }),
+        ];
+
         if (relationship.cardinality == Cardinality.many_to_one) {
             primaryKey = relationship.targetField;
             foreignKey = relationship.sourceField;
             sourceTable = relationship.targetTable;
             targetTable = relationship.sourceTable;
+            pairs = pairs.map(({ source, target }) => ({ source: target, target: source }));
         }
+
         return {
             primaryKey,
             foreignKey,
             sourceTable,
-            targetTable
+            targetTable,
+            primaryKeys: pairs.map((pair) => pair.source),
+            foreignKeys: pairs.map((pair) => pair.target),
         } as any
     }
 
@@ -396,4 +482,4 @@ export interface DBRenderOutput {
 }
 
 
-export type ASTStatment = AST | Statement | string | null   
+export type ASTStatment = AST | Statement | string | null
