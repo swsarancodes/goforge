@@ -58,6 +58,14 @@ export const useMenuData = () => {
                         open(Modals.EXPORT_SQL)
                     }
                 },
+                {
+                    id: "menu.export_image",
+                    title: t("menu.export_image", { defaultValue: "Export Image" }),
+                    divide: true,
+                    clickHandler: () => {
+                        open(Modals.EXPORT_IMAGE)
+                    }
+                },
                 //{ title: t("menu.export_orm_models"), divide: true },
                 {
                     id: "menu.connect_live_database",
