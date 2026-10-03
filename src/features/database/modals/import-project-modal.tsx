@@ -7,12 +7,15 @@ import useToast from "@/hooks/use-toast";
 import { DatabaseDialect, DBTypes } from "@/lib/database";
 import { DataType, data_types } from "@/lib/schemas/data-type-schema";
 import { cn } from "@/lib/utils";
-import { useDatabaseOperations } from "@/providers/database-provider/database-provider";
+import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
 import { db } from "@/providers/sync-provider/sync-provider";
 import { DbmlParseError, parseDbml } from "@/utils/dbml/from-dbml";
 import { DbmlWarning, detectDbmlDialect } from "@/utils/dbml/dbml-shared";
 import { layoutProjectFile } from "@/utils/dbml/layout-project";
 import { MAX_IMPORT_FILE_BYTES, readTextFile } from "@/utils/file";
+import { prepareProjectFileChange, ProjectImportMode } from "@/utils/import/prepare-project-change";
+import { summarizeSchemaChange } from "@/utils/import/summarize-schema-change";
+import ImportReviewPanel from "./import-review-panel";
 import { ProjectFile, ProjectFileError, parseProjectFile, projectToBundle, summarizeProject } from "@/utils/project-file";
 import { eq } from "drizzle-orm";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -24,7 +27,8 @@ import { v4 } from "uuid";
 const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ isOpen, onOpenChange }) => {
     const { t } = useTranslation();
     const raise = useToast();
-    const { importProject, switchDatabase } = useDatabaseOperations();
+    const { database } = useDatabase();
+    const { importProject, switchDatabase, executeDbDiffOps, data_types: currentDataTypes } = useDatabaseOperations();
 
     const inputRef = useRef<HTMLInputElement>(null);
     const [isDragging, setIsDragging] = useState(false);
@@ -36,6 +40,10 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
     const [dbml, setDbml] = useState<{ text: string; fileName: string; dialect: DatabaseDialect } | undefined>(undefined);
     const [warnings, setWarnings] = useState<DbmlWarning[]>([]);
     const latestRequest = useRef(0);
+    // `new` opens the file as its own project; the others change the project that is open, after a review.
+    const [mode, setMode] = useState<"new" | ProjectImportMode>("new");
+    const [deletionsAccepted, setDeletionsAccepted] = useState(false);
+    const [isApplying, setIsApplying] = useState(false);
 
     const knownTypes = useCallback(
         async (dialect: string) => (await db.select().from(data_types).where(eq(data_types.dialect, dialect as any))) as unknown as DataType[],
@@ -73,6 +81,8 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
         setFile(undefined);
         setDbml(undefined);
         setWarnings([]);
+        setMode("new");
+        setDeletionsAccepted(false);
         setFileName(selected.name);
         try {
             if (selected.size > MAX_IMPORT_FILE_BYTES) throw new ProjectFileError("This file is larger than 5 MB.");
@@ -100,6 +110,45 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
 
     const summary = useMemo(() => (file ? summarizeProject(file) : undefined), [file]);
 
+    // A file can only be compared with a project of the same dialect (type ids are per dialect).
+    const canCompare = Boolean(database && file && file.project.dialect === database.dialect);
+    const onModeChange = useCallback((next: "new" | ProjectImportMode) => {
+        setMode(next);
+        setDeletionsAccepted(false);
+        // DBML carries no dialect of its own, so reading it against the open project is always possible.
+        if (next !== "new" && dbml && database && dbml.dialect !== database.dialect) {
+            void convertDbml(dbml.text, dbml.fileName, database.dialect);
+        }
+    }, [dbml, database, convertDbml]);
+
+    const review = useMemo(() => {
+        if (mode === "new" || !file || !database) return undefined;
+        try {
+            const change = prepareProjectFileChange(file, database, currentDataTypes, mode);
+            return { change, summary: summarizeSchemaChange(change.operations, database, change.targetDatabase) };
+        } catch (caught) {
+            return { error: caught instanceof Error ? caught.message : String(caught) };
+        }
+    }, [mode, file, database, currentDataTypes]);
+
+    const onApply = useCallback(async () => {
+        if (!review || !("change" in review) || review.summary.isEmpty) return;
+        setIsApplying(true);
+        try {
+            await executeDbDiffOps(review.change.operations);
+            onOpenChange?.(false);
+            raise(t("modals.import_project.applied", { defaultValue: "Import applied" }), database?.name ?? "", "SUCCESS");
+        } catch (caught) {
+            raise(
+                t("modals.import_project.failed", { defaultValue: "Could not import the project" }),
+                caught instanceof Error ? caught.message : String(caught),
+                "ERROR",
+            );
+        } finally {
+            setIsApplying(false);
+        }
+    }, [review, executeDbDiffOps, onOpenChange, raise, t, database?.name]);
+
     const onImport = useCallback(async () => {
         if (!file || !name.trim()) return;
         try {
@@ -122,9 +171,11 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
             onOpenChange={onOpenChange}
             title={t("modals.import_project.title", { defaultValue: "Import project" })}
             description={t("modals.import_project.description", { defaultValue: "Open a .goforge.json backup or a .dbml file as a new project. Your current project is not changed." })}
-            actionName={t("modals.import_project.import", { defaultValue: "Import" })}
-            actionHandler={onImport}
-            isDisabled={!file || !name.trim()}
+            actionName={mode === "new" ? t("modals.import_project.import", { defaultValue: "Import" }) : t("modals.import_project.apply", { defaultValue: "Apply" })}
+            actionHandler={mode === "new" ? onImport : onApply}
+            isDisabled={mode === "new"
+                ? !file || !name.trim()
+                : !review || !("change" in review) || review.summary.isEmpty || isApplying || (review.change.destructiveOperations.length > 0 && !deletionsAccepted)}
             className="md:min-w-[520px] w-full"
         >
             <div className="flex flex-col gap-4">
@@ -172,7 +223,7 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
                     </Alert>
                 )}
 
-                {dbml && (
+                {dbml && mode === "new" && (
                     <div className="space-y-2">
                         <Label>{t("modals.import_project.dialect", { defaultValue: "Read this DBML as" })}</Label>
                         <RadioGroup
@@ -209,7 +260,51 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
                     </Alert>
                 )}
 
-                {file && summary && (
+                {file && database && (
+                    <div className="space-y-2">
+                        <Label>{t("modals.import_project.destination", { defaultValue: "Import as" })}</Label>
+                        <RadioGroup
+                            value={mode}
+                            onValueChange={(value) => onModeChange(value as "new" | ProjectImportMode)}
+                            className="flex flex-wrap gap-2"
+                            data-testid="import-mode"
+                        >
+                            {([
+                                ["new", t("modals.import_project.mode_new", { defaultValue: "New project" }), true],
+                                ["merge", t("modals.import_project.mode_merge", { defaultValue: "Merge into this project" }), canCompare || Boolean(dbml)],
+                                ["replace", t("modals.import_project.mode_replace", { defaultValue: "Replace this project's schema" }), canCompare || Boolean(dbml)],
+                            ] as const).map(([value, label, enabled]) => (
+                                <Label
+                                    key={value}
+                                    htmlFor={`import-mode-${value}`}
+                                    className={cn(
+                                        "h-8 rounded-md border px-3 flex items-center",
+                                        enabled ? "cursor-pointer hover:bg-secondary" : "cursor-not-allowed opacity-50",
+                                        mode === value && "border-primary bg-primary/20",
+                                    )}
+                                    title={enabled ? undefined : t("modals.import_project.mode_dialect", { defaultValue: "This file is a different SQL dialect from the open project." })}
+                                >
+                                    <RadioGroupItem id={`import-mode-${value}`} value={value} disabled={!enabled} className="sr-only" />
+                                    {label}
+                                </Label>
+                            ))}
+                        </RadioGroup>
+                    </div>
+                )}
+
+                {mode !== "new" && review && "error" in review && (
+                    <Alert variant="destructive"><AlertCircleIcon /><AlertTitle>{review.error}</AlertTitle></Alert>
+                )}
+                {mode !== "new" && review && "change" in review && (
+                    <ImportReviewPanel
+                        summary={review.summary}
+                        destructiveCount={review.change.destructiveOperations.length}
+                        accepted={deletionsAccepted}
+                        onAcceptedChange={setDeletionsAccepted}
+                    />
+                )}
+
+                {file && summary && mode === "new" && (
                     <div className="space-y-3">
                         <div className="space-y-2">
                             <Label htmlFor="import-project-name">{t("modals.import_project.name", { defaultValue: "Project name" })}</Label>
@@ -224,7 +319,7 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
                 )}
 
                 {file && (
-                    <Button type="button" variant="ghost" size="sm" className="self-start" onClick={() => { latestRequest.current++; setFile(undefined); setFileName(undefined); setDbml(undefined); setWarnings([]); setError(undefined); }}>
+                    <Button type="button" variant="ghost" size="sm" className="self-start" onClick={() => { latestRequest.current++; setFile(undefined); setFileName(undefined); setDbml(undefined); setWarnings([]); setError(undefined); setMode("new"); }}>
                         {t("modals.import_project.choose_another", { defaultValue: "Choose another file" })}
                     </Button>
                 )}
