@@ -5,7 +5,7 @@ import { DataType } from "@/lib/schemas/data-type-schema";
 import { DatabaseType } from "@/lib/schemas/database-schema";
 import { DBDiffOperation, mapDiffToDBDiffOperation, normalizeDatabase } from "@/utils/database";
 import { getImporter } from "./import-utils";
-import { reconcileWithDatabase } from "./reconcile-with-database";
+import { ParsedDatabaseResult, reconcileWithDatabase } from "./reconcile-with-database";
 
 export interface PreparedSqlSchemaChange {
     targetDatabase: DatabaseType;
@@ -40,6 +40,15 @@ export async function prepareSqlSchemaChange(draftSql: string, currentDatabase: 
         throw new Error("Could not find any supported schema objects in this SQL.");
     }
 
+    return prepareParsedSchemaChange(parsed, currentDatabase, dataTypes, Array.isArray((parsed as any).errors) ? (parsed as any).errors.map(String) : []);
+}
+
+/**
+ * Reconciles an already-parsed schema (from SQL, DBML, a project file...) with the
+ * current database and diffs the two. New tables with no position of their own are
+ * placed to the right of the existing diagram.
+ */
+export function prepareParsedSchemaChange(parsed: ParsedDatabaseResult, currentDatabase: DatabaseType, dataTypes: DataType[], warnings: string[] = []): PreparedSqlSchemaChange {
     const reconciled = reconcileWithDatabase(parsed, currentDatabase, dataTypes);
     const existingTableIds = new Set(currentDatabase.tables.map((table) => table.id));
     const maxX = currentDatabase.tables.reduce((max, table) => Math.max(max, (table.posX ?? 0) + (table.width ?? 260)), 0);
@@ -76,6 +85,12 @@ export async function prepareSqlSchemaChange(draftSql: string, currentDatabase: 
         differences,
         operations,
         destructiveOperations: operations.filter(isDestructiveSqlOperation),
-        warnings: Array.isArray((parsed as any).errors) ? (parsed as any).errors.map(String) : [],
+        warnings,
     };
+}
+
+/** The same change without anything that deletes: objects missing from the source are kept. */
+export function withoutDeletions(change: PreparedSqlSchemaChange): PreparedSqlSchemaChange {
+    const operations = change.operations.filter((operation) => !isDestructiveSqlOperation(operation));
+    return { ...change, operations, destructiveOperations: [] };
 }
