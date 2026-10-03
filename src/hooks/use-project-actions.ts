@@ -1,5 +1,6 @@
 import useToast from "@/hooks/use-toast";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
+import { toDbml } from "@/utils/dbml/to-dbml";
 import { downloadTextFile, toSafeFileName } from "@/utils/file";
 import { parseProjectFile, projectToBundle, serializeProject } from "@/utils/project-file";
 import { useCallback } from "react";
@@ -18,6 +19,20 @@ const useProjectActions = () => {
         const file = serializeProject(database);
         downloadTextFile(JSON.stringify(file, null, 2), `${toSafeFileName(database.name)}.goforge.json`, "application/json");
     }, [database]);
+
+    const exportDbml = useCallback(() => {
+        if (!database) return;
+        const { dbml, warnings } = toDbml(database);
+        downloadTextFile(dbml, `${toSafeFileName(database.name)}.dbml`, "text/plain");
+        if (warnings.length > 0) {
+            const shown = warnings.slice(0, 3).map((warning) => warning.message).join(" ");
+            raise(
+                t("export.dbml_warnings", { count: warnings.length, defaultValue: "DBML exported, {{count}} things left out" }),
+                warnings.length > 3 ? `${shown} …and ${warnings.length - 3} more.` : shown,
+                "INFO",
+            );
+        }
+    }, [database, raise, t]);
 
     const duplicateProject = useCallback(async () => {
         if (!database) return;
@@ -41,7 +56,7 @@ const useProjectActions = () => {
         }
     }, [database, importProject, switchDatabase, raise, t]);
 
-    return { exportProject, duplicateProject };
+    return { exportProject, exportDbml, duplicateProject };
 };
 
 export default useProjectActions;
