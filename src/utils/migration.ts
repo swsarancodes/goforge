@@ -9,7 +9,7 @@ import { DataType } from "@/lib/schemas/data-type-schema";
 import { IndexType } from "@/lib/schemas/index-schema";
 import { FieldIndexType } from "@/lib/schemas/field_index-schema";
 import { DatabaseDialect } from "@/lib/database";
-import { ViewType } from "@/lib/schemas/view-schema";
+import { sortViewsTopologically, ViewType } from "@/lib/schemas/view-schema";
 import { SequenceType } from "@/lib/schemas/sequence-schema";
 import { CheckConstraintType, checkConstraintValues } from "@/lib/schemas/check-constraint-schema";
 
@@ -48,6 +48,113 @@ export const prepareForMigration = (db: DatabaseType) => {
     return database;
 }
 
+// null, undefined, "" and false all mean "not set" for the optional columns, so a diff that only
+// swaps one for another is not a schema change.
+const unset = (value: unknown) => value === undefined || value === null || value === "" || value === false;
+const differs = (left: unknown, right: unknown) => JSON.stringify(unset(left) ? null : left) !== JSON.stringify(unset(right) ? null : right);
+const hasRealChange = (existing: any, changes: Record<string, unknown>, ignored: ReadonlySet<string>) =>
+    Object.keys(changes).some((key) => !ignored.has(key) && differs(existing?.[key], changes[key]));
+
+const IGNORED_TABLE_KEYS = new Set(["posX", "posY", "width", "color", "createdAt", "sequence", "note", "databaseId"]);
+const IGNORED_FIELD_KEYS = new Set(["sequence", "note", "createdAt", "isForeign", "type", "tableId"]);
+const IGNORED_RELATIONSHIP_KEYS = new Set(["sourceAliasName", "targetAliasName", "createdAt", "databaseId", "sourceTable", "targetTable", "sourceField", "targetField", "relationshipFields"]);
+const IGNORED_INDEX_KEYS = new Set(["createdAt", "tableId", "fieldIndices", "fields"]);
+const IGNORED_VIEW_KEYS = new Set(["note", "dependencies", "createdAt", "databaseId"]);
+const IGNORED_SEQUENCE_KEYS = new Set(["note", "createdAt", "databaseId"]);
+const IGNORED_CHECK_KEYS = new Set(["createdAt", "tableId"]);
+
+/**
+ * True when an operation changes the schema itself, as opposed to layout, notes or
+ * bookkeeping. A renderer that cannot produce SQL for such an operation would silently leave
+ * a hole in the script, which is exactly what a migration must never do.
+ */
+export const isSchemaOperation = (operation: DBDiffOperation): boolean => {
+    switch (operation.type) {
+        case "RENAME_DATABASE":
+        case "UPDATE_NUM_TABLES":
+            return false;
+        case "UPDATE_TABLE":
+            return hasRealChange(operation.table, operation.changes as any, IGNORED_TABLE_KEYS);
+        case "UPDATE_FIELD":
+            return hasRealChange(operation.field, operation.changes as any, IGNORED_FIELD_KEYS);
+        case "UPDATE_INDEX":
+            return false; // rewritten to drop + create by optimizeOps
+        case "UPDATE_FIELD_INDICES":
+            return false; // rewritten to drop + create by optimizeOps
+        case "UPDATE_RELATIONSHIP":
+        case "UPDATE_RELATIONSHIP_FIELDS":
+            return false; // rewritten to drop + create by optimizeOps
+        case "UPDATE_VIEW":
+            return hasRealChange(operation.view, operation.changes as any, IGNORED_VIEW_KEYS);
+        case "UPDATE_SEQUENCE":
+            return hasRealChange(operation.sequence, operation.changes as any, IGNORED_SEQUENCE_KEYS);
+        case "UPDATE_CHECK":
+            return hasRealChange(operation.check, operation.changes as any, IGNORED_CHECK_KEYS);
+        case "CREATE_RELATIONSHIP":
+            return operation.relationship.cardinality !== "many_to_many";
+        case "DELETE_RELATIONSHIP":
+            return operation.relationship?.cardinality !== "many_to_many";
+        default:
+            return true;
+    }
+};
+
+/**
+ * Relationship and index edits are not in-place changes in SQL: the constraint or index is
+ * dropped and created again. Rewrite them that way up front so every renderer sees only
+ * creates and drops, and nothing about a constraint change is silently lost.
+ */
+const rewriteConstraintUpdates = (operations: DBDiffOperation[], currentDatabase: DatabaseType, previousDatabase: DatabaseType): DBDiffOperation[] => {
+    const kept: DBDiffOperation[] = [];
+    const relationshipsToRecreate = new Set<string>();
+    const indexesToRecreate = new Map<string, string>(); // index id -> table id
+
+    const previousIndex = (tableId: string, indexId: string) =>
+        previousDatabase.tables.find((table: TableType) => table.id == tableId)?.indices?.find((index: IndexType) => index.id == indexId);
+    const currentIndex = (tableId: string, indexId: string) =>
+        currentDatabase.tables.find((table: TableType) => table.id == tableId)?.indices?.find((index: IndexType) => index.id == indexId);
+
+    for (const operation of operations) {
+        if (operation.type == "UPDATE_RELATIONSHIP") {
+            const previous = previousDatabase.relationships.find((relationship: RelationshipType) => relationship.id == operation.relationshipId);
+            if (previous && hasRealChange(previous, operation.changes as any, IGNORED_RELATIONSHIP_KEYS)) relationshipsToRecreate.add(operation.relationshipId);
+            continue;
+        }
+        if (operation.type == "UPDATE_RELATIONSHIP_FIELDS") {
+            if (operation.create.length > 0 || operation.delete.length > 0 || operation.update.length > 0) relationshipsToRecreate.add(operation.relationshipId);
+            continue;
+        }
+        if (operation.type == "UPDATE_INDEX") {
+            const previous = previousIndex(operation.tableId, operation.indexId);
+            if (previous && currentIndex(operation.tableId, operation.indexId) && hasRealChange(previous, operation.changes as any, IGNORED_INDEX_KEYS)) {
+                indexesToRecreate.set(operation.indexId, operation.tableId);
+            }
+            continue;
+        }
+        if (operation.type == "UPDATE_FIELD_INDICES") {
+            if ((operation.create.length > 0 || operation.delete.length > 0) && previousIndex(operation.tableId, operation.indexId) && currentIndex(operation.tableId, operation.indexId)) {
+                indexesToRecreate.set(operation.indexId, operation.tableId);
+            }
+            continue;
+        }
+        kept.push(operation);
+    }
+
+    for (const relationshipId of relationshipsToRecreate) {
+        const current = currentDatabase.relationships.find((relationship: RelationshipType) => relationship.id == relationshipId);
+        if (!current || !previousDatabase.relationships.some((relationship: RelationshipType) => relationship.id == relationshipId)) continue;
+        kept.push({ type: "DELETE_RELATIONSHIP", relationshipId });
+        kept.push({ type: "CREATE_RELATIONSHIP", relationship: _.cloneDeep(current) });
+    }
+    for (const [indexId, tableId] of indexesToRecreate) {
+        const current = currentIndex(tableId, indexId);
+        if (!current) continue;
+        kept.push({ type: "DELETE_INDEX", tableId, indexId });
+        kept.push({ type: "CREATE_INDEX", tableId, index: _.cloneDeep(current) });
+    }
+    return kept;
+};
+
 // enrich a database operations is : 
 // - adding the type to the fields . 
 // - adding  sourceField , targetField , sourceTable , targetTable to the relationships 
@@ -55,6 +162,8 @@ export const optimizeOps = (operations: DBDiffOperation[], currentDatabase: Data
     let ops: DBDiffOperation[] = [];
 
 
+
+    operations = rewriteConstraintUpdates(operations, currentDatabase, previousDatabase);
 
     const schemaOperations = operations.filter((operation: DBDiffOperation) => (operation.type != "UPDATE_FIELD_INDICES") && !(
         operation.type == "UPDATE_FIELD" && operation.changes.isPrimary !== undefined && Object.keys(operation.changes).length == 1
@@ -214,6 +323,22 @@ export const optimizeOps = (operations: DBDiffOperation[], currentDatabase: Data
             operation.sequence = previousDatabase.sequences?.find((sequence: SequenceType) => sequence.id === operation.sequenceId);
         }
 
+        if (operation.type == "DELETE_RELATIONSHIP") {
+            const previous = previousDatabase.relationships.find((relationship: RelationshipType) => relationship.id == operation.relationshipId);
+            if (previous) {
+                const sourceTable = previousDatabase.tables.find((table: TableType) => table.id == previous.sourceTableId);
+                const targetTable = previousDatabase.tables.find((table: TableType) => table.id == previous.targetTableId);
+                operation.relationship = {
+                    ...previous,
+                    sourceTable: sourceTable as TableType,
+                    targetTable: targetTable as TableType,
+                    sourceField: sourceTable?.fields.find((field: FieldType) => field.id == previous.sourceFieldId) as FieldType,
+                    targetField: targetTable?.fields.find((field: FieldType) => field.id == previous.targetFieldId) as FieldType,
+                    relationshipFields: Object.values(previous.relationshipFields ?? {}),
+                } as RelationshipType;
+            }
+        }
+
         if (operation.type == "DELETE_INDEX") {
             const table = previousDatabase.tables.find((t: TableType) => t.id == operation.tableId);
             operation.table = table ?? findTable(operation.tableId);
@@ -231,6 +356,7 @@ export const optimizeOps = (operations: DBDiffOperation[], currentDatabase: Data
  
 const orderOperations = (ops: DBDiffOperation[]): DBDiffOperation[] => {
     const OPERATION_ORDER = [
+        'CREATE_SCHEMA',
         // Drops/deletes first, so a dropped index/column never collides with a same-named create.
         'DELETE_INDEX',
         'DELETE_CHECK',
@@ -260,10 +386,30 @@ const orderOperations = (ops: DBDiffOperation[]): DBDiffOperation[] => {
         // table's original name to resolve; renaming any earlier breaks all of them.
         'UPDATE_TABLE',
     ];
-    return [...ops].sort(
-        (a, b) =>
-            OPERATION_ORDER.indexOf(a.type) - OPERATION_ORDER.indexOf(b.type)
-    );
+
+    // Topological ordering for CREATE_VIEW and reverse topological for DELETE_VIEW
+    const createViewOps = ops.filter(op => op.type === "CREATE_VIEW") as { type: "CREATE_VIEW"; view: ViewType }[];
+    const sortedCreateViews = sortViewsTopologically(createViewOps.map(op => op.view));
+    const createViewOrder = new Map(sortedCreateViews.map((v, i) => [v.id, i]));
+
+    const deleteViewOps = ops.filter(op => op.type === "DELETE_VIEW" && op.view) as { type: "DELETE_VIEW"; viewId: string; view: ViewType }[];
+    const sortedDeleteViews = sortViewsTopologically(deleteViewOps.map(op => op.view));
+    const reverseDeleteViews = [...sortedDeleteViews].reverse();
+    const deleteViewOrder = new Map(reverseDeleteViews.map((v, i) => [v.id, i]));
+
+    return [...ops].sort((a, b) => {
+        const orderDiff = OPERATION_ORDER.indexOf(a.type) - OPERATION_ORDER.indexOf(b.type);
+        if (orderDiff !== 0) return orderDiff;
+        if (a.type === "CREATE_VIEW" && b.type === "CREATE_VIEW") {
+            return (createViewOrder.get(a.view.id) ?? 0) - (createViewOrder.get(b.view.id) ?? 0);
+        }
+        if (a.type === "DELETE_VIEW" && b.type === "DELETE_VIEW") {
+            const aId = a.view?.id ?? a.viewId;
+            const bId = b.view?.id ?? b.viewId;
+            return (deleteViewOrder.get(aId) ?? 0) - (deleteViewOrder.get(bId) ?? 0);
+        }
+        return 0;
+    });
 }
 
 

@@ -21,7 +21,7 @@ export type DBDiffOperation =
     | { type: 'DELETE_FIELD'; tableId: string; fieldId: string; table?: TableType; field?: FieldType }
     | { type: 'UPDATE_FIELD'; tableId: string; fieldId: string; changes: Partial<FieldType>; table?: TableType; field?: FieldType }
     | { type: 'CREATE_RELATIONSHIP'; relationship: RelationshipType }
-    | { type: 'DELETE_RELATIONSHIP'; relationshipId: string }
+    | { type: 'DELETE_RELATIONSHIP'; relationshipId: string; relationship?: RelationshipType }
     | { type: 'UPDATE_RELATIONSHIP'; relationshipId: string; changes: Partial<RelationshipType> }
     | { type: 'UPDATE_RELATIONSHIP_FIELDS'; relationshipId: string; create: RelationshipFieldType[]; delete: string[]; update: { id: string; changes: Partial<RelationshipFieldType> }[] }
     | { type: 'CREATE_VIEW'; view: ViewType }
@@ -38,6 +38,7 @@ export type DBDiffOperation =
     | { type: 'DELETE_CHECK'; tableId: string; checkId: string; table?: TableType; check?: CheckConstraintType }
     | { type: 'UPDATE_CHECK'; tableId: string; checkId: string; changes: Partial<CheckConstraintType>; table?: TableType; check?: CheckConstraintType }
     | { type: 'UPDATE_FIELD_INDICES'; tableId: string; indexId: string; create: FieldIndexType[]; delete: string[] }
+    | { type: 'CREATE_SCHEMA'; schemaName: string }
     | { type: "UPDATE_NUM_TABLES", value: number };
 
 /**
