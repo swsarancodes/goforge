@@ -31,6 +31,8 @@ export const fields = sqliteTable("fields", {
     charset: text('charset'),
     collate: text('collate'),
     values: text('values'),
+    generatedExpression: text('generatedExpression'),
+    generationType: text('generationType', { enum: ['stored', 'virtual'] }),
 });
 
 export const fieldsRelations = relations(fields, ({ one, many }) => ({
@@ -54,7 +56,9 @@ export interface FieldType extends InferSelectModel<typeof fields> {
     sequence: number,
     type: DataType,
     sourceRelations?: RelationshipType[],
-    targetRelations?: RelationshipType[]
+    targetRelations?: RelationshipType[],
+    generatedExpression?: string | null,
+    generationType?: 'stored' | 'virtual' | null,
 };
 
 
