@@ -6,6 +6,7 @@ import { introspectRouter } from "./routes/introspect.js";
 import { previewRouter } from "./routes/preview.js";
 import { executeRouter } from "./routes/execute.js";
 import { aiRouter } from "./routes/ai.js";
+import { modernizeRouter } from "./routes/modernize.js";
 
 export function createApp() {
     const app = express();
@@ -21,6 +22,7 @@ export function createApp() {
     app.use("/api/connections", previewRouter);
     app.use("/api/connections", executeRouter);
     app.use("/api/ai", aiRouter);
+    app.use("/api/modernize", modernizeRouter);
 
     return app;
 }
