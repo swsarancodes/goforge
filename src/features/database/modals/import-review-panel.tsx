@@ -12,6 +12,8 @@ interface ImportReviewPanelProps {
     destructiveCount: number;
     accepted: boolean;
     onAcceptedChange: (accepted: boolean) => void;
+    /** Overrides the sentence under the deletions warning, for callers other than an import. */
+    deletionHint?: string;
 }
 
 const countsText = (label: string, counts: ObjectChangeCounts) => {
@@ -23,7 +25,7 @@ const countsText = (label: string, counts: ObjectChangeCounts) => {
 };
 
 /** What an import into the open project would do, shown before anything is changed. */
-const ImportReviewPanel: React.FC<ImportReviewPanelProps> = ({ summary, destructiveCount, accepted, onAcceptedChange }) => {
+const ImportReviewPanel: React.FC<ImportReviewPanelProps> = ({ summary, destructiveCount, accepted, onAcceptedChange, deletionHint }) => {
     const { t } = useTranslation();
 
     if (summary.isEmpty) {
@@ -64,7 +66,7 @@ const ImportReviewPanel: React.FC<ImportReviewPanelProps> = ({ summary, destruct
                         {t("modals.import_project.review_destructive", { count: destructiveCount, defaultValue: "{{count}} deletions" })}
                     </AlertTitle>
                     <AlertDescription>
-                        <p>{t("modals.import_project.review_destructive_hint", { defaultValue: "Anything the file does not mention is removed from the open project. You can undo this afterwards." })}</p>
+                        <p>{deletionHint ?? t("modals.import_project.review_destructive_hint", { defaultValue: "Anything the file does not mention is removed from the open project. You can undo this afterwards." })}</p>
                         <div className="mt-2 flex items-center gap-2">
                             <Switch id="import-accept-deletions" checked={accepted} onCheckedChange={onAcceptedChange} />
                             <Label htmlFor="import-accept-deletions">{t("modals.import_project.review_accept", { defaultValue: "Delete them" })}</Label>

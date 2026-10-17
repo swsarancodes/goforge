@@ -15,6 +15,7 @@ import { layoutProjectFile } from "@/utils/dbml/layout-project";
 import { MAX_IMPORT_FILE_BYTES, readTextFile } from "@/utils/file";
 import { prepareProjectFileChange, ProjectImportMode } from "@/utils/import/prepare-project-change";
 import { summarizeSchemaChange } from "@/utils/import/summarize-schema-change";
+import { useVersionHistoryActions } from "@/hooks/use-version-history";
 import ImportReviewPanel from "./import-review-panel";
 import { ProjectFile, ProjectFileError, parseProjectFile, projectToBundle, summarizeProject } from "@/utils/project-file";
 import { eq } from "drizzle-orm";
@@ -28,7 +29,8 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
     const { t } = useTranslation();
     const raise = useToast();
     const { database } = useDatabase();
-    const { importProject, switchDatabase, executeDbDiffOps, data_types: currentDataTypes } = useDatabaseOperations();
+    const { importProject, switchDatabase, data_types: currentDataTypes } = useDatabaseOperations();
+    const { applyRecorded } = useVersionHistoryActions();
 
     const inputRef = useRef<HTMLInputElement>(null);
     const [isDragging, setIsDragging] = useState(false);
@@ -135,9 +137,13 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
         if (!review || !("change" in review) || review.summary.isEmpty) return;
         setIsApplying(true);
         try {
-            await executeDbDiffOps(review.change.operations);
+            const recorded = await applyRecorded(review.change.operations, { name: `Import (${mode})`, origin: "import" });
             onOpenChange?.(false);
-            raise(t("modals.import_project.applied", { defaultValue: "Import applied" }), database?.name ?? "", "SUCCESS");
+            raise(
+                t("modals.import_project.applied", { defaultValue: "Import applied" }),
+                `${database?.name ?? ""}${recorded.migrationId ? " · recorded in version history" : recorded.skippedReason ? ` · saved to version history without migration SQL: ${recorded.skippedReason.split(". ")[0]}.` : ""}`,
+                "SUCCESS",
+            );
         } catch (caught) {
             raise(
                 t("modals.import_project.failed", { defaultValue: "Could not import the project" }),
@@ -147,7 +153,7 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
         } finally {
             setIsApplying(false);
         }
-    }, [review, executeDbDiffOps, onOpenChange, raise, t, database?.name]);
+    }, [review, applyRecorded, mode, onOpenChange, raise, t, database?.name]);
 
     const onImport = useCallback(async () => {
         if (!file || !name.trim()) return;
