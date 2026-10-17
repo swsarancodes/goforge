@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import { AlertCircleIcon, AlertTriangle, Check, Code2, Download, Loader2, Pencil, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { downloadTextFile, toSafeFileName } from "@/utils/file";
+import { useVersionHistoryActions } from "@/hooks/use-version-history";
 import { PreparedSqlSchemaChange, prepareSqlSchemaChange } from "@/utils/import/prepare-sql-schema-change";
 import { DBDiffOperation } from "@/utils/database";
 
@@ -173,7 +174,8 @@ interface SqlPreviewProps {
 
 const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, editable = false, startEditing = false, onApplied }) => {
     const { database: currentDatabase } = useDatabase();
-    const { data_types, executeDbDiffOps } = useDatabaseOperations();
+    const { data_types } = useDatabaseOperations();
+    const { applyRecorded } = useVersionHistoryActions();
     const [sqlCode, setSqlCode] = useState<string>("");
     const raise = useToast();
     const [circularDependency, setCircularDependency] = useState<CircularDependencyError | undefined>(undefined);
@@ -282,8 +284,12 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
 
         setIsApplying(true);
         try {
-            await executeDbDiffOps(preparedChange.operations);
-            raise("SQL changes applied", `${preparedChange.operations.length} schema operation(s) completed in one transaction.`, "SUCCESS");
+            const recorded = await applyRecorded(preparedChange.operations, { name: "SQL editor changes", origin: "sql-editor" });
+            raise(
+                "SQL changes applied",
+                `${preparedChange.operations.length} schema operation(s) completed in one transaction.${recorded.migrationId ? " Recorded in version history." : recorded.skippedReason ? ` Saved to version history without migration SQL: ${recorded.skippedReason.split(". ")[0]}.` : ""}`,
+                "SUCCESS",
+            );
 
             setIsEditing(false);
             setPreparedChange(undefined);
@@ -294,7 +300,7 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
         } finally {
             setIsApplying(false);
         }
-    }, [currentDatabase, data_types, destructiveAccepted, draftSql, executeDbDiffOps, onApplied, preparedChange, raise]);
+    }, [currentDatabase, data_types, destructiveAccepted, draftSql, applyRecorded, onApplied, preparedChange, raise]);
 
     if (circularDependency) return <CircularDependencyAlert error={circularDependency} />;
     else
