@@ -7,7 +7,7 @@ import { IndexType } from "@/lib/schemas/index-schema";
 import { Cardinality, RelationshipType } from "@/lib/schemas/relationship-schema";
 import { TableType } from "@/lib/schemas/table-schema";
 import { DBDiffOperation,  mapDiffToDBDiffOperation, normalizeDatabase } from "@/utils/database";
-import { optimizeOps, prepareForMigration } from "@/utils/migration";
+import { isSchemaOperation, optimizeOps, prepareForMigration } from "@/utils/migration";
 import {   compare } from "fast-json-patch";
 import { AST } from "node-sql-parser";
 import { Statement } from "pgsql-ast-parser";
@@ -54,10 +54,26 @@ export default abstract class BaseDatabaseRenderer {
      * ALTER/CREATE/DROP statements needed to bring it in line with the canvas.
      */
     public async renderDiffDDL(currentDatabase: DatabaseType, previousDatabase: DatabaseType): Promise<string> {
+        const operations = this.prepareDiff(currentDatabase, previousDatabase);
+
+        // extract the ast based on the dialect
+        const ast: ASTStatment[] = this.operationsToAst(operations, currentDatabase);
+        // render ast from sql
+        const sql = await this.astToSQL(ast);
+
+        return sql;
+    }
+
+    /**
+     * The ordered, enriched operations that turn `previousDatabase` into `currentDatabase`:
+     * everything `renderDiffDDL` renders, before it is turned into SQL.
+     */
+    public prepareDiff(currentDatabase: DatabaseType, previousDatabase: DatabaseType): DBDiffOperation[] {
 
         if (this.dialect === DatabaseDialect.SQLITE && (
             currentDatabase.tables.some((table) => table.namespace) ||
-            currentDatabase.views?.some((view) => view.namespace)
+            currentDatabase.views?.some((view) => view.namespace) ||
+            currentDatabase.sequences?.some((seq) => seq.namespace)
         )) {
             throw new Error('SQLite does not support SQL namespaces in GoForge schemas');
         }
@@ -67,6 +83,11 @@ export default abstract class BaseDatabaseRenderer {
         if ((currentDatabase.sequences?.length || previousDatabase.sequences?.length) &&
             ![DatabaseDialect.POSTGRES, DatabaseDialect.MARIADB, DatabaseDialect.MSSQL, DatabaseDialect.ORACLE].includes(this.dialect)) {
             throw new Error(`${this.dialect} does not support sequences in GoForge schemas`);
+        }
+        if (this.dialect === DatabaseDialect.POSTGRES &&
+            currentDatabase.tables.some((t) => t.fields.some((f) => f.generatedExpression && f.generationType === 'virtual'))
+        ) {
+            throw new Error('PostgreSQL does not support VIRTUAL generated columns (only STORED is supported)');
         }
 
         // we prepare both databases by enriching them and removing some UI elements that can interfear with json fast path
@@ -81,15 +102,64 @@ export default abstract class BaseDatabaseRenderer {
         const diff_json = compare(normalizedPreviousDatabase, normalizedCurrentDatabase);
         // map the diff to DB Diff operations to facilate the rendering
         // optimize the operations by enriching each operation
-        let operations: DBDiffOperation[] = mapDiffToDBDiffOperation(diff_json)
-        operations = optimizeOps(operations, preparedCurrentDatabase, preparedPreviousDatabse, this.data_types);
+        let operations: DBDiffOperation[] = mapDiffToDBDiffOperation(diff_json);
 
-        // extract the ast based on the dialect
-        const ast: ASTStatment[] = this.operationsToAst(operations, currentDatabase);
-        // render ast from sql
-        const sql = await this.astToSQL(ast);
+        // Discover new namespaces to emit CREATE SCHEMA
+        if (this.dialect !== DatabaseDialect.SQLITE) {
+            const currentNamespaces = new Set<string>();
+            for (const table of currentDatabase.tables) {
+                if (table.namespace?.trim()) currentNamespaces.add(table.namespace.trim());
+            }
+            for (const view of currentDatabase.views ?? []) {
+                if (view.namespace?.trim()) currentNamespaces.add(view.namespace.trim());
+            }
+            for (const seq of currentDatabase.sequences ?? []) {
+                if (seq.namespace?.trim()) currentNamespaces.add(seq.namespace.trim());
+            }
 
-        return sql;
+            const previousNamespaces = new Set<string>();
+            for (const table of previousDatabase.tables) {
+                if (table.namespace?.trim()) previousNamespaces.add(table.namespace.trim());
+            }
+            for (const view of previousDatabase.views ?? []) {
+                if (view.namespace?.trim()) previousNamespaces.add(view.namespace.trim());
+            }
+            for (const seq of previousDatabase.sequences ?? []) {
+                if (seq.namespace?.trim()) previousNamespaces.add(seq.namespace.trim());
+            }
+
+            const newNamespaces = [...currentNamespaces].filter(ns => !previousNamespaces.has(ns)).sort();
+            for (const ns of newNamespaces) {
+                operations.push({ type: 'CREATE_SCHEMA', schemaName: ns });
+            }
+        }
+
+        return optimizeOps(operations, preparedCurrentDatabase, preparedPreviousDatabse, this.data_types);
+    }
+
+    /**
+     * Operation types this dialect can turn into SQL when altering an existing schema.
+     * Every dialect can create tables and relationships; most cannot yet alter columns,
+     * indexes or tables in place (only PostgreSQL does).
+     */
+    protected supportedOperationTypes(): ReadonlySet<DBDiffOperation["type"]> {
+        return new Set<DBDiffOperation["type"]>([
+            "CREATE_SCHEMA",
+            "CREATE_TABLE", "CREATE_RELATIONSHIP",
+            "CREATE_VIEW", "DELETE_VIEW", "UPDATE_VIEW",
+            "CREATE_SEQUENCE", "DELETE_SEQUENCE", "UPDATE_SEQUENCE",
+            "CREATE_CHECK", "DELETE_CHECK", "UPDATE_CHECK",
+            "UPDATE_NUM_TABLES", "RENAME_DATABASE",
+        ]);
+    }
+
+    /**
+     * Schema changes in `operations` this dialect would silently leave out of its SQL.
+     * Empty means the rendered script is complete.
+     */
+    public unsupportedOperations(operations: DBDiffOperation[]): DBDiffOperation[] {
+        const supported = this.supportedOperationTypes();
+        return operations.filter((operation) => !supported.has(operation.type) && isSchemaOperation(operation));
     }
 
     protected operationsToAst(operations: DBDiffOperation[], database?: DatabaseType): ASTStatment[] {
@@ -182,6 +252,9 @@ export default abstract class BaseDatabaseRenderer {
             case "DELETE_SEQUENCE":
                 return operation.sequence ? this.dropSequenceStatement(operation.sequence) : null;
 
+            case "CREATE_SCHEMA":
+                return this.createSchemaStatement(operation.schemaName);
+
             case "UPDATE_SEQUENCE": {
                 if (!operation.sequence) return null;
                 const updatedSequence = { ...operation.sequence, ...operation.changes } as SequenceType;
@@ -190,6 +263,21 @@ export default abstract class BaseDatabaseRenderer {
  
         }
         return null;
+    }
+
+    protected createSchemaStatement(schemaName: string): ASTStatment {
+        switch (this.dialect) {
+            case DatabaseDialect.POSTGRES:
+            case DatabaseDialect.MYSQL:
+            case DatabaseDialect.MARIADB:
+                return this.terminate(`CREATE SCHEMA IF NOT EXISTS ${this.quoteName(schemaName)}`);
+            case DatabaseDialect.MSSQL:
+                return this.terminate(`IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = '${schemaName}') EXEC('CREATE SCHEMA ${this.quoteName(schemaName)}')`);
+            case DatabaseDialect.ORACLE:
+                return this.terminate(`CREATE SCHEMA AUTHORIZATION ${this.quoteName(schemaName)}`);
+            default:
+                return this.terminate(`CREATE SCHEMA IF NOT EXISTS ${this.quoteName(schemaName)}`);
+        }
     }
 
     /** Identifier quoting for hand-built statements; dialects that quote override this. */
@@ -226,6 +314,17 @@ export default abstract class BaseDatabaseRenderer {
 
     protected dropCheckStatement(table: TableType, check: CheckConstraintType): ASTStatment {
         return this.terminate(`ALTER TABLE ${this.qualifiedName(table)} DROP CONSTRAINT ${this.quoteName(check.name)}`);
+    }
+
+    /** Table that holds the foreign key: the target, or the source for the reversed `many_to_one` storage. */
+    protected foreignKeyTable(relationship: RelationshipType): TableType {
+        return relationship.cardinality == Cardinality.many_to_one ? relationship.sourceTable : relationship.targetTable;
+    }
+
+    protected dropRelationshipStatement(relationship: RelationshipType): ASTStatment | null {
+        const table = this.foreignKeyTable(relationship);
+        if (!table || !relationship.name) return null;
+        return this.terminate(`ALTER TABLE ${this.qualifiedName(table)} DROP CONSTRAINT ${this.quoteName(relationship.name)}`);
     }
 
     protected createViewStatement(view: ViewType): ASTStatment {

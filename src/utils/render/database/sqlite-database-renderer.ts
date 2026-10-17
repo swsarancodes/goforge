@@ -41,6 +41,16 @@ ${this.commit()}
         }
     }
 
+    // This renderer only writes CREATE TABLE statements (relationships inline), so it can
+    // describe a from-scratch schema but not alterations of an existing one.
+    protected supportedOperationTypes(): ReadonlySet<DBDiffOperation["type"]> {
+        return new Set<DBDiffOperation["type"]>([
+            "CREATE_TABLE", "CREATE_RELATIONSHIP",
+            "CREATE_CHECK", "DELETE_CHECK", "UPDATE_CHECK",
+            "UPDATE_NUM_TABLES", "RENAME_DATABASE",
+        ]);
+    }
+
     protected operationsToAst(operations: DBDiffOperation[], database?: DatabaseType): ASTStatment[] {
 
         const ast: ASTStatment[] = [];

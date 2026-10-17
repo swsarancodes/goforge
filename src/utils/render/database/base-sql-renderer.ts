@@ -77,8 +77,15 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
             }
         }
 
-        const default_val = !definition.modifiers.includes(Modifiers.NO_DEFAULT) ? this.processDefaultValue(field) : undefined;
+        const isGenerated = Boolean(field.generatedExpression && field.generatedExpression.trim());
+        const default_val = (!isGenerated && !definition.modifiers.includes(Modifiers.NO_DEFAULT)) ? this.processDefaultValue(field) : undefined;
         const unique: string | null = !definition.modifiers.includes(Modifiers.NO_UNIQUE) ? (field.unique ? "unique" : null) : null;
+        const expr = field.generatedExpression ? field.generatedExpression.trim() : "";
+        const wrappedExpr = (expr.startsWith('(') && expr.endsWith(')')) ? expr : `(${expr})`;
+        const storageType = (this.dialect === DatabaseDialect.POSTGRES)
+            ? "stored"
+            : (field.generationType === "stored" ? "stored" : "virtual");
+
         // return an AST statment for a field definition 
         return {
             column: {
@@ -91,7 +98,7 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
             },
             default_val,
             unique,
-            auto_increment: definition.auto_increment ? "auto_increment" : undefined,
+            auto_increment: (!isGenerated && definition.auto_increment) ? "auto_increment" : undefined,
             nullable: {
                 type: field.nullable ? "null" : "not null",
                 value: field.nullable ? "null" : "not null",
@@ -103,6 +110,17 @@ export abstract class BaseSQLRenderer extends BaseDatabaseRenderer {
                 expr: valuesExpr
             },
             primary_key: definition.primary_key ? "primary key" : null,
+            ...(isGenerated ? {
+                generated: {
+                    type: "generated",
+                    expr: {
+                        type: "default",
+                        value: wrappedExpr,
+                    },
+                    value: "generated always as",
+                    storage_type: storageType,
+                }
+            } : {}),
             resource: "column"
         } as any
     }
