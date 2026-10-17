@@ -116,6 +116,19 @@ body {
   min-width: 100% !important;
 }
 
+/* The app disables text selection globally (html, body { user-select: none })
+ * for canvas dragging. A rule directly on the editable element is required:
+ * WebKit does not let the editor inherit `text` from an ancestor for
+ * selection purposes, so without this, drag-select, Cmd/Ctrl+A and copy are
+ * all suppressed inside SQL editors. A directly-matching rule beats
+ * inheritance in every engine; the canvas keeps `none`. */
+.cm-editor .cm-content {
+  user-select: text;
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+}
+
 
 .cm-scroller::-webkit-scrollbar {
   height: 6px;

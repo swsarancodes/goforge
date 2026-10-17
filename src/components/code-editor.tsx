@@ -1,16 +1,25 @@
 import React, { useEffect, useState } from "react";
+import type { EditorView } from "@codemirror/view";
 import { useTheme } from "@/providers/theme-provider/theme-provider";
 import { cn } from "@/lib/utils";
 import { Spinner } from "./ui/shadcn-io/spinner";
 
 const createEditorRuntime = async () => {
-    const [codeMirror, sqlLanguage, view] = await Promise.all([import("@uiw/react-codemirror"), import("@codemirror/lang-sql"), import("@codemirror/view")]);
+    const [codeMirror, sqlLanguage, view, commands, state] = await Promise.all([
+        import("@uiw/react-codemirror"),
+        import("@codemirror/lang-sql"),
+        import("@codemirror/view"),
+        import("@codemirror/commands"),
+        import("@codemirror/state"),
+    ]);
 
     const darkOverride = view.EditorView.theme(
         {
             ".cm-content": { backgroundColor: "#1c2025" },
             ".cm-gutter": { backgroundColor: "#1c2025" },
             ".cm-gutterElement": { color: "#4b515a" },
+            // Blue selection highlight - the default grey is nearly invisible.
+            ".cm-selectionBackground": { backgroundColor: "#264f78 !important" },
             ".ͼp": { color: "#A994FF" },
             ".cm-line .ͼq": { color: "#ff6363" },
             ".ͼu": { color: "#B6E672" },
@@ -26,6 +35,8 @@ const createEditorRuntime = async () => {
         ".cm-gutter": { backgroundColor: "#f8fafc" },
         ".cm-gutters": { borderColor: "#e2e8f0" },
         ".cm-line": { color: "#0f172b" },
+        // Blue selection highlight - the default grey is nearly invisible.
+        ".cm-selectionBackground": { backgroundColor: "#b3d7ff !important" },
     });
 
     const editorKeyBoundary = view.EditorView.domEventHandlers({
@@ -37,9 +48,61 @@ const createEditorRuntime = async () => {
         },
     });
 
+    const selectedText = (editorView: EditorView) =>
+        editorView.state.selection.ranges
+            .filter((range) => !range.empty)
+            .map((range) => editorView.state.sliceDoc(range.from, range.to))
+            .join("\n");
+
+    /**
+     * On macOS CodeMirror maps Ctrl+A/E/K... to their Emacs meanings
+     * (Ctrl+A = start of line) and the browser's clipboard shortcuts are
+     * Cmd-only, so Ctrl+A/C/X/V/Z/Y do nothing useful there. Bind them here
+     * as mac-only keymap entries. Same-key bindings run in registration
+     * order, and basicSetup (with the Emacs defaults) is registered first,
+     * so this needs Prec.high to win. Cmd+key keeps working through
+     * CodeMirror's standard bindings.
+     */
+    const macCtrlKeymap = state.Prec.high(
+        view.keymap.of([
+        { mac: "Ctrl-a", run: commands.selectAll },
+        {
+            mac: "Ctrl-c",
+            run: (editorView) => {
+                const text = selectedText(editorView);
+                if (text) void navigator.clipboard?.writeText(text).catch(() => undefined);
+                return true;
+            },
+        },
+        {
+            mac: "Ctrl-x",
+            run: (editorView) => {
+                const text = selectedText(editorView);
+                if (!text || editorView.state.readOnly) return true;
+                void navigator.clipboard?.writeText(text).catch(() => undefined);
+                editorView.dispatch({ ...editorView.state.replaceSelection(""), userEvent: "delete.cut", scrollIntoView: true });
+                return true;
+            },
+        },
+        {
+            mac: "Ctrl-v",
+            run: (editorView) => {
+                if (editorView.state.readOnly) return true;
+                void navigator.clipboard?.readText().then((text) => {
+                    editorView.dispatch({ ...editorView.state.replaceSelection(text), userEvent: "input.paste", scrollIntoView: true });
+                }).catch(() => undefined);
+                return true;
+            },
+        },
+        { mac: "Ctrl-z", run: commands.undo },
+        { mac: "Shift-Ctrl-z", run: commands.redo },
+        { mac: "Ctrl-y", run: commands.redo },
+        ]),
+    );
+
     return {
         CodeMirror: codeMirror.default,
-        extensions: [sqlLanguage.sql(), editorKeyBoundary],
+        extensions: [sqlLanguage.sql(), editorKeyBoundary, macCtrlKeymap],
         darkTheme: [codeMirror.oneDark, darkOverride],
         lightTheme,
     };
@@ -91,7 +154,11 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
     return (
         <CodeMirror
             value={value ?? defaultValue ?? ""}
-            className={cn("flex flex-1 w-full min-h-9 rounded-sm  h-full   bg-card border-1 border-border  !min-w-0 overflow-hidden", className)}
+            // The app disables text selection globally (html, body {
+            // user-select: none }) for canvas dragging. The editor opts back
+            // in via `selectable` - without it, drag-select, Cmd/Ctrl+A and
+            // copy are all suppressed inside the SQL text.
+            className={cn("selectable flex flex-1 w-full min-h-9 rounded-sm  h-full   bg-card border-1 border-border  !min-w-0 overflow-hidden", className)}
             extensions={extensions}
             readOnly={readOnly}
             autoFocus={autoFocus}

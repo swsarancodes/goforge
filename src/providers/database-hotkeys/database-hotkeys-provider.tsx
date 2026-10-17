@@ -10,7 +10,13 @@ const DatabaseHotkeysContext = createContext<null>(null);
 
 const isTextEditingTarget = (event: KeyboardEvent) => {
     const target = event.target;
-    return target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable='true'], .cm-content"));
+    if (target instanceof HTMLElement && Boolean(target.closest("input, textarea, select, [contenteditable], .cm-content, .cm-editor"))) return true;
+    // The keydown target isn't always the focused element (shadow DOM
+    // retargeting, remounts), so also respect where focus actually is. This
+    // keeps canvas shortcuts like Cmd/Ctrl+A (fit view) from stealing keys
+    // meant for the SQL editor.
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    return active instanceof HTMLElement && Boolean(active.closest("input, textarea, select, [contenteditable], .cm-content, .cm-editor"));
 };
 
 interface Props {
