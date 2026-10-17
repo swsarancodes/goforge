@@ -23,6 +23,8 @@ import type { ProjectBundle } from "@/utils/project-file";
 import { CheckConstraintInsertType, check_constraints, checkConstraintValues, validateCheck } from "@/lib/schemas/check-constraint-schema";
 import { ViewInsertType, views as viewsModel } from "@/lib/schemas/view-schema";
 import { SequenceInsertType, sequences as sequencesModel } from "@/lib/schemas/sequence-schema";
+import { databaseGraph } from "@/lib/database-graph";
+import { schema_migrations, schema_snapshots } from "@/lib/schemas/version-history-schema";
 
 const TYPE_ORDER = ["integer", "text", "boolean", "numeric", "time", "enum"] as const;
 
@@ -128,44 +130,7 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
         toCompilableQuery(
             db.query.databases.findMany({
                 where: (databases, { eq }) => eq(databases.id, currentDatabaseId as string),
-                with: {
-                    tables: {
-                        orderBy: desc(tables.sequence),
-                        with: {
-                            fields: {
-                                orderBy: asc(fields.sequence),
-                                with: {
-                                    type: true
-                                }
-                            },
-
-                            indices: {
-                                orderBy: asc(indices.createdAt),
-                                with: {
-                                    fieldIndices: true
-                                }
-                            },
-
-                            checks: {
-                                orderBy: asc(check_constraints.createdAt)
-                            }
-                        }
-                    },
-
-                    relationships: {
-                        with: {
-                            sourceTable: true,
-                            targetTable: true,
-                            sourceField: true,
-                            targetField: true,
-                            relationshipFields: true,
-                        },
-                        orderBy: desc(relationships.createdAt)
-                    }
-                    ,
-                    views: true,
-                    sequences: true
-                }
+                with: databaseGraph
             })
         ), [], { runQueryOnce: false },
     );
@@ -226,6 +191,9 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
     const deleteDatabase = useCallback(async (id: string): Promise<void> => {
         await db.transaction(async (tx) => {
             await tx.delete(viewsModel).where(eq(viewsModel.databaseId, id));
+            // Version history belongs to the project; migrations first, they point at snapshots.
+            await tx.delete(schema_migrations).where(eq(schema_migrations.databaseId, id));
+            await tx.delete(schema_snapshots).where(eq(schema_snapshots.databaseId, id));
             await tx.delete(databaseModel).where(eq(databaseModel.id, id));
         });
     }, [db]);
