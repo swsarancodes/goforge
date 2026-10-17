@@ -11,8 +11,10 @@ import ImportDatabaseModal from "@/features/database/modals/import-database";
 import ExportSqlModal from "@/features/database/modals/export-sql-modal";
 import ImportProjectModal from "@/features/database/modals/import-project-modal";
 import ExportImageModal from "@/features/database/modals/export-image-modal";
+import VersionHistoryModal from "@/features/database/modals/version-history-modal";
 import ConnectLiveDatabaseModal from "@/features/database/modals/connect-live-database-modal";
 import PushLiveChangesModal from "@/features/database/modals/push-live-changes-modal";
+import { QueryModernizerModal } from "@/features/query-modernizer/components/query-modernizer-modal";
 import { useDisclosure } from "@/hooks/use-disclosure";
 
 
@@ -71,6 +73,9 @@ export const ModalProvider: React.FC<Props> = ({ children }) => {
                     (currentModal.modal == Modals.EXPORT_IMAGE ) &&
                     <ExportImageModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
                     ||
+                    (currentModal.modal == Modals.VERSION_HISTORY ) &&
+                    <VersionHistoryModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
                     (currentModal.modal == Modals.IMPORT_PROJECT ) &&
                     <ImportProjectModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
                     ||
@@ -79,6 +84,9 @@ export const ModalProvider: React.FC<Props> = ({ children }) => {
                     ||
                     (currentModal.modal == Modals.PUSH_LIVE_CHANGES ) &&
                     <PushLiveChangesModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    (currentModal.modal == Modals.QUERY_MODERNIZER ) &&
+                    <QueryModernizerModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
                 ) : undefined
 
 }

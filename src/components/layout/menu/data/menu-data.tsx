@@ -65,6 +65,15 @@ export const useMenuData = () => {
                     clickHandler: duplicateProject
                 },
                 {
+                    id: "menu.version_history",
+                    title: t("menu.version_history", { defaultValue: "Version History" }),
+                    isDisabled: !database,
+                    divide: true,
+                    clickHandler: () => {
+                        open(Modals.VERSION_HISTORY)
+                    }
+                },
+                {
                     id: "menu.export_sql",
                     title: t("menu.export_sql"),
                     clickHandler: () => {
@@ -103,9 +112,16 @@ export const useMenuData = () => {
                 {
                     id: "menu.push_live_changes",
                     title: t("menu.push_live_changes"),
-                    divide: true,
                     clickHandler: () => {
                         open(Modals.PUSH_LIVE_CHANGES)
+                    }
+                },
+                {
+                    id: "menu.query_modernizer",
+                    title: t("menu.query_modernizer", { defaultValue: "Query Modernizer (Multi-Agent AI)" }),
+                    divide: true,
+                    clickHandler: () => {
+                        open(Modals.QUERY_MODERNIZER)
                     }
                 },
                 {
