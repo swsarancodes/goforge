@@ -114,6 +114,12 @@ export default class OracleRenderer extends BaseDatabaseRenderer {
    
         //const dataType = field.type.name == "uuid" ? "RAW(16)" : ast.dataType;
 
+        if (field.generatedExpression && field.generatedExpression.trim()) {
+            const expr = field.generatedExpression.trim();
+            const wrappedExpr = (expr.startsWith('(') && expr.endsWith(')')) ? expr : `(${expr})`;
+            return `${field.name} ${dataType} GENERATED ALWAYS AS ${wrappedExpr} VIRTUAL`;
+        }
+
         return `${field.name} ${dataType} ${defaultValue} ${nullable} ${unique} ${autoIncrement} ${primaryKey}`;
     }
     protected processDefaultValue(field: FieldType): AST | null {

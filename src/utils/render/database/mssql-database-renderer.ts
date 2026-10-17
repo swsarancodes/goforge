@@ -77,6 +77,12 @@ ${this.commit()}
     }
 
     protected getFieldDefinition(field: FieldType, table: TableType, ignorePkContraint: boolean = false, dropDefaultValue: boolean = false): ASTStatment {
+        if (field.generatedExpression && field.generatedExpression.trim()) {
+            const expr = field.generatedExpression.trim();
+            const wrappedExpr = (expr.startsWith('(') && expr.endsWith(')')) ? expr : `(${expr})`;
+            const persisted = field.generationType === 'stored' ? ' PERSISTED' : '';
+            return `${field.name} AS ${wrappedExpr}${persisted}`;
+        }
 
         const ast: any = super.getFieldDefinition(field, table, ignorePkContraint);
 
