@@ -11,6 +11,7 @@ import { relationship_fields, relationshipFieldsRelations } from './relationship
 import { views, viewRelations } from './view-schema';
 import { sequences, sequenceRelations } from './sequence-schema';
 import { check_constraints, checkConstraintRelations } from './check-constraint-schema';
+import { schema_snapshots, schema_migrations } from './version-history-schema';
 
 export const drizzleSchema = {
   data_types ,
@@ -24,6 +25,8 @@ export const drizzleSchema = {
   views ,
   sequences ,
   check_constraints ,
+  schema_snapshots ,
+  schema_migrations ,
 
   // relationships
   tablesRelations ,
