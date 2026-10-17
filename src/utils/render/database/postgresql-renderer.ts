@@ -183,8 +183,25 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
         } as any;
     }
 
+    protected supportedOperationTypes(): ReadonlySet<DBDiffOperation["type"]> {
+        return new Set<DBDiffOperation["type"]>([
+            ...super.supportedOperationTypes(),
+            "CREATE_FIELD", "DELETE_FIELD", "UPDATE_FIELD",
+            "CREATE_INDEX", "DELETE_INDEX",
+            "DELETE_TABLE", "UPDATE_TABLE",
+            "DELETE_RELATIONSHIP",
+        ]);
+    }
+
+    public unsupportedOperations(operations: DBDiffOperation[]): DBDiffOperation[] {
+        return super.unsupportedOperations(operations);
+    }
+
     protected operationToAst(operation: DBDiffOperation): ASTStatment | ASTStatment[] | null {
         switch (operation.type) {
+            case "DELETE_RELATIONSHIP":
+                return operation.relationship ? this.dropRelationshipStatement(operation.relationship) : null;
+
             case "CREATE_FIELD": {
                 if (!operation.table) return null;
                 const definition = this.getFieldDefinition(operation.field, operation.table, false) as any;
@@ -245,14 +262,33 @@ export default class PostgresqlRenderer extends BaseSQLRenderer {
             }
 
             case "UPDATE_TABLE": {
-                if (!operation.table || !operation.changes.name) return null;
-                return this.alterTableEnvelope(operation.table, {
-                    action: "rename",
-                    type: "alter",
-                    resource: "table",
-                    keyword: "to",
-                    table: operation.changes.name,
-                });
+                if (!operation.table) return null;
+                const statements: ASTStatment[] = [];
+                const oldNamespace = operation.table.namespace ?? null;
+                const newNamespace = "namespace" in operation.changes ? ((operation.changes.namespace as string | null | undefined) ?? null) : oldNamespace;
+
+                if ("namespace" in operation.changes && newNamespace !== oldNamespace) {
+                    const targetSchema = newNamespace ? this.quoteName(newNamespace) : "public";
+                    statements.push(`ALTER TABLE ${this.qualifiedName(operation.table)} SET SCHEMA ${targetSchema}`);
+                }
+
+                if (operation.changes.name && operation.changes.name !== operation.table.name) {
+                    const currentTableRef = {
+                        name: operation.table.name,
+                        namespace: newNamespace,
+                    };
+                    statements.push(this.alterTableEnvelope(currentTableRef, {
+                        action: "rename",
+                        type: "alter",
+                        resource: "table",
+                        keyword: "to",
+                        table: operation.changes.name,
+                    }));
+                }
+
+                if (statements.length === 0) return null;
+                if (statements.length === 1) return statements[0];
+                return statements;
             }
 
             default:
