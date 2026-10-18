@@ -16,10 +16,10 @@ export function detectDrift(
     const items: DriftItem[] = [];
 
     const canvasTablesMap = new Map<string, TableType>();
-    for (const t of canvasDb.tables) canvasTablesMap.set(tableIdentifier(t), t);
+    for (const t of canvasDb.tables ?? []) canvasTablesMap.set(tableIdentifier(t), t);
 
     const liveTablesMap = new Map<string, TableType>();
-    for (const t of liveDb.tables) liveTablesMap.set(tableIdentifier(t), t);
+    for (const t of liveDb.tables ?? []) liveTablesMap.set(tableIdentifier(t), t);
 
     // 1. Table-level drift
     for (const [key, liveTable] of liveTablesMap) {
@@ -161,10 +161,10 @@ export function detectDrift(
     }
 
     // 3. Relationships / Foreign Keys
-    const canvasRelNames = new Set(canvasDb.relationships.map(r => r.name?.toLowerCase()).filter(Boolean));
-    const liveRelNames = new Set(liveDb.relationships.map(r => r.name?.toLowerCase()).filter(Boolean));
+    const canvasRelNames = new Set((canvasDb.relationships ?? []).map(r => r.name?.toLowerCase()).filter(Boolean));
+    const liveRelNames = new Set((liveDb.relationships ?? []).map(r => r.name?.toLowerCase()).filter(Boolean));
 
-    for (const liveRel of liveDb.relationships) {
+    for (const liveRel of liveDb.relationships ?? []) {
         if (liveRel.name && !canvasRelNames.has(liveRel.name.toLowerCase())) {
             items.push({
                 id: `rel-added-${liveRel.name}`,
@@ -179,7 +179,7 @@ export function detectDrift(
         }
     }
 
-    for (const canvasRel of canvasDb.relationships) {
+    for (const canvasRel of canvasDb.relationships ?? []) {
         if (canvasRel.name && !liveRelNames.has(canvasRel.name.toLowerCase())) {
             items.push({
                 id: `rel-removed-${canvasRel.name}`,

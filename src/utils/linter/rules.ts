@@ -50,7 +50,7 @@ export function matchesConvention(str: string, convention: "snake_case" | "camel
 /** Check 1: Tables without primary key */
 export function checkMissingPrimaryKey(database: DatabaseType, options?: LinterOptions): LintIssue[] {
     const issues: LintIssue[] = [];
-    for (const table of database.tables) {
+    for (const table of database.tables ?? []) {
         const hasPk = table.fields.some(f => f.isPrimary);
         if (!hasPk) {
             issues.push({
@@ -109,7 +109,7 @@ export function checkMissingPrimaryKey(database: DatabaseType, options?: LinterO
 /** Check 2: Unindexed foreign key columns */
 export function checkUnindexedForeignKeys(database: DatabaseType, options?: LinterOptions): LintIssue[] {
     const issues: LintIssue[] = [];
-    for (const rel of database.relationships) {
+    for (const rel of database.relationships ?? []) {
         if (rel.cardinality === Cardinality.many_to_many) continue;
 
         // Foreign key column lives on targetTable (or sourceTable for reversed many_to_one)
@@ -176,7 +176,7 @@ export function checkUnindexedForeignKeys(database: DatabaseType, options?: Lint
 export function checkReservedKeywordCollisions(database: DatabaseType, options?: LinterOptions): LintIssue[] {
     const issues: LintIssue[] = [];
 
-    for (const table of database.tables) {
+    for (const table of database.tables ?? []) {
         if (SQL_RESERVED_WORDS.has(table.name.toLowerCase())) {
             issues.push({
                 id: `reserved-word-table-${table.id}`,
@@ -236,7 +236,7 @@ export function checkNamingConventions(database: DatabaseType, options?: LinterO
     const convention = options?.namingConvention ?? "snake_case";
     if (convention === "any") return issues;
 
-    for (const table of database.tables) {
+    for (const table of database.tables ?? []) {
         if (!matchesConvention(table.name, convention)) {
             const expectedName = convention === "snake_case" ? toSnakeCase(table.name) : toCamelCase(table.name);
             issues.push({
@@ -296,7 +296,7 @@ export function checkNamingConventions(database: DatabaseType, options?: LinterO
 export function checkRedundantIndexes(database: DatabaseType, options?: LinterOptions): LintIssue[] {
     const issues: LintIssue[] = [];
 
-    for (const table of database.tables) {
+    for (const table of database.tables ?? []) {
         const indices = table.indices ?? [];
         if (indices.length <= 1) continue;
 
@@ -346,7 +346,7 @@ export function checkMissingDocumentation(database: DatabaseType, options?: Lint
     if (options?.checkDocumentation === false) return [];
     const issues: LintIssue[] = [];
 
-    for (const table of database.tables) {
+    for (const table of database.tables ?? []) {
         if (!table.note || table.note.trim().length === 0) {
             issues.push({
                 id: `missing-note-table-${table.id}`,
