@@ -16,7 +16,7 @@ import {
     listSavedConnections,
 } from "@/lib/live-connection-api";
 import { DatabaseType } from "@/lib/schemas/database-schema";
-import { useToast } from "@/components/ui/use-toast";
+import useToast from "@/hooks/use-toast";
 import CodeEditor from "@/components/code-editor";
 import {
     Activity,
@@ -90,7 +90,7 @@ export const DriftReconciliationModal: React.FC<ModalProps> = ({ isOpen, onOpenC
             setReport(detected);
             setItems(detected.items);
         } catch (error) {
-            raise("Scan Failed", error instanceof Error ? error.message : String(error), "DESTRUCTIVE");
+            raise("Scan Failed", error instanceof Error ? error.message : String(error), "ERROR");
         } finally {
             setIsScanning(false);
         }
@@ -140,7 +140,7 @@ export const DriftReconciliationModal: React.FC<ModalProps> = ({ isOpen, onOpenC
             );
             onOpenChange?.(false);
         } catch (error) {
-            raise("Reconciliation Failed", error instanceof Error ? error.message : String(error), "DESTRUCTIVE");
+            raise("Reconciliation Failed", error instanceof Error ? error.message : String(error), "ERROR");
         } finally {
             setIsExecuting(false);
         }
