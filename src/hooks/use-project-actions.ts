@@ -1,6 +1,7 @@
 import useToast from "@/hooks/use-toast";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
 import { toDbml } from "@/utils/dbml/to-dbml";
+import { toDrawio } from "@/utils/drawio/to-drawio";
 import { downloadTextFile, toSafeFileName } from "@/utils/file";
 import { parseProjectFile, projectToBundle, serializeProject } from "@/utils/project-file";
 import { useCallback } from "react";
@@ -34,6 +35,26 @@ const useProjectActions = () => {
         }
     }, [database, raise, t]);
 
+    const exportDrawio = useCallback(() => {
+        if (!database) return;
+        const { xml, warnings } = toDrawio(database);
+        downloadTextFile(xml, `${toSafeFileName(database.name)}.drawio`, "application/xml");
+        if (warnings.length > 0) {
+            const shown = warnings.slice(0, 3).map((warning) => warning.message).join(" ");
+            raise(
+                t("export.drawio_warnings", { count: warnings.length, defaultValue: "Draw.io exported, {{count}} warnings" }),
+                warnings.length > 3 ? `${shown} …and ${warnings.length - 3} more.` : shown,
+                "INFO",
+            );
+        } else {
+            raise(
+                t("export.drawio_success", { defaultValue: "Draw.io diagram exported" }),
+                `${database.name}.drawio`,
+                "SUCCESS",
+            );
+        }
+    }, [database, raise, t]);
+
     const duplicateProject = useCallback(async () => {
         if (!database) return;
         try {
@@ -56,7 +77,8 @@ const useProjectActions = () => {
         }
     }, [database, importProject, switchDatabase, raise, t]);
 
-    return { exportProject, exportDbml, duplicateProject };
+    return { exportProject, exportDbml, exportDrawio, duplicateProject };
 };
 
 export default useProjectActions;
+
