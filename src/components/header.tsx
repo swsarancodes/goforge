@@ -15,7 +15,7 @@ import { ThemeSwitch } from './theme-switch'
 import RenameDb from '@/features/database/components/rename-db'
 import LanguagesDropdown from './languages-dropdown'
 import { useIsMobile } from '@/hooks/use-mobile'
-import { Bot } from 'lucide-react'
+import { Bot, ShieldCheck } from 'lucide-react'
 
 interface HeaderProps extends React.HTMLAttributes<HTMLElement> {
   fixed?: boolean
@@ -80,6 +80,17 @@ export const Header = ({
             </div>
           }
           
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => open(Modals.SCHEMA_LINTER)}
+            className="h-8 gap-1.5 text-xs font-semibold border-border bg-card/60 hover:bg-card text-foreground transition-all shadow-2xs"
+            title="Open Schema Quality & Linter Studio"
+          >
+            <ShieldCheck className="h-4 w-4 text-emerald-500" />
+            <span className="hidden xl:inline">Linter</span>
+          </Button>
+
           <Button
             variant="outline"
             size="sm"
