@@ -15,6 +15,8 @@ import VersionHistoryModal from "@/features/database/modals/version-history-moda
 import ConnectLiveDatabaseModal from "@/features/database/modals/connect-live-database-modal";
 import PushLiveChangesModal from "@/features/database/modals/push-live-changes-modal";
 import { QueryModernizerModal } from "@/features/query-modernizer/components/query-modernizer-modal";
+import SchemaLinterModal from "@/features/database/modals/schema-linter-modal";
+import DriftReconciliationModal from "@/features/database/modals/drift-reconciliation-modal";
 import { useDisclosure } from "@/hooks/use-disclosure";
 
 
@@ -87,6 +89,12 @@ export const ModalProvider: React.FC<Props> = ({ children }) => {
                     ||
                     (currentModal.modal == Modals.QUERY_MODERNIZER ) &&
                     <QueryModernizerModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    (currentModal.modal == Modals.SCHEMA_LINTER ) &&
+                    <SchemaLinterModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
+                    ||
+                    (currentModal.modal == Modals.DRIFT_RECONCILIATION ) &&
+                    <DriftReconciliationModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
                 ) : undefined
 
 }
