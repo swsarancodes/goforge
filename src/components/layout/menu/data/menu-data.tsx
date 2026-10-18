@@ -22,7 +22,7 @@ export const useMenuData = () => {
     const { canRedo, canUndo, undo, redo } = useDatabaseHistory();
     const { deleteMultiTables } = useDatabaseOperations();
     const { database } = useDatabase();
-    const { exportProject, exportDbml, duplicateProject } = useProjectActions();
+    const { exportProject, exportDbml, exportDrawio, duplicateProject } = useProjectActions();
     const { openController, showController, cardinalityStyle, changeCardinalityStyle } = useDiagramOps();
 
     const menuData: MenuItem[] = useMemo(() => [
@@ -52,7 +52,7 @@ export const useMenuData = () => {
                 },
                 {
                     id: "menu.import_project",
-                    title: t("menu.import_project", { defaultValue: "Import Project (.json, .dbml)" }),
+                    title: t("menu.import_project", { defaultValue: "Import Project (.json, .dbml, .drawio)" }),
                     clickHandler: () => {
                         open(Modals.IMPORT_PROJECT)
                     }
@@ -92,6 +92,12 @@ export const useMenuData = () => {
                     title: t("menu.export_dbml", { defaultValue: "Export DBML" }),
                     isDisabled: !database,
                     clickHandler: exportDbml
+                },
+                {
+                    id: "menu.export_drawio",
+                    title: t("menu.export_drawio", { defaultValue: "Export Draw.io (.drawio)" }),
+                    isDisabled: !database,
+                    clickHandler: exportDrawio
                 },
                 {
                     id: "menu.export_image",
