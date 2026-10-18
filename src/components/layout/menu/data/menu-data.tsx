@@ -117,11 +117,25 @@ export const useMenuData = () => {
                     }
                 },
                 {
+                    id: "menu.drift_reconciliation",
+                    title: t("menu.drift_reconciliation", { defaultValue: "Detect Drift & Reconcile" }),
+                    clickHandler: () => {
+                        open(Modals.DRIFT_RECONCILIATION)
+                    }
+                },
+                {
                     id: "menu.query_modernizer",
                     title: t("menu.query_modernizer", { defaultValue: "Query Modernizer (Multi-Agent AI)" }),
-                    divide: true,
                     clickHandler: () => {
                         open(Modals.QUERY_MODERNIZER)
+                    }
+                },
+                {
+                    id: "menu.schema_linter",
+                    title: t("menu.schema_linter", { defaultValue: "Schema Linter (Quality & Anti-patterns)" }),
+                    divide: true,
+                    clickHandler: () => {
+                        open(Modals.SCHEMA_LINTER)
                     }
                 },
                 {
