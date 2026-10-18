@@ -12,6 +12,7 @@ import { db } from "@/providers/sync-provider/sync-provider";
 import { DbmlParseError, parseDbml } from "@/utils/dbml/from-dbml";
 import { DbmlWarning, detectDbmlDialect } from "@/utils/dbml/dbml-shared";
 import { layoutProjectFile } from "@/utils/dbml/layout-project";
+import { parseDrawio } from "@/utils/drawio/from-drawio";
 import { MAX_IMPORT_FILE_BYTES, readTextFile } from "@/utils/file";
 import { prepareProjectFileChange, ProjectImportMode } from "@/utils/import/prepare-project-change";
 import { summarizeSchemaChange } from "@/utils/import/summarize-schema-change";
@@ -91,6 +92,22 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
             const text = await readTextFile(selected);
             if (/\.dbml$/i.test(selected.name)) {
                 await convertDbml(text, selected.name, detectDbmlDialect(text) ?? DatabaseDialect.POSTGRES);
+                return;
+            }
+            if (/\.(drawio|xml)$/i.test(selected.name) || /<mxfile|<mxGraphModel/i.test(text)) {
+                const targetDialect = database?.dialect ?? DatabaseDialect.POSTGRES;
+                const dataTypes = await knownTypes(targetDialect);
+                const result = parseDrawio(text, {
+                    dialect: targetDialect,
+                    dataTypes,
+                    fallbackName: selected.name.replace(/\.(drawio|xml)$/i, ""),
+                });
+                const validated = parseProjectFile(JSON.stringify(result.file), new Set(dataTypes.map((type) => type.id as string)));
+                setFile(validated);
+                setName(validated.project.name);
+                if (result.warnings.length > 0) {
+                    setWarnings(result.warnings.map((w) => ({ code: w.code, message: w.message })));
+                }
                 return;
             }
             // Peek at the dialect first so type ids can be checked against the right catalogue.
@@ -176,7 +193,7 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
             isOpen={isOpen}
             onOpenChange={onOpenChange}
             title={t("modals.import_project.title", { defaultValue: "Import project" })}
-            description={t("modals.import_project.description", { defaultValue: "Open a .goforge.json backup or a .dbml file as a new project. Your current project is not changed." })}
+            description={t("modals.import_project.description", { defaultValue: "Open a .goforge.json backup, .dbml file, or Draw.io (.drawio) diagram as a new project. Your current project is not changed." })}
             actionName={mode === "new" ? t("modals.import_project.import", { defaultValue: "Import" }) : t("modals.import_project.apply", { defaultValue: "Apply" })}
             actionHandler={mode === "new" ? onImport : onApply}
             isDisabled={mode === "new"
@@ -188,7 +205,7 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
                 <input
                     ref={inputRef}
                     type="file"
-                    accept=".json,.dbml,application/json"
+                    accept=".json,.dbml,.drawio,.xml,application/json,application/xml"
                     className="sr-only"
                     data-testid="import-project-input"
                     onChange={(event) => {
@@ -212,7 +229,7 @@ const ImportProjectModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ 
                     )}
                 >
                     {fileName ? <FileJson className="size-6" /> : <Upload className="size-6" />}
-                    <span>{fileName ?? t("modals.import_project.drop", { defaultValue: "Drop a .goforge.json or .dbml file here, or click to choose one" })}</span>
+                    <span>{fileName ?? t("modals.import_project.drop", { defaultValue: "Drop a .goforge.json, .dbml, or .drawio file here, or click to choose one" })}</span>
                 </button>
 
                 {error && (
