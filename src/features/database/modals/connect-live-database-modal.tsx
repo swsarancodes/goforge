@@ -138,20 +138,20 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
             onOpenChange={onOpenChange}
             title={view === "list" ? t("modals.connect_live_database.title") : t("modals.connect_live_database.new_title")}
             description={t("modals.connect_live_database.description")}
-            className="lg:min-w-[560px] w-full max-h-screen overflow-auto"
+            className="lg:min-w-[560px] w-full max-h-screen overflow-y-auto overflow-x-hidden grid-cols-[minmax(0,1fr)]"
             actionName={view === "new" ? t("modals.save") : undefined}
             actionHandler={view === "new" ? onSaveConnection : undefined}
         >
             {view === "list" && (
                 <div className="flex flex-col gap-3">
                     {connectError && (
-                        <p className="text-destructive text-sm flex items-center gap-1">
-                            <AlertCircleIcon className="size-4" /> {connectError}
+                        <p className="text-destructive text-sm flex items-start gap-1 break-words">
+                            <AlertCircleIcon className="size-4 shrink-0 mt-0.5" /> <span className="min-w-0">{connectError}</span>
                         </p>
                     )}
                     {listError && (
-                        <p className="text-destructive text-sm flex items-center gap-1">
-                            <AlertCircleIcon className="size-4" /> {listError}
+                        <p className="text-destructive text-sm flex items-start gap-1 break-words">
+                            <AlertCircleIcon className="size-4 shrink-0 mt-0.5" /> <span className="min-w-0">{listError}</span>
                         </p>
                     )}
 
@@ -161,12 +161,15 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
                         <p className="text-sm text-muted-foreground">{t("modals.connect_live_database.no_connections")}</p>
                     )}
 
-                    <div className="flex flex-col gap-2 max-h-[320px] overflow-auto">
+                    <div className="flex flex-col gap-2 max-h-[320px] overflow-y-auto overflow-x-hidden min-w-0">
                         {connections.map((conn) => (
-                            <div key={conn.id} className="flex items-center justify-between gap-2 rounded-md border p-3">
-                                <div className="min-w-0">
+                            <div key={conn.id} className="flex items-center justify-between gap-2 rounded-md border p-3 min-w-0">
+                                <div className="min-w-0 flex-1">
                                     <p className="font-medium truncate">{conn.name}</p>
-                                    <p className="text-xs text-muted-foreground truncate">
+                                    <p
+                                        className="text-xs text-muted-foreground truncate"
+                                        title={`${conn.username}@${conn.host}:${conn.port}/${conn.database}`}
+                                    >
                                         {conn.username}@{conn.host}:{conn.port}/{conn.database}
                                     </p>
                                 </div>
