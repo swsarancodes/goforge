@@ -105,7 +105,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
         let message = res.statusText;
         try {
             const body = await res.json();
-            message = body?.error ? JSON.stringify(body.error) : message;
+            if (body?.error) message = typeof body.error === "string" ? body.error : JSON.stringify(body.error);
         } catch {
             // response body wasn't JSON - fall back to statusText
         }
@@ -142,4 +142,47 @@ export function previewSql(id: string, sql: string): Promise<{ valid: boolean; e
 
 export function executeSql(id: string, sql: string): Promise<{ success: boolean; statementsRun: number }> {
     return request(`/${id}/execute`, { method: "POST", body: JSON.stringify({ sql }) });
+}
+
+export interface TableDataColumn {
+    name: string;
+    /** Postgres format_type() output, e.g. "numeric(30,10)", "jsonb", "integer[]". */
+    dataType: string;
+    isPrimaryKey: boolean;
+}
+
+export interface TableDataPage {
+    columns: TableDataColumn[];
+    /** Every cell is the column's `::text` form; SQL NULL is null. */
+    rows: (string | null)[][];
+    /** [rowIndex, columnIndex] of cells cut short by the server. */
+    truncatedCells: [number, number][];
+    estimatedTotal: number | null;
+    exactTotal?: number;
+    limit: number;
+    offset: number;
+    sort: string | null;
+    dir: "asc" | "desc" | null;
+}
+
+export interface FetchTableRowsParams {
+    schema: string;
+    table: string;
+    limit?: number;
+    offset?: number;
+    sort?: string;
+    dir?: "asc" | "desc";
+    exactCount?: boolean;
+}
+
+export function fetchTableRows(id: string, params: FetchTableRowsParams): Promise<TableDataPage> {
+    const query = new URLSearchParams({ schema: params.schema, table: params.table });
+    if (params.limit !== undefined) query.set("limit", String(params.limit));
+    if (params.offset !== undefined) query.set("offset", String(params.offset));
+    if (params.sort) {
+        query.set("sort", params.sort);
+        query.set("dir", params.dir ?? "asc");
+    }
+    if (params.exactCount) query.set("count", "exact");
+    return request(`/${id}/data?${query.toString()}`);
 }
