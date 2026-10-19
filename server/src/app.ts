@@ -5,6 +5,7 @@ import { connectionsRouter } from "./routes/connections.js";
 import { introspectRouter } from "./routes/introspect.js";
 import { previewRouter } from "./routes/preview.js";
 import { executeRouter } from "./routes/execute.js";
+import { dataRouter } from "./routes/data.js";
 import { aiRouter } from "./routes/ai.js";
 import { modernizeRouter } from "./routes/modernize.js";
 
@@ -21,6 +22,7 @@ export function createApp() {
     app.use("/api/connections", introspectRouter);
     app.use("/api/connections", previewRouter);
     app.use("/api/connections", executeRouter);
+    app.use("/api/connections", dataRouter);
     app.use("/api/ai", aiRouter);
     app.use("/api/modernize", modernizeRouter);
 
