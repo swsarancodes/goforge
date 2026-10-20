@@ -45,14 +45,14 @@ See [DOCKER.md](./DOCKER.md) for the full setup, including the optional live-dat
 
 #### Using Bun
 
-Install dependencies and start the frontend on port 7000:
+Install dependencies and start the frontend on port 5173:
 
 ```bash
 bun install
 bun run dev
 ```
 
-Then visit `http://localhost:7000` in your browser.
+Then visit `http://localhost:5173` in your browser.
 
 The API server is required for live PostgreSQL connections and the AI assistant. In a second terminal:
 
