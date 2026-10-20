@@ -5,9 +5,8 @@ import { buildModernizeInstructions, createZenQueryModernization, modernizeQuery
 const request = modernizeQueryRequestSchema.parse({
     legacySql: "SELECT NVL(a, 0) FROM t WHERE ROWNUM <= 5",
     sourceDialect: "oracle",
-    targetDialect: "postgresql",
     schema: { tables: [{ name: "t", columns: [{ name: "a", type: "integer" }] }] },
-    draft: { sql: "SELECT COALESCE(a, 0) FROM t WHERE ROWNUM <= 5", issues: ["ROWNUM left in place"] },
+    draft: { sql: "SELECT COALESCE(a, 0) FROM t WHERE ROWNUM <= 5", changes: ["NVL → COALESCE"], notConverted: [{ construct: "ROWNUM <= 5", reason: "left in place" }], postgresError: 'column "rownum" does not exist' },
 });
 
 /** Makes `fetch` answer like the Zen /responses endpoint. */
@@ -32,27 +31,29 @@ afterEach(() => {
 
 describe("modernize request and result schemas", () => {
     it("accepts a request with and without schema/draft, and rejects unknown dialects or empty SQL", () => {
-        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "SELECT 1", sourceDialect: "db2", targetDialect: "mysql" }).success).toBe(true);
-        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "  ", sourceDialect: "oracle", targetDialect: "postgresql" }).success).toBe(false);
-        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "SELECT 1", sourceDialect: "cobol", targetDialect: "postgresql" }).success).toBe(false);
-        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "SELECT 1", sourceDialect: "oracle", targetDialect: "oracle" }).success).toBe(false);
+        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "SELECT 1", sourceDialect: "db2" }).success).toBe(true);
+        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "  ", sourceDialect: "oracle" }).success).toBe(false);
+        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "SELECT 1", sourceDialect: "cobol" }).success).toBe(false);
+        // PostgreSQL is the only target, so there is nothing to choose
+        expect(modernizeQueryRequestSchema.safeParse({ legacySql: "SELECT 1", sourceDialect: "sqlite" }).success).toBe(false);
     });
 
-    it("tolerates a messy model answer: stray keys, non-string list items, bad index entries", () => {
+    it("tolerates a messy model answer: stray keys and non-string list items", () => {
         const parsed = modernizeQueryResultSchema.parse({
             sql: "  SELECT 1  ",
             summary: 42,
             changes: ["NVL -> COALESCE", null, { oops: true }, "  "],
             risks: "not a list",
             extra: "ignored",
-            indexSuggestions: [{ tableName: "t", columns: ["a"], reason: "filter" }, { nope: true }, { tableName: "t", columns: [] }],
+            indexSuggestions: [{ tableName: "t", columns: ["a"], reason: "filter" }],
         });
         expect(parsed.sql).toBe("SELECT 1");
         expect(parsed.summary).toBe("");
         expect(parsed.changes).toEqual(["NVL -> COALESCE"]);
         expect(parsed.risks).toEqual([]);
-        expect(parsed.indexSuggestions).toEqual([{ tableName: "t", columns: ["a"], reason: "filter" }]);
         expect("extra" in parsed).toBe(false);
+        // index advice comes from the engine's checks against the real tables, not from the model
+        expect("indexSuggestions" in parsed).toBe(false);
     });
 
     it("requires converted SQL", () => {
@@ -70,6 +71,8 @@ describe("buildModernizeInstructions", () => {
         expect(text).toMatch(/Never invent tables, columns/);
         expect(text).toMatch(/same rows, columns, ordering/);
         expect(text).toMatch(/rule-based draft/);
+        expect(text).toMatch(/check your answer/);
+        expect(text).toMatch(/Do not claim the result is equivalent/);
     });
 });
 
@@ -132,19 +135,19 @@ describe("createZenQueryModernization", () => {
             changes: ["NVL -> COALESCE", "ROWNUM -> LIMIT"],
             risks: ["ROWNUM applied before ORDER BY in Oracle"],
             unsupported: [],
-            indexSuggestions: [{ tableName: "t", columns: ["a"], reason: "ORDER BY a" }],
         });
 
         const { result, model } = await createZenQueryModernization(request);
 
         expect(model).toBe("test-model");
         expect(result.sql).toContain("LIMIT 5");
-        expect(result.indexSuggestions).toHaveLength(1);
+        expect(result.risks).toEqual(["ROWNUM applied before ORDER BY in Oracle"]);
         const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body);
         const input = JSON.parse(body.input);
         expect(input).toMatchObject({ originalQuery: request.legacySql, sourceDialect: "oracle", targetDialect: "postgresql" });
         expect(input.schema.tables[0].name).toBe("t");
-        expect(input.ruleBasedDraft.issues).toEqual(["ROWNUM left in place"]);
+        expect(input.ruleBasedDraft.notConverted).toEqual([{ construct: "ROWNUM <= 5", reason: "left in place" }]);
+        expect(input.ruleBasedDraft.postgresError).toBe('column "rownum" does not exist');
     });
 
     it("rejects an answer without SQL", async () => {
