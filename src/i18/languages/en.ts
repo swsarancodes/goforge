@@ -9,6 +9,7 @@ export const en = {
             relationships: "Relationships",
             ai_schema: "AI Schema",
             data: "Data",
+            modernizer: "Modernizer",
             database: "Database",
             documentation: "Docs"
         },

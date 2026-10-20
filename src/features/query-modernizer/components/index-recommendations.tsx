@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { IndexRecommendation } from "../types";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Zap, Check, Plus, Database, Sparkles } from "lucide-react";
+import { Check, Plus, Database, Sparkles } from "lucide-react";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
 import { toast } from "sonner";
 
@@ -62,13 +62,12 @@ export const IndexRecommendations: React.FC<IndexRecommendationsProps> = ({ reco
         <div className="flex flex-col gap-3 p-1">
             <div className="flex items-center justify-between px-1">
                 <div className="flex items-center gap-2">
-                    <Zap className="h-4 w-4 text-amber-500 animate-pulse" />
-                    <span className="text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-                        Optimizer Index Advisory ({recommendations.length})
+                    <span className="text-xs font-medium text-muted-foreground">
+                        Index suggestions ({recommendations.length})
                     </span>
                 </div>
-                <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-500 border-amber-500/30">
-                    Canvas Live Sync
+                <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
+                    Adds to your canvas
                 </Badge>
             </div>
 

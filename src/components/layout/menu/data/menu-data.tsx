@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 import { MenuItem } from "../../types";
 import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { Modals } from "@/providers/modal-provider/modal-contxet";
 
 
@@ -16,6 +17,7 @@ import { useTheme } from "@/providers/theme-provider/theme-provider";
 export const useMenuData = () => {
 
     const { t } = useTranslation();
+    const navigate = useNavigate();
     const { setTheme, theme } = useTheme()
  
     const { open } = useModal();
@@ -131,9 +133,9 @@ export const useMenuData = () => {
                 },
                 {
                     id: "menu.query_modernizer",
-                    title: t("menu.query_modernizer", { defaultValue: "Query Modernizer (Multi-Agent AI)" }),
+                    title: t("menu.query_modernizer", { defaultValue: "Query Modernizer" }),
                     clickHandler: () => {
-                        open(Modals.QUERY_MODERNIZER)
+                        navigate("/database/modernizer")
                     }
                 },
                 {

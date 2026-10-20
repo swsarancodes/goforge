@@ -3,6 +3,7 @@ import {
     IconVectorSpline,
     IconSparkles,
     IconDatabase,
+    IconTransform,
 } from '@tabler/icons-react'
 
 import type { SidebarData } from '../../types';
@@ -37,6 +38,11 @@ export const useSidebarData = () => {
                         title: t("sidebar.data", { defaultValue: "Data" }),
                         url: '/database/data',
                         icon: IconDatabase,
+                    },
+                    {
+                        title: t("sidebar.modernizer", { defaultValue: "Modernizer" }),
+                        url: '/database/modernizer',
+                        icon: IconTransform,
                     },
 
                 ],

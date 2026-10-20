@@ -22,15 +22,14 @@ export const AgentTimeline: React.FC<AgentTimelineProps> = ({ traces, isExecutin
         <div className="flex flex-col gap-3 p-1">
             <div className="flex items-center justify-between px-1">
                 <div className="flex items-center gap-2">
-                    <Sparkles className="h-4 w-4 text-primary animate-pulse" />
-                    <span className="text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-                        Multi-Agent Reasoning Swarm
+                    <span className="text-xs font-medium text-muted-foreground">
+                        Steps
                     </span>
                 </div>
                 {isExecuting && (
                     <Badge variant="outline" className="text-xs bg-primary/10 border-primary/30 text-primary flex items-center gap-1.5 py-0.5">
                         <RefreshCw className="h-3 w-3 animate-spin" />
-                        Agents Orchestrating...
+                        Running…
                     </Badge>
                 )}
             </div>
