@@ -123,13 +123,6 @@ export const useMenuData = () => {
                     }
                 },
                 {
-                    id: "menu.browse_live_data",
-                    title: t("menu.browse_live_data", { defaultValue: "Browse Live Data" }),
-                    clickHandler: () => {
-                        open(Modals.BROWSE_LIVE_DATA)
-                    }
-                },
-                {
                     id: "menu.drift_reconciliation",
                     title: t("menu.drift_reconciliation", { defaultValue: "Detect Drift & Reconcile" }),
                     clickHandler: () => {

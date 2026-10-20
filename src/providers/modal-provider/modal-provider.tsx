@@ -13,9 +13,7 @@ import ImportProjectModal from "@/features/database/modals/import-project-modal"
 import ExportImageModal from "@/features/database/modals/export-image-modal";
 import VersionHistoryModal from "@/features/database/modals/version-history-modal";
 import ConnectLiveDatabaseModal from "@/features/database/modals/connect-live-database-modal";
-import PushLiveChangesModal from "@/features/database/modals/push-live-changes-modal";
-import BrowseLiveDataModal from "@/features/database/modals/browse-live-data-modal";
-import { QueryModernizerModal } from "@/features/query-modernizer/components/query-modernizer-modal";
+import PushLiveChangesModal from "@/features/database/modals/push-live-changes-modal";import { QueryModernizerModal } from "@/features/query-modernizer/components/query-modernizer-modal";
 import SchemaLinterModal from "@/features/database/modals/schema-linter-modal";
 import DriftReconciliationModal from "@/features/database/modals/drift-reconciliation-modal";
 import { useDisclosure } from "@/hooks/use-disclosure";
@@ -87,9 +85,6 @@ export const ModalProvider: React.FC<Props> = ({ children }) => {
                     ||
                     (currentModal.modal == Modals.PUSH_LIVE_CHANGES ) &&
                     <PushLiveChangesModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
-                    ||
-                    (currentModal.modal == Modals.BROWSE_LIVE_DATA ) &&
-                    <BrowseLiveDataModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
                     ||
                     (currentModal.modal == Modals.QUERY_MODERNIZER ) &&
                     <QueryModernizerModal {...currentModal.props} onOpenChange={onOpenChange} isOpen={isOpen} />
