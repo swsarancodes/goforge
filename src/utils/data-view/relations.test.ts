@@ -1,50 +1,34 @@
 import { describe, expect, it } from "vitest";
-import { buildRelations, groupRelations, relationKey } from "./relations";
+import type { RelationInfo } from "@/lib/live-connection-api";
+import { buildRelations, formatRowEstimate, groupRelations, relationKey } from "./relations";
 
-const table = (name: string, namespace?: string) => ({ name, namespace, columns: [], primaryKeyColumns: [], uniqueConstraints: [], checkConstraints: [] }) as never;
+const info = (name: string, schema = "public", kind: RelationInfo["kind"] = "table", estimatedRows: number | null = null): RelationInfo => ({ schema, name, kind, estimatedRows });
 
 describe("buildRelations", () => {
-    it("lists tables, defaulting a missing schema to public", () => {
-        const relations = buildRelations({ tables: [table("users"), table("events", "analytics")], views: [] });
-        expect(relations.map((r) => [r.schema, r.name, r.kind])).toEqual([
-            ["analytics", "events", "table"],
-            ["public", "users", "table"],
-        ]);
+    it("adds a key and keeps the server's fields", () => {
+        const [relation] = buildRelations([info("users", "public", "table", 208)]);
+        expect(relation).toEqual({ key: relationKey("public", "users"), schema: "public", name: "users", kind: "table", estimatedRows: 208 });
     });
 
-    it("lets a view win over the same name reported as a table", () => {
-        const relations = buildRelations({
-            tables: [table("orders"), table("orders_view")],
-            views: [{ name: "orders_view", namespace: "public", materialized: false, definition: "" }],
-        });
-        expect(relations.filter((r) => r.name === "orders_view")).toEqual([
-            { key: relationKey("public", "orders_view"), schema: "public", name: "orders_view", kind: "view" },
-        ]);
-        expect(relations).toHaveLength(2);
-    });
-
-    it("marks materialized views and tolerates a missing views list", () => {
-        const withMv = buildRelations({ tables: [], views: [{ name: "mv", namespace: null, materialized: true, definition: "" }] });
-        expect(withMv[0]).toMatchObject({ schema: "public", name: "mv", kind: "materialized view" });
-        expect(buildRelations({ tables: [table("t")] } as never)).toHaveLength(1);
-    });
-
-    it("sorts by schema then name", () => {
-        const relations = buildRelations({ tables: [table("b", "z"), table("b", "a"), table("a", "a")], views: [] });
-        expect(relations.map((r) => `${r.schema}.${r.name}`)).toEqual(["a.a", "a.b", "z.b"]);
+    it("sorts by schema then name without mutating the input", () => {
+        const input = [info("b", "z"), info("b", "a"), info("a", "a")];
+        expect(buildRelations(input).map((r) => `${r.schema}.${r.name}`)).toEqual(["a.a", "a.b", "z.b"]);
+        expect(input.map((r) => r.schema)).toEqual(["z", "a", "a"]);
     });
 
     it("keeps names that contain dots or quotes distinct", () => {
-        const relations = buildRelations({ tables: [table("a.b", "public"), table("b", "public.a")], views: [] });
+        const relations = buildRelations([info("a.b", "public"), info("b", "public.a")]);
         expect(new Set(relations.map((r) => r.key)).size).toBe(2);
+    });
+
+    it("keeps views, materialized views and foreign tables as reported", () => {
+        const kinds = buildRelations([info("v", "public", "view"), info("m", "public", "materialized view"), info("f", "public", "foreign table")]).map((r) => r.kind);
+        expect(kinds).toEqual(["foreign table", "materialized view", "view"]);
     });
 });
 
 describe("groupRelations", () => {
-    const relations = buildRelations({
-        tables: [table("candidates"), table("claims"), table("users"), table("events", "analytics")],
-        views: [],
-    });
+    const relations = buildRelations([info("candidates"), info("claims"), info("users"), info("events", "analytics")]);
 
     it("groups by schema in order", () => {
         expect(groupRelations(relations).map(([schema, list]) => [schema, list.map((r) => r.name)])).toEqual([
@@ -58,5 +42,25 @@ describe("groupRelations", () => {
         expect(groupRelations(relations, "analytics.ev").map(([schema]) => schema)).toEqual(["analytics"]);
         expect(groupRelations(relations, "  ").length).toBe(2);
         expect(groupRelations(relations, "nope")).toEqual([]);
+    });
+});
+
+describe("formatRowEstimate", () => {
+    it.each([
+        [null, ""],
+        [-1, ""],
+        [0, "~0"],
+        [208, "~208"],
+        [999, "~999"],
+        [1_000, "~1k"],
+        [1_234, "~1.2k"],
+        [9_000, "~9k"],
+        [9_300, "~9.3k"],
+        [12_400, "~12k"],
+        [340_000, "~340k"],
+        [1_000_000, "~1M"],
+        [3_400_000, "~3.4M"],
+    ])("%s -> %s", (rows, label) => {
+        expect(formatRowEstimate(rows as number | null)).toBe(label);
     });
 });

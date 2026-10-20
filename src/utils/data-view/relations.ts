@@ -1,39 +1,19 @@
-import type { IntrospectionResult } from "@/lib/live-connection-api";
+import type { RelationInfo, RelationKind } from "@/lib/live-connection-api";
 
-export type RelationKind = "table" | "view" | "materialized view";
+export type { RelationKind };
 
-export interface Relation {
+export interface Relation extends RelationInfo {
     /** Opaque, unique per schema+name (names may themselves contain dots). */
     key: string;
-    schema: string;
-    name: string;
-    kind: RelationKind;
 }
 
 export const relationKey = (schema: string, name: string) => `${schema}\u001f${name}`;
 
-/**
- * Turns an introspection result into the browsable list of tables, views and materialized views.
- *
- * information_schema.columns also lists plain views, so introspection reports them as both a table and a
- * view: key by schema+name and let the view entry win. Sorted by schema, then name.
- */
-export function buildRelations(introspection: Pick<IntrospectionResult, "tables" | "views">): Relation[] {
-    const byKey = new Map<string, Relation>();
-
-    for (const table of introspection.tables) {
-        const schema = table.namespace ?? "public";
-        const key = relationKey(schema, table.name);
-        byKey.set(key, { key, schema, name: table.name, kind: "table" });
-    }
-
-    for (const view of introspection.views ?? []) {
-        const schema = view.namespace ?? "public";
-        const key = relationKey(schema, view.name);
-        byKey.set(key, { key, schema, name: view.name, kind: view.materialized ? "materialized view" : "view" });
-    }
-
-    return Array.from(byKey.values()).sort((a, b) => a.schema.localeCompare(b.schema) || a.name.localeCompare(b.name));
+/** Adds a stable key to the relations the server listed and sorts them by schema, then name. */
+export function buildRelations(infos: RelationInfo[]): Relation[] {
+    return infos
+        .map((info) => ({ ...info, key: relationKey(info.schema, info.name) }))
+        .sort((a, b) => a.schema.localeCompare(b.schema) || a.name.localeCompare(b.name));
 }
 
 /** Groups relations by schema (keeping their order), optionally keeping only those whose `schema.name` contains `filter`. */
@@ -49,4 +29,13 @@ export function groupRelations(relations: Relation[], filter = ""): [string, Rel
     }
 
     return Array.from(groups.entries());
+}
+
+/** Short row-count label for the table list: "~208", "~1.2k", "~340k", "~3.4M"; empty when unknown. */
+export function formatRowEstimate(rows: number | null): string {
+    if (rows === null || !Number.isFinite(rows) || rows < 0) return "";
+    if (rows < 1_000) return `~${Math.round(rows)}`;
+    if (rows < 10_000) return `~${(rows / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+    if (rows < 1_000_000) return `~${Math.round(rows / 1_000)}k`;
+    return `~${(rows / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
 }

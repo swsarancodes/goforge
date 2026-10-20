@@ -94,7 +94,7 @@ const DataGrid: React.FC<DataGridProps> = ({ browser, toolbarStart }) => {
                             aria-label={t("data_browser.refresh", { defaultValue: "Refresh" })}
                             title={t("data_browser.refresh", { defaultValue: "Refresh" })}
                         >
-                            <RefreshCw className={cn("size-4", browser.isLoadingPage && "animate-spin")} />
+                            <RefreshCw className={cn("size-4", (browser.isLoadingPage || browser.isRevalidating) && "animate-spin")} />
                         </Button>
                     </>
                 ) : (

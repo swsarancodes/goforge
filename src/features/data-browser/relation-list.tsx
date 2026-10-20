@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Eye, RefreshCw, Search, Table2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import { groupRelations } from "@/utils/data-view/relations";
+import { formatRowEstimate, groupRelations } from "@/utils/data-view/relations";
 import type { DataBrowser } from "./use-data-browser";
 
 interface RelationListProps {
@@ -39,6 +39,15 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
     const [filter, setFilter] = useState<string>("");
 
     const groups = useMemo(() => groupRelations(browser.relations, filter), [browser.relations, filter]);
+
+    // Resting the pointer (or keyboard focus) on a table reads its first page ahead of the click.
+    const prefetchTimer = useRef<number | undefined>(undefined);
+    const prefetchSoon = (key: string) => {
+        window.clearTimeout(prefetchTimer.current);
+        prefetchTimer.current = window.setTimeout(() => void browser.prefetchRelation(key), 120);
+    };
+    const cancelPrefetch = () => window.clearTimeout(prefetchTimer.current);
+    useEffect(() => () => window.clearTimeout(prefetchTimer.current), []);
 
     return (
         <div className="flex flex-col h-full min-h-0 min-w-0">
@@ -81,11 +90,11 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
                         size="icon"
                         className="h-8 w-8 shrink-0"
                         onClick={browser.refreshRelations}
-                        disabled={!browser.connectionId || browser.isLoadingRelations}
+                        disabled={!browser.connectionId || browser.isLoadingRelations || browser.isRefreshingRelations}
                         aria-label={t("data_browser.refresh_list", { defaultValue: "Refresh table list" })}
                         title={t("data_browser.refresh_list", { defaultValue: "Refresh table list" })}
                     >
-                        <RefreshCw className={cn("size-3.5", browser.isLoadingRelations && "animate-spin")} />
+                        <RefreshCw className={cn("size-3.5", (browser.isLoadingRelations || browser.isRefreshingRelations) && "animate-spin")} />
                     </Button>
                 </div>
             </div>
@@ -122,6 +131,10 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
                                         onPicked?.();
                                     }}
                                     aria-current={active ? "true" : undefined}
+                                    onMouseEnter={() => prefetchSoon(relation.key)}
+                                    onFocus={() => prefetchSoon(relation.key)}
+                                    onMouseLeave={cancelPrefetch}
+                                    onBlur={cancelPrefetch}
                                     title={`${relation.schema}.${relation.name} (${relation.kind})`}
                                     className={cn(
                                         "w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-accent min-w-0",
@@ -134,9 +147,12 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
                                         <Eye className="size-3.5 shrink-0 text-muted-foreground" />
                                     )}
                                     <span className="truncate">{relation.name}</span>
-                                    {relation.kind !== "table" && (
-                                        <span className="ml-auto shrink-0 text-[10px] uppercase text-muted-foreground">{relation.kind === "view" ? "view" : "mat."}</span>
-                                    )}
+                                    <span className="ml-auto shrink-0 flex items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums">
+                                        {relation.kind !== "table" && (
+                                            <span className="text-[10px] uppercase">{relation.kind === "view" ? "view" : relation.kind === "materialized view" ? "mat." : "ext."}</span>
+                                        )}
+                                        {formatRowEstimate(relation.estimatedRows)}
+                                    </span>
                                 </button>
                             );
                         })}

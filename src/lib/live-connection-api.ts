@@ -173,6 +173,8 @@ export interface FetchTableRowsParams {
     sort?: string;
     dir?: "asc" | "desc";
     exactCount?: boolean;
+    /** Ask the server to re-read the table's columns instead of using its cached catalog entry. */
+    refresh?: boolean;
 }
 
 export function fetchTableRows(id: string, params: FetchTableRowsParams): Promise<TableDataPage> {
@@ -184,5 +186,28 @@ export function fetchTableRows(id: string, params: FetchTableRowsParams): Promis
         query.set("dir", params.dir ?? "asc");
     }
     if (params.exactCount) query.set("count", "exact");
+    if (params.refresh) query.set("refresh", "1");
     return request(`/${id}/data?${query.toString()}`);
+}
+
+export type RelationKind = "table" | "view" | "materialized view" | "foreign table";
+
+/** One browsable table, view or materialized view. Columns stay on the server; the page only lists names. */
+export interface RelationInfo {
+    schema: string;
+    name: string;
+    kind: RelationKind;
+    /** Planner's row estimate; null when unknown (views, tables that were never analyzed). */
+    estimatedRows: number | null;
+}
+
+/** Every table and view of a saved connection, in one round trip (much lighter than a full introspection). */
+export async function fetchRelations(id: string): Promise<RelationInfo[]> {
+    const result = await request<{ relations: RelationInfo[] }>(`/${id}/relations`);
+    return result.relations;
+}
+
+/** Opens (or keeps open) the API's pooled connection so the next table click doesn't wait for the handshake. */
+export function warmConnection(id: string): Promise<{ ok: boolean; ms?: number }> {
+    return request(`/${id}/warm`, { method: "POST" });
 }
