@@ -1,5 +1,5 @@
 import { AiSchemaContext, AiSchemaPlanResponse } from "@/lib/ai-schema";
-import type { AiConversion, LegacyDialect, SchemaContext, TargetDialect } from "@/features/query-modernizer/types";
+import type { AiConversion, LegacyDialect, SchemaContext } from "@/features/query-modernizer/types";
 
 class AiApiError extends Error {
     constructor(message: string, public status: number) {
@@ -58,18 +58,17 @@ export async function fetchAiStatus(signal?: AbortSignal): Promise<AiStatus> {
 export interface QueryModernizationRequest {
     legacySql: string;
     sourceDialect: LegacyDialect;
-    targetDialect: TargetDialect;
     /** Table and column names only. */
     schema?: SchemaContext;
-    /** What the rule engine produced, as a starting point for the model. */
-    draft?: { sql: string; notes: string[]; issues: string[] };
+    /** What the rules produced, what they could not do, and what PostgreSQL said about the last answer. */
+    draft?: { sql: string; changes: string[]; notConverted: { construct: string; reason: string }[]; postgresError?: string };
 }
 
 export async function requestQueryModernization(request: QueryModernizationRequest, signal?: AbortSignal): Promise<{ result: AiConversion; model: string }> {
     const response = await fetch("/api/ai/modernize-query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(request),
+        body: JSON.stringify({ ...request, schema: request.schema && { databaseName: request.schema.databaseName, dialect: request.schema.dialect, tables: request.schema.tables.map((table) => ({ name: table.name, columns: table.columns.map((c) => ({ name: c.name, type: c.type, isPrimary: c.isPrimary, isUnique: c.isUnique })) })) } }),
         signal,
     });
     if (!response.ok) throw await errorFromResponse(response, "AI conversion failed");

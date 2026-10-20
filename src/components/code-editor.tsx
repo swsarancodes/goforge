@@ -141,8 +141,57 @@ const createEditorRuntime = async () => {
             ]),
         );
 
+    /**
+     * Grey text shown while the editor is empty. With a suggestion, Tab fills the editor with it (Escape hides it, and typing
+     * simply replaces it, because the text is a placeholder and not part of the document).
+     */
+    const ghostExtensions = (options: { suggestion?: string; placeholder?: string; hint: string; onDismiss: () => void }) => {
+        const text = options.suggestion ?? options.placeholder;
+        if (!text) return [];
+        const element = document.createElement("div");
+        element.setAttribute("aria-hidden", "true");
+        element.style.whiteSpace = "pre";
+        element.style.opacity = "0.55";
+        const body = document.createElement("div");
+        body.textContent = text;
+        element.append(body);
+        if (options.suggestion) {
+            const hint = document.createElement("div");
+            hint.textContent = options.hint;
+            hint.style.cssText = "margin-top:10px;font-family:system-ui,sans-serif;font-size:11px;opacity:.9";
+            element.append(hint);
+        }
+        const keys = options.suggestion
+            ? [
+                  state.Prec.highest(
+                      view.keymap.of([
+                          {
+                              key: "Tab",
+                              run: (editorView) => {
+                                  if (editorView.state.doc.length > 0) return false;
+                                  editorView.dispatch({ changes: { from: 0, insert: options.suggestion! }, selection: { anchor: options.suggestion!.length }, userEvent: "input.complete", scrollIntoView: true });
+                                  return true;
+                              },
+                          },
+                          {
+                              key: "Escape",
+                              run: (editorView) => {
+                                  if (editorView.state.doc.length > 0) return false;
+                                  options.onDismiss();
+                                  return true;
+                              },
+                          },
+                      ]),
+                  ),
+                  view.EditorView.contentAttributes.of({ "aria-description": options.hint }),
+              ]
+            : [];
+        return [view.placeholder(element), ...keys];
+    };
+
     return {
         CodeMirror: codeMirror.default,
+        ghostExtensions,
         runKeymap,
         extensions: [sqlLanguage.sql(), editorKeyBoundary, macCtrlKeymap],
         darkTheme: [codeMirror.oneDark, darkOverride],
@@ -169,13 +218,24 @@ interface CodeEditorProps {
     onRun?: (selectedText: string) => void;
     /** Gives the caller the CodeMirror view (to read the selection, move the cursor, ...). */
     onCreateEditor?: (view: EditorView) => void;
+    /** Grey example text in the empty editor. Tab inserts it, Escape hides it. */
+    ghostText?: string;
+    /** Grey text in the empty editor that Tab does not insert (used when there is no example to offer). */
+    placeholder?: string;
 }
 
-const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className, readOnly = false, onChange, autoFocus = false, onRun, onCreateEditor }) => {
+const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className, readOnly = false, onChange, autoFocus = false, onRun, onCreateEditor, ghostText, placeholder }) => {
     const [editor, setEditor] = useState<EditorRuntime | null>(null);
     const onRunRef = useRef(onRun);
     onRunRef.current = onRun;
     const runExtensions = useMemo(() => (editor && onRun ? [editor.runKeymap(() => onRunRef.current)] : []), [editor, onRun !== undefined]);
+
+    // Escape hides the example until it changes (a different dialect gives a different example).
+    const [dismissed, setDismissed] = useState<string | undefined>(undefined);
+    const ghostExtensions = useMemo(
+        () => (editor && !readOnly ? editor.ghostExtensions({ suggestion: ghostText && dismissed !== ghostText ? ghostText : undefined, placeholder: ghostText ? (dismissed === ghostText ? undefined : placeholder) : placeholder, hint: "Press Tab to insert this example. Escape hides it.", onDismiss: () => setDismissed(ghostText) }) : []),
+        [editor, readOnly, ghostText, placeholder, dismissed],
+    );
 
     useEffect(() => {
         let mounted = true;
@@ -190,6 +250,8 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
     }, []);
 
     const { theme } = useTheme();
+    // A new array on every render would reconfigure CodeMirror every time, so it is rebuilt only when a part changes.
+    const allExtensions = useMemo(() => (editor ? [...editor.extensions, ...runExtensions, ...ghostExtensions] : []), [editor, runExtensions, ghostExtensions]);
 
     if (!editor) {
         return (
@@ -199,7 +261,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
         );
     }
 
-    const { CodeMirror, extensions, darkTheme, lightTheme } = editor;
+    const { CodeMirror, darkTheme, lightTheme } = editor;
     return (
         <CodeMirror
             value={value ?? defaultValue ?? ""}
@@ -208,7 +270,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
             // in via `selectable` - without it, drag-select, Cmd/Ctrl+A and
             // copy are all suppressed inside the SQL text.
             className={cn("selectable flex flex-1 w-full min-h-9 rounded-sm  h-full   bg-card border-1 border-border  !min-w-0 overflow-hidden", className)}
-            extensions={runExtensions.length ? [...extensions, ...runExtensions] : extensions}
+            extensions={allExtensions}
             readOnly={readOnly}
             autoFocus={autoFocus}
             onCreateEditor={(view) => {

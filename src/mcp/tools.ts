@@ -4,7 +4,8 @@ import { detectDrift, buildReconciliationPlan } from "@/utils/drift/detector";
 import { toDrawio } from "@/utils/drawio/to-drawio";
 import { parseDrawio } from "@/utils/drawio/from-drawio";
 import { toDbml } from "@/utils/dbml/to-dbml";
-import { modernizeQuery } from "@/features/query-modernizer/orchestrator";
+import { convertQuery } from "@/features/query-modernizer/engine/convert";
+import { LEGACY_DIALECTS, type LegacyDialect } from "@/features/query-modernizer/types";
 import { McpToolDefinition, McpToolCallResult } from "./types";
 
 export const MCP_TOOLS: McpToolDefinition[] = [
@@ -50,7 +51,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
     },
     {
         name: "goforge_modernize_query",
-        description: "Modernize legacy SQL queries (Oracle/MSSQL/MySQL -> Modern PostgreSQL) using GoForge's multi-agent swarm with AST validation, reflection retry, SARGable optimizer, and equivalence scoring.",
+        description: "Convert a query written for Oracle, SQL Server, MySQL or DB2 to PostgreSQL with named, tested rules. Returns the converted SQL, the rules applied, anything it could NOT convert, and the known behaviour differences. It is not checked against a database and does not prove the result returns the same rows.",
         inputSchema: {
             type: "object",
             properties: {
@@ -60,11 +61,7 @@ export const MCP_TOOLS: McpToolDefinition[] = [
                 },
                 sourceDialect: {
                     type: "string",
-                    description: "Source dialect (oracle, mssql, mysql, postgres). Defaults to oracle.",
-                },
-                targetDialect: {
-                    type: "string",
-                    description: "Target dialect. Defaults to postgres.",
+                    description: "Source dialect: oracle, mssql, mysql or db2. Defaults to oracle.",
                 },
             },
             required: ["query"],
@@ -194,15 +191,12 @@ export async function executeMcpTool(name: string, args: Record<string, any>): P
 
             case "goforge_modernize_query": {
                 const query = String(args.query ?? "");
-                const sourceDialect = String(args.sourceDialect ?? "oracle");
-                const targetDialect = String(args.targetDialect ?? "postgresql");
-                const normalizedTarget = targetDialect === "postgres" ? "postgresql" : targetDialect;
+                const sourceDialect = String(args.sourceDialect ?? "oracle").toLowerCase();
+                if (!LEGACY_DIALECTS.some((option) => option.value === sourceDialect)) {
+                    return { isError: true, content: [{ type: "text", text: `Unsupported source dialect '${sourceDialect}'. Use one of: ${LEGACY_DIALECTS.map((option) => option.value).join(", ")}. The target is always PostgreSQL.` }] };
+                }
 
-                const result = await modernizeQuery({
-                    legacySql: query,
-                    sourceDialect: sourceDialect as any,
-                    targetDialect: normalizedTarget as any,
-                });
+                const result = convertQuery({ sql: query, dialect: sourceDialect as LegacyDialect });
 
                 return {
                     content: [
@@ -210,15 +204,14 @@ export async function executeMcpTool(name: string, args: Record<string, any>): P
                             type: "text",
                             text: JSON.stringify(
                                 {
-                                    originalSql: result.originalSql,
-                                    translatedSql: result.translatedSql,
-                                    optimizedSql: result.optimizedSql,
-                                    confidenceScore: result.confidenceScore,
-                                    riskLevel: result.riskLevel,
-                                    transformationsSummary: result.transformationsSummary,
-                                    validationReport: result.validationReport,
-                                    indexRecommendations: result.indexRecommendations,
-                                    agentTracesCount: result.agentTraces?.length ?? 0,
+                                    originalSql: query,
+                                    convertedSql: result.sql,
+                                    syntaxError: result.syntaxError,
+                                    rulesApplied: result.applied.map((rule) => ({ id: rule.id, title: rule.title, count: rule.count, why: rule.why })),
+                                    notConverted: result.unconverted,
+                                    behaviourDifferences: result.traps,
+                                    bindVariables: result.parameters,
+                                    note: "Not checked against a database. Run the converted query through PostgreSQL (EXPLAIN) and compare results on real data before relying on it.",
                                 },
                                 null,
                                 2

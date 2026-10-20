@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "mcp": "bun run src/mcp/cli.ts"
+    "mcp": "bun run src/mcp/cli.ts",
+    "test:corpus": "server/node_modules/.bin/tsx scripts/modernizer-corpus.ts",
+    "corpus:golden": "server/node_modules/.bin/tsx scripts/modernizer-golden.ts"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.3",

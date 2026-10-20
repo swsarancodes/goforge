@@ -1,247 +1,85 @@
-import { useEffect, useState } from "react";
-import { ArrowRight, Check, Code2, Copy, Loader2, Play, Terminal } from "lucide-react";
-import { toast } from "sonner";
+import { ArrowRight, Loader2, Play, Square } from "lucide-react";
 import CodeEditor from "@/components/code-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useOpenInSqlEditor } from "@/features/sql-editor/use-open-in-sql-editor";
-import { AiStatus, fetchAiStatus, requestQueryModernization } from "@/lib/ai-api";
-import { useDatabase } from "@/providers/database-provider/database-provider";
-import { AgentTimeline } from "./components/agent-timeline";
-import { DiffView } from "./components/diff-view";
+import { ChangesPanel } from "./components/changes-panel";
+import { ChecksPanel } from "./components/checks-panel";
+import { CompareView } from "./components/compare-view";
 import { IndexRecommendations } from "./components/index-recommendations";
-import { modernizeQuery } from "./orchestrator";
-import { reconcileModernization, type AiOutcome } from "./reconcile";
-import { ENTERPRISE_SAMPLE_QUERIES } from "./samples";
-import { AgentTrace, LegacyDialect, ModernizeRequest, ModernizeResponse, TargetDialect } from "./types";
+import { ResultPanel } from "./components/result-panel";
+import { useModernizer } from "./use-modernizer";
+import { LEGACY_DIALECTS, LegacyDialect } from "./types";
 
-interface Saved {
-    sourceDialect: LegacyDialect;
-    targetDialect: TargetDialect;
-    legacySql: string;
-    activeSampleId: string;
-    activeTab: string;
-    result: ModernizeResponse | null;
-    liveTraces: AgentTrace[];
-}
-
-// Switching sidebar tabs unmounts the page; keep what the user was working on so coming back isn't a reset.
-let saved: Saved | undefined;
-
-const USE_AI_KEY = "goforge.modernizer.ai";
-const readUseAi = (): boolean => {
-    try {
-        return localStorage.getItem(USE_AI_KEY) !== "false";
-    } catch {
-        return true;
-    }
-};
+const NO_CONNECTION = "__none__";
 
 /**
- * Query Modernizer: paste a query written for an older database, pick the dialect to convert it to, and get the
- * converted SQL back with the steps that produced it, index suggestions, and a review of what changed.
- * The built-in rules always run first; if a model is configured it refines their draft, and its answer is only used
- * after it passes the same syntax and table checks.
+ * Query Modernizer: rewrite a query written for an older database so it runs on PostgreSQL.
+ * Fixed rules do the rewriting. A live connection lets PostgreSQL itself say whether it accepts the result. A model is only
+ * asked about what the rules couldn't do, and its answer is only shown if PostgreSQL accepts it.
  */
 const QueryModernizerPage: React.FC = () => {
-    const { database } = useDatabase();
-    const openInSqlEditor = useOpenInSqlEditor();
+    const m = useModernizer();
+    const { outcome } = m;
+    const hasTables = !!m.schema;
+    const dialectLabel = LEGACY_DIALECTS.find((candidate) => candidate.value === m.dialect)?.label ?? m.dialect;
 
-    const [sourceDialect, setSourceDialect] = useState<LegacyDialect>(saved?.sourceDialect ?? "oracle");
-    const [targetDialect, setTargetDialect] = useState<TargetDialect>(saved?.targetDialect ?? "postgresql");
-    const [legacySql, setLegacySql] = useState<string>(saved?.legacySql ?? ENTERPRISE_SAMPLE_QUERIES[0].legacySql);
-    const [activeSampleId, setActiveSampleId] = useState<string>(saved?.activeSampleId ?? ENTERPRISE_SAMPLE_QUERIES[0].id);
-
-    const [isExecuting, setIsExecuting] = useState(false);
-    const [activeTab, setActiveTab] = useState(saved?.activeTab ?? "sql");
-    const [result, setResult] = useState<ModernizeResponse | null>(saved?.result ?? null);
-    const [liveTraces, setLiveTraces] = useState<AgentTrace[]>(saved?.liveTraces ?? []);
-    const [copied, setCopied] = useState(false);
-
-    const [aiStatus, setAiStatus] = useState<AiStatus | undefined>(undefined);
-    const [useAi, setUseAi] = useState<boolean>(readUseAi);
-    const aiConfigured = aiStatus?.configured === true;
-
-    useEffect(() => {
-        const controller = new AbortController();
-        fetchAiStatus(controller.signal)
-            .then(setAiStatus)
-            .catch(() => setAiStatus({ configured: false, model: "" }));
-        return () => controller.abort();
-    }, []);
-
-    useEffect(() => {
-        saved = { sourceDialect, targetDialect, legacySql, activeSampleId, activeTab, result, liveTraces };
-    }, [sourceDialect, targetDialect, legacySql, activeSampleId, activeTab, result, liveTraces]);
-
-    const changeUseAi = (value: boolean) => {
-        setUseAi(value);
-        try {
-            localStorage.setItem(USE_AI_KEY, String(value));
-        } catch {
-            // the choice just isn't remembered
-        }
-    };
-
-    const handleSelectSample = (sampleId: string) => {
-        const sample = ENTERPRISE_SAMPLE_QUERIES.find((candidate) => candidate.id === sampleId);
-        if (!sample) return;
-
-        setActiveSampleId(sample.id);
-        setSourceDialect(sample.sourceDialect);
-        setTargetDialect(sample.targetDialect);
-        setLegacySql(sample.legacySql);
-        setResult(null);
-        setLiveTraces([]);
-        setActiveTab("sql");
-    };
-
-    const handleRun = async () => {
-        if (!legacySql.trim()) {
-            toast.error("Enter a query to convert.");
-            return;
-        }
-
-        setIsExecuting(true);
-        setLiveTraces([]);
-        setResult(null);
-        setActiveTab("steps");
-
-        try {
-            // The tables on the open canvas are the schema the query is checked against. Names and types only.
-            const schemaContext = database
-                ? {
-                      databaseName: database.name,
-                      dialect: database.dialect,
-                      tables: database.tables.map((table) => ({
-                          name: table.name,
-                          columns: table.fields.map((field) => ({
-                              name: field.name,
-                              type: field.type?.name ?? "",
-                              isPrimary: !!field.isPrimary,
-                              isUnique: !!field.unique,
-                          })),
-                      })),
-                  }
-                : undefined;
-
-            const request: ModernizeRequest = { legacySql, sourceDialect, targetDialect, schemaContext, options: { optimize: true, generateIndexes: true } };
-
-            // 1. The built-in rules: instant, offline, and the fallback for everything below.
-            const rules = await modernizeQuery(request, (trace) => setLiveTraces((previous) => [...previous, trace]));
-
-            // 2. If a model is available, let it refine the rules' draft.
-            let outcome: AiOutcome = { status: "off" };
-            if (useAi) {
-                if (!aiConfigured) {
-                    outcome = { status: "unavailable", reason: "no model is configured on the server (set ZEN_API_KEY in server/.env)" };
-                } else {
-                    setLiveTraces((previous) => [
-                        ...previous,
-                        { agentId: "ai", name: "AI refinement", role: "Language model", status: "running", title: "Asking the model…", details: [], timestamp: Date.now() },
-                    ]);
-                    const startedAt = performance.now();
-                    try {
-                        const { result: conversion, model } = await requestQueryModernization({
-                            legacySql,
-                            sourceDialect,
-                            targetDialect,
-                            schema: schemaContext,
-                            draft: {
-                                sql: rules.optimizedSql,
-                                notes: rules.transformationsSummary,
-                                issues: [...rules.validationReport.astErrors, ...rules.validationReport.schemaWarnings, ...rules.validationReport.antiPatternsDetected],
-                            },
-                        });
-                        outcome = { status: "ok", result: conversion, model, elapsedMs: Math.round(performance.now() - startedAt) };
-                    } catch (error) {
-                        outcome = { status: "unavailable", reason: error instanceof Error ? error.message : String(error) };
-                    }
-                }
-            }
-
-            // 3. Use the model's SQL only if it passes the rules' own checks.
-            const response = reconcileModernization(rules, outcome, request);
-            setResult(response);
-            setActiveTab("sql");
-            if (response.aiNotice) toast.warning(response.aiNotice);
-            else toast.success(`Query converted${response.source === "ai" ? " with AI" : ""}. ${response.confidenceScore}% confidence.`);
-        } catch (error) {
-            toast.error(`Conversion failed: ${error instanceof Error ? error.message : String(error)}`);
-        } finally {
-            setIsExecuting(false);
-        }
-    };
-
-    const handleCopy = async () => {
-        const text = result?.optimizedSql || result?.translatedSql;
-        if (!text) return;
-        try {
-            await navigator.clipboard.writeText(text);
-            setCopied(true);
-            toast.success("SQL copied");
-            setTimeout(() => setCopied(false), 2000);
-        } catch {
-            toast.error("Couldn't copy. The browser blocked clipboard access.");
-        }
-    };
-
-    const resultSql = result?.optimizedSql || result?.translatedSql;
+    const checkCount = outcome ? outcome.engine.unconverted.length + outcome.engine.traps.length + (outcome.postgres.status === "rejected" ? 1 : 0) : 0;
+    const indexCount = outcome ? outcome.advice.recommendations.length + outcome.advice.notes.length : 0;
 
     return (
         <div className="w-full h-full min-h-0 overflow-y-auto bg-background">
             <div className="flex flex-col gap-3 p-4 lg:h-full lg:min-h-0">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                    <div className="min-w-0">
-                        <h1 className="text-base font-semibold">Query Modernizer</h1>
-                        <p className="text-sm text-muted-foreground">Convert a query written for an older database to a current dialect, checked against the tables on your canvas.</p>
-                    </div>
-                    {database && (
-                        <Badge variant="outline" className="text-xs font-normal text-muted-foreground shrink-0">
-                            Checked against {database.name}
-                        </Badge>
-                    )}
+                <div className="min-w-0">
+                    <h1 className="text-base font-semibold">Query Modernizer</h1>
+                    <p className="text-sm text-muted-foreground max-w-3xl">
+                        Rewrites a query written for Oracle, SQL Server, MySQL or DB2 so it runs on PostgreSQL, and tells you what it could not convert and where the results can differ. It does not prove the new query returns the same rows.
+                    </p>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-2.5">
-                    <div className="flex items-center gap-2 flex-wrap min-w-0">
-                        <span className="text-xs text-muted-foreground">Examples</span>
-                        {ENTERPRISE_SAMPLE_QUERIES.map((sample) => (
-                            <Button key={sample.id} size="sm" variant={activeSampleId === sample.id ? "secondary" : "ghost"} onClick={() => handleSelectSample(sample.id)} className="h-7 px-2.5 text-xs">
-                                {sample.title.split(":")[0]}
-                            </Button>
-                        ))}
+                    <div className="flex items-center gap-2">
+                        <Select value={m.dialect} onValueChange={(value) => m.setDialect(value as LegacyDialect)}>
+                            <SelectTrigger size="sm" className="h-8 w-44 text-xs" aria-label="Convert from">
+                                <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                                {LEGACY_DIALECTS.map((option) => (
+                                    <SelectItem key={option.value} value={option.value}>
+                                        {option.label}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                        <ArrowRight className="size-4 text-muted-foreground shrink-0" aria-hidden="true" />
+                        <Badge variant="outline" className="h-8 px-3 text-xs font-normal">
+                            PostgreSQL
+                        </Badge>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                        <Select value={sourceDialect} onValueChange={(value) => setSourceDialect(value as LegacyDialect)}>
-                            <SelectTrigger size="sm" className="h-8 w-40 text-xs" aria-label="Convert from">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="oracle">Oracle 11g/19c</SelectItem>
-                                <SelectItem value="mssql">SQL Server (T-SQL)</SelectItem>
-                                <SelectItem value="mysql">Legacy MySQL</SelectItem>
-                                <SelectItem value="db2">IBM DB2</SelectItem>
-                                <SelectItem value="sqlite">SQLite</SelectItem>
-                            </SelectContent>
-                        </Select>
-
-                        <ArrowRight className="size-4 text-muted-foreground shrink-0" aria-hidden="true" />
-
-                        <Select value={targetDialect} onValueChange={(value) => setTargetDialect(value as TargetDialect)}>
-                            <SelectTrigger size="sm" className="h-8 w-36 text-xs" aria-label="Convert to">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                <SelectItem value="postgresql">PostgreSQL 16</SelectItem>
-                                <SelectItem value="mysql">MySQL 8.4</SelectItem>
-                                <SelectItem value="sqlite">SQLite 3</SelectItem>
-                            </SelectContent>
-                        </Select>
+                    <div className="flex flex-wrap items-center gap-3">
+                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                            Check against
+                            <Select value={m.connection?.id ?? NO_CONNECTION} onValueChange={(value) => m.changeConnection(value === NO_CONNECTION ? undefined : value)}>
+                                <SelectTrigger size="sm" className="h-8 w-52 text-xs" aria-label="Check against">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    <SelectItem value={NO_CONNECTION}>No database (syntax only)</SelectItem>
+                                    {m.connections.map((connection) => (
+                                        <SelectItem key={connection.id} value={connection.id}>
+                                            {connection.name}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </label>
+                        <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={m.aiConfigured ? `Let ${m.aiStatus?.model || "the model"} try what the rules can't do` : "Set ZEN_API_KEY in server/.env to turn this on"}>
+                            <Switch checked={m.useAi && m.aiConfigured} onCheckedChange={m.changeUseAi} disabled={!m.aiConfigured || m.running} aria-label="Use AI for what the rules can't convert" />
+                            Use AI for the rest
+                        </label>
                     </div>
                 </div>
 
@@ -251,95 +89,83 @@ const QueryModernizerPage: React.FC = () => {
                             <div className="flex items-center gap-2 min-w-0">
                                 <h2 className="text-sm font-medium">Original query</h2>
                                 <Badge variant="outline" className="text-[10px] font-mono uppercase">
-                                    {sourceDialect}
+                                    {m.dialect}
                                 </Badge>
                             </div>
-                            <div className="flex items-center gap-3">
-                                <label
-                                    className="flex items-center gap-1.5 text-xs text-muted-foreground"
-                                    title={aiConfigured ? `Let ${aiStatus?.model || "the model"} refine the conversion` : "Set ZEN_API_KEY in server/.env to turn this on"}
-                                >
-                                    <Switch checked={useAi && aiConfigured} onCheckedChange={changeUseAi} disabled={!aiConfigured || isExecuting} aria-label="Use AI" />
-                                    Use AI
-                                </label>
-                                <Button size="sm" onClick={handleRun} disabled={isExecuting} className="h-8 gap-1.5 text-xs">
-                                    {isExecuting ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
-                                    {isExecuting ? "Converting…" : "Convert"}
+                            <div className="flex items-center gap-2">
+                                {m.running && (
+                                    <Button size="sm" variant="outline" onClick={m.stop} className="h-8 gap-1.5 text-xs">
+                                        <Square className="size-3" />
+                                        Stop
+                                    </Button>
+                                )}
+                                <Button size="sm" onClick={m.run} disabled={m.running || !m.sql.trim()} className="h-8 gap-1.5 text-xs" title="Convert (Ctrl or ⌘ + Enter)">
+                                    {m.running ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
+                                    {m.running ? "Converting…" : "Convert"}
                                 </Button>
                             </div>
                         </div>
-                        {useAi && aiConfigured && <p className="px-3 py-1.5 text-[11px] text-muted-foreground border-b bg-muted/30">With AI on, the query and your table and column names are sent to the model. No data is.</p>}
+                        {m.useAi && m.aiConfigured && <p className="px-3 py-1.5 text-[11px] text-muted-foreground border-b bg-muted/30">If the rules can't finish, the query and your table and column names are sent to the model. No data is.</p>}
                         <div className="flex-1 min-h-0 p-1">
-                            <CodeEditor value={legacySql} onChange={(value) => setLegacySql(value)} className="h-full font-mono text-xs" />
+                            <CodeEditor
+                                value={m.sql}
+                                onChange={m.setSql}
+                                onRun={() => void m.run()}
+                                ghostText={m.ghostText}
+                                placeholder={`Paste a query written for ${dialectLabel} here.\n\n${hasTables ? "" : "Once this project has tables, an example built from them appears here too."}`.trim()}
+                                className="h-full font-mono text-xs"
+                            />
                         </div>
                     </section>
 
                     <section className="flex flex-col rounded-lg border bg-card overflow-hidden min-h-[360px] lg:min-h-0">
-                        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex flex-col flex-1 min-h-0 gap-0">
+                        <Tabs value={m.tab} onValueChange={m.setTab} className="flex flex-col flex-1 min-h-0 gap-0">
                             <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-1.5 border-b">
                                 <TabsList className="h-8">
-                                    <TabsTrigger value="sql" className="text-xs px-2.5">
+                                    <TabsTrigger value="result" className="text-xs px-2.5">
                                         Result
                                     </TabsTrigger>
-                                    <TabsTrigger value="steps" className="text-xs px-2.5">
-                                        Steps
+                                    <TabsTrigger value="checks" className="text-xs px-2.5">
+                                        Checks
+                                        {outcome && checkCount > 0 && <span className="ml-1 text-muted-foreground">{checkCount}</span>}
+                                    </TabsTrigger>
+                                    <TabsTrigger value="changes" className="text-xs px-2.5">
+                                        Changes
+                                        {outcome && outcome.engine.applied.length > 0 && <span className="ml-1 text-muted-foreground">{outcome.engine.applied.length}</span>}
+                                    </TabsTrigger>
+                                    <TabsTrigger value="compare" className="text-xs px-2.5">
+                                        Compare
                                     </TabsTrigger>
                                     <TabsTrigger value="indexes" className="text-xs px-2.5">
                                         Indexes
-                                        {result && result.indexRecommendations.length > 0 && <span className="ml-1 text-muted-foreground">{result.indexRecommendations.length}</span>}
-                                    </TabsTrigger>
-                                    <TabsTrigger value="diff" className="text-xs px-2.5">
-                                        Review
-                                        {result && <span className="ml-1 text-muted-foreground">{result.confidenceScore}%</span>}
+                                        {outcome && indexCount > 0 && <span className="ml-1 text-muted-foreground">{indexCount}</span>}
                                     </TabsTrigger>
                                 </TabsList>
-
-                                {activeTab === "sql" && resultSql && (
-                                    <div className="flex items-center gap-1.5">
-                                        <Button size="sm" variant="outline" onClick={() => openInSqlEditor(resultSql, "Modernizer")} className="h-8 gap-1.5 text-xs" title="Run it against a live PostgreSQL connection">
-                                            <Terminal className="size-3.5" />
-                                            Open in SQL Editor
-                                        </Button>
-                                        <Button size="sm" variant="outline" onClick={handleCopy} className="h-8 gap-1.5 text-xs">
-                                            {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                                            Copy
-                                        </Button>
-                                    </div>
-                                )}
+                                {m.running && <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground"><Loader2 className="size-3 animate-spin" />{m.stage}…</span>}
                             </div>
 
                             <div className="flex-1 min-h-0 overflow-y-auto p-2">
-                                <TabsContent value="sql" className="m-0 h-full flex flex-col gap-2">
-                                    {result ? (
-                                        <>
-                                            <p className="text-[11px] text-muted-foreground px-1">
-                                                {result.source === "ai" ? `Converted by AI${result.aiModel ? ` (${result.aiModel})` : ""} and checked by the rules.` : "Converted by the built-in rules."}
-                                                {result.aiNotice && <span className="text-amber-600 dark:text-amber-400"> {result.aiNotice}</span>}
-                                            </p>
-                                            <div className="flex-1 min-h-[200px]">
-                                                <CodeEditor value={result.optimizedSql} readOnly={true} className="h-full font-mono text-xs border-0" />
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <div className="flex flex-col items-center justify-center h-full text-center p-6 text-muted-foreground">
-                                            <Code2 className="size-8 mb-3 opacity-40" aria-hidden="true" />
-                                            <p className="text-sm font-medium text-foreground">No result yet</p>
-                                            <p className="text-xs mt-1 max-w-sm">Choose Convert to translate the query, check it against your tables, and look for slow patterns.</p>
-                                        </div>
-                                    )}
-                                </TabsContent>
-
-                                <TabsContent value="steps" className="m-0">
-                                    <AgentTimeline traces={result ? result.agentTraces : liveTraces} isExecuting={isExecuting} />
-                                </TabsContent>
-
-                                <TabsContent value="indexes" className="m-0">
-                                    <IndexRecommendations recommendations={result ? result.indexRecommendations : []} />
-                                </TabsContent>
-
-                                <TabsContent value="diff" className="m-0">
-                                    {result ? <DiffView result={result} /> : <div className="flex items-center justify-center h-48 text-muted-foreground text-xs">Convert a query to see what changed.</div>}
-                                </TabsContent>
+                                {outcome ? (
+                                    <>
+                                        <TabsContent value="result" className="m-0 h-full">
+                                            <ResultPanel outcome={outcome} preview={m.preview} previewBlocker={m.previewBlocker} onPreview={m.runPreview} onShowChecks={() => m.setTab("checks")} />
+                                        </TabsContent>
+                                        <TabsContent value="checks" className="m-0">
+                                            <ChecksPanel outcome={outcome} hasTables={hasTables} />
+                                        </TabsContent>
+                                        <TabsContent value="changes" className="m-0">
+                                            <ChangesPanel outcome={outcome} />
+                                        </TabsContent>
+                                        <TabsContent value="compare" className="m-0">
+                                            <CompareView original={outcome.original} converted={outcome.sql} />
+                                        </TabsContent>
+                                        <TabsContent value="indexes" className="m-0">
+                                            <IndexRecommendations advice={outcome.advice} hasTables={hasTables} />
+                                        </TabsContent>
+                                    </>
+                                ) : (
+                                    <EmptyState hasExample={!!m.ghostText} />
+                                )}
                             </div>
                         </Tabs>
                     </section>
@@ -348,5 +174,18 @@ const QueryModernizerPage: React.FC = () => {
         </div>
     );
 };
+
+const EmptyState: React.FC<{ hasExample: boolean }> = ({ hasExample }) => (
+    <div className="flex h-full flex-col justify-center gap-3 p-6 text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">What happens when you press Convert</p>
+        <ol className="list-decimal space-y-2 pl-5 text-xs leading-relaxed">
+            <li>Fixed rules rewrite the old-style parts of the query for PostgreSQL: NVL and DECODE, (+) joins, TOP and ROWNUM, backticks, date functions and so on.</li>
+            <li>If you choose a connection, PostgreSQL itself says whether it accepts the result: whether the tables, columns and functions exist and the types fit. Nothing is run.</li>
+            <li>Whatever it could not convert, and whatever behaves differently in PostgreSQL, is listed. It is not guessed.</li>
+        </ol>
+        <p className="text-xs leading-relaxed">It can't prove the new query returns the same rows. Run the old and the new one on the same data and compare.</p>
+        <p className="text-xs leading-relaxed">{hasExample ? "Click into the editor and press Tab to see an example written from your own tables." : "Paste a query to start."}</p>
+    </div>
+);
 
 export default QueryModernizerPage;
