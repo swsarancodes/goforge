@@ -19,7 +19,7 @@ export interface JudgeOutput {
 /**
  * Computes line-based additions and deletions
  */
-function computeDiffMetrics(originalSql: string, finalSql: string): { additions: number; deletions: number } {
+export function computeDiffMetrics(originalSql: string, finalSql: string): { additions: number; deletions: number } {
     const origLines = originalSql.split("\n").map(l => l.trim()).filter(Boolean);
     const finalLines = finalSql.split("\n").map(l => l.trim()).filter(Boolean);
 
@@ -38,7 +38,7 @@ function computeDiffMetrics(originalSql: string, finalSql: string): { additions:
 /**
  * Generates an automated verification query to prove runtime data equivalence
  */
-function generateVerificationQuery(finalSql: string): string {
+export function generateVerificationQuery(finalSql: string): string {
     const cleanSql = finalSql.replace(/;?\s*$/, "");
     return `-- Automated Equivalence Verification Probe
 -- Run this on the target database to verify row count and data integrity checksum:

@@ -1,11 +1,12 @@
-import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertCircleIcon, ArrowDown, ArrowUp, ChevronLeft, ChevronRight, ChevronsUpDown, Database, KeyRound, RefreshCw } from "lucide-react";
+import { AlertCircleIcon, ChevronLeft, ChevronRight, Database, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useDelayedFlag } from "@/hooks/use-delayed-flag";
 import { cn } from "@/lib/utils";
+import { RowsTable, RowsTableSkeleton } from "@/components/rows-table";
 import RowDetail from "./row-detail";
 import { PAGE_SIZES, type DataBrowser } from "./use-data-browser";
 
@@ -14,55 +15,6 @@ interface DataGridProps {
     /** Rendered at the start of the toolbar: the list collapse toggle (desktop) or the "Tables" button (mobile). */
     toolbarStart?: React.ReactNode;
 }
-
-const CELL_WIDTHS = ["w-24", "w-40", "w-28", "w-48", "w-20", "w-32"];
-
-/** True once `active` has stayed true for `delayMs`, so fast reloads don't flash a skeleton. */
-function useDelayedFlag(active: boolean, delayMs: number): boolean {
-    const [flag, setFlag] = useState<boolean>(false);
-    useEffect(() => {
-        if (!active) {
-            setFlag(false);
-            return;
-        }
-        const id = setTimeout(() => setFlag(true), delayMs);
-        return () => clearTimeout(id);
-    }, [active, delayMs]);
-    return flag;
-}
-
-/** Placeholder table with the same structure as the real grid (row numbers, header, cells) while rows load. */
-const GridSkeleton: React.FC<{ columnCount?: number; rowCount?: number }> = ({ columnCount = 6, rowCount = 14 }) => (
-    <table role="status" aria-busy="true" className="w-max min-w-full text-xs border-separate border-spacing-0">
-        <caption className="sr-only">Loading rows</caption>
-        <thead>
-            <tr>
-                <th className="bg-card border-b px-2 py-3">
-                    <Skeleton className="h-3 w-4 ml-auto" />
-                </th>
-                {Array.from({ length: columnCount }, (_, column) => (
-                    <th key={column} className="bg-card border-b px-3 py-3 text-left">
-                        <Skeleton className={cn("h-3.5", CELL_WIDTHS[(column + 2) % CELL_WIDTHS.length])} />
-                    </th>
-                ))}
-            </tr>
-        </thead>
-        <tbody>
-            {Array.from({ length: rowCount }, (_, row) => (
-                <tr key={row}>
-                    <td className="border-b px-2 py-3">
-                        <Skeleton className="h-3 w-4 ml-auto" />
-                    </td>
-                    {Array.from({ length: columnCount }, (_, column) => (
-                        <td key={column} className="border-b px-3 py-3 min-w-36">
-                            <Skeleton className={cn("h-3", CELL_WIDTHS[(row + column) % CELL_WIDTHS.length])} />
-                        </td>
-                    ))}
-                </tr>
-            ))}
-        </tbody>
-    </table>
-);
 
 /** Toolbar, rows grid and pager for the selected table or view (or the row detail view). */
 const DataGrid: React.FC<DataGridProps> = ({ browser, toolbarStart }) => {
@@ -110,7 +62,7 @@ const DataGrid: React.FC<DataGridProps> = ({ browser, toolbarStart }) => {
 
             {!selected && isBusy && (
                 <div className="flex-1 min-h-0 overflow-hidden">
-                    <GridSkeleton />
+                    <RowsTableSkeleton />
                 </div>
             )}
 
@@ -132,69 +84,17 @@ const DataGrid: React.FC<DataGridProps> = ({ browser, toolbarStart }) => {
             {selected && !browser.showingDetail && (
                 <>
                     <div className={cn("flex-1 min-h-0 overflow-auto transition-opacity", browser.isLoadingPage && page && !isSlowReload && "opacity-60")}>
-                        {showSkeleton && <GridSkeleton columnCount={page ? Math.min(page.columns.length, 10) : 6} rowCount={page ? Math.min(Math.max(page.rows.length, 8), 20) : 14} />}
+                        {showSkeleton && <RowsTableSkeleton columnCount={page ? Math.min(page.columns.length, 10) : 6} rowCount={page ? Math.min(Math.max(page.rows.length, 8), 20) : 14} />}
                         {!showSkeleton && page && (
-                            <table className="w-max min-w-full text-xs border-separate border-spacing-0">
-                                <thead>
-                                    <tr>
-                                        <th className="sticky top-0 z-10 bg-card border-b px-2 py-2 text-right font-normal text-muted-foreground">#</th>
-                                        {page.columns.map((column) => {
-                                            const active = sort?.column === column.name;
-                                            return (
-                                                <th key={column.name} className="sticky top-0 z-10 bg-card border-b p-0 text-left font-medium whitespace-nowrap">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => browser.sortBy(column.name)}
-                                                        className="flex w-full items-center gap-1 px-3 py-2 text-left hover:bg-accent"
-                                                        title={`${column.name} (${column.dataType})`}
-                                                    >
-                                                        {column.isPrimaryKey && <KeyRound className="size-3 shrink-0 text-muted-foreground" />}
-                                                        <span>{column.name}</span>
-                                                        <span className="font-normal text-muted-foreground">{column.dataType}</span>
-                                                        {active && sort?.dir === "asc" ? (
-                                                            <ArrowUp className="size-3 shrink-0" />
-                                                        ) : active && sort?.dir === "desc" ? (
-                                                            <ArrowDown className="size-3 shrink-0" />
-                                                        ) : (
-                                                            <ChevronsUpDown className="size-3 shrink-0 text-muted-foreground/50" />
-                                                        )}
-                                                    </button>
-                                                </th>
-                                            );
-                                        })}
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {formatted.map((row, rowIndex) => (
-                                        <tr key={rowIndex} className="hover:bg-accent/50 cursor-pointer" onClick={() => browser.setDetailRow(rowIndex)}>
-                                            <td className="border-b px-2 py-1.5 text-right text-muted-foreground tabular-nums">{page.offset + rowIndex + 1}</td>
-                                            {row.map(({ cell, truncated }, columnIndex) => (
-                                                <td
-                                                    key={columnIndex}
-                                                    title={cell.kind === "null" ? "SQL NULL" : cell.full.slice(0, 500)}
-                                                    className={cn(
-                                                        "border-b px-3 py-1.5 max-w-[360px] truncate font-mono",
-                                                        cell.align === "right" && "text-right",
-                                                        cell.kind === "null" && "italic text-muted-foreground",
-                                                    )}
-                                                >
-                                                    {/* An empty string is a value, not NULL: make it visible. */}
-                                                    {cell.kind !== "null" && cell.full === "" ? <span className="text-muted-foreground">""</span> : cell.display}
-                                                    {cell.meta && <span className="ml-1 text-muted-foreground">({cell.meta})</span>}
-                                                    {truncated && <span className="ml-1 text-muted-foreground">…</span>}
-                                                </td>
-                                            ))}
-                                        </tr>
-                                    ))}
-                                    {formatted.length === 0 && (
-                                        <tr>
-                                            <td colSpan={page.columns.length + 1} className="px-3 py-6 text-center text-muted-foreground">
-                                                {t("data_browser.empty", { defaultValue: "This table has no rows." })}
-                                            </td>
-                                        </tr>
-                                    )}
-                                </tbody>
-                            </table>
+                            <RowsTable
+                                columns={page.columns}
+                                rows={formatted}
+                                firstRowNumber={page.offset + 1}
+                                sort={sort}
+                                onSort={browser.sortBy}
+                                onRowClick={browser.setDetailRow}
+                                emptyText={t("data_browser.empty", { defaultValue: "This table has no rows." })}
+                            />
                         )}
                     </div>
 

@@ -1,126 +1,93 @@
 import React from "react";
-import { ModernizeResponse } from "../types";
+import { Copy } from "lucide-react";
+import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ShieldCheck, AlertTriangle, CheckCircle, Copy, Check, Terminal } from "lucide-react";
-import { useState } from "react";
-import { toast } from "sonner";
+import { ModernizeResponse } from "../types";
 
 interface DiffViewProps {
     result: ModernizeResponse;
 }
 
-export const DiffView: React.FC<DiffViewProps> = ({ result }) => {
-    const [copied, setCopied] = useState(false);
+const RISK_LABEL: Record<ModernizeResponse["riskLevel"], string> = {
+    low: "Low risk",
+    medium: "Review before using",
+    high: "Check by hand",
+};
 
-    const handleCopyVerification = () => {
+const List: React.FC<{ title: string; items: string[] }> = ({ title, items }) =>
+    items.length === 0 ? null : (
+        <div className="rounded-lg border bg-card p-3">
+            <h4 className="text-xs font-medium text-foreground mb-2">{title}</h4>
+            <ul className="space-y-1.5 pl-1">
+                {items.map((item, index) => (
+                    <li key={index} className="text-xs text-muted-foreground flex items-start gap-2">
+                        <span aria-hidden="true">•</span>
+                        <span className="min-w-0 break-words">{item}</span>
+                    </li>
+                ))}
+            </ul>
+        </div>
+    );
+
+/** What changed and what to double check. Nothing here proves the two queries return the same rows. */
+export const DiffView: React.FC<DiffViewProps> = ({ result }) => {
+    const copyCheck = async () => {
         if (!result.verificationSql) return;
-        navigator.clipboard.writeText(result.verificationSql);
-        setCopied(true);
-        toast.success("Verification query copied to clipboard!");
-        setTimeout(() => setCopied(false), 2000);
+        try {
+            await navigator.clipboard.writeText(result.verificationSql);
+            toast.success("Query copied");
+        } catch {
+            toast.error("Couldn't copy. The browser blocked clipboard access.");
+        }
     };
 
-    const isLowRisk = result.riskLevel === "low";
-    const isMediumRisk = result.riskLevel === "medium";
+    const { validationReport } = result;
 
     return (
-        <div className="flex flex-col gap-4 p-1">
-            {/* Top Score Banner */}
+        <div className="flex flex-col gap-3 p-1">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-lg border border-border/60 bg-card/60 p-3 flex items-center justify-between">
-                    <div>
-                        <span className="text-[11px] text-muted-foreground uppercase font-semibold">
-                            Equivalence Score
-                        </span>
-                        <div className="text-xl font-bold text-foreground mt-0.5">
-                            {result.confidenceScore}%
-                        </div>
-                    </div>
-                    <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-xs">
-                        <CheckCircle className="h-3.5 w-3.5 mr-1" />
-                        Verified Parity
-                    </Badge>
+                <div className="rounded-lg border bg-card p-3">
+                    <span className="text-[11px] text-muted-foreground">Confidence</span>
+                    <div className="text-xl font-semibold mt-0.5">{result.confidenceScore}%</div>
+                    <span className="text-[11px] text-muted-foreground">An estimate from the checks below, not a proof.</span>
                 </div>
-
-                <div className="rounded-lg border border-border/60 bg-card/60 p-3 flex items-center justify-between">
-                    <div>
-                        <span className="text-[11px] text-muted-foreground uppercase font-semibold">
-                            Risk Classification
-                        </span>
-                        <div className="text-xl font-bold uppercase text-foreground mt-0.5">
-                            {result.riskLevel}
-                        </div>
+                <div className="rounded-lg border bg-card p-3">
+                    <span className="text-[11px] text-muted-foreground">Risk</span>
+                    <div className="mt-1">
+                        <Badge variant="outline" className={result.riskLevel === "high" ? "border-destructive/50 text-destructive" : result.riskLevel === "medium" ? "border-amber-500/50 text-amber-600 dark:text-amber-400" : ""}>
+                            {RISK_LABEL[result.riskLevel]}
+                        </Badge>
                     </div>
-                    <Badge
-                        variant="outline"
-                        className={
-                            isLowRisk
-                                ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/30 text-xs"
-                                : isMediumRisk
-                                ? "bg-amber-500/10 text-amber-500 border-amber-500/30 text-xs"
-                                : "bg-red-500/10 text-red-500 border-red-500/30 text-xs"
-                        }
-                    >
-                        {isLowRisk ? <ShieldCheck className="h-3.5 w-3.5 mr-1" /> : <AlertTriangle className="h-3.5 w-3.5 mr-1" />}
-                        {isLowRisk ? "Safe for Staging" : isMediumRisk ? "Review Recommended" : "Manual Check"}
-                    </Badge>
                 </div>
-
-                <div className="rounded-lg border border-border/60 bg-card/60 p-3 flex items-center justify-between">
-                    <div>
-                        <span className="text-[11px] text-muted-foreground uppercase font-semibold">
-                            Code Diff Delta
-                        </span>
-                        <div className="flex items-center gap-2 mt-0.5">
-                            <span className="text-emerald-500 font-bold font-mono text-sm">+{result.diff.additions}</span>
-                            <span className="text-rose-500 font-bold font-mono text-sm">-{result.diff.deletions}</span>
-                        </div>
+                <div className="rounded-lg border bg-card p-3">
+                    <span className="text-[11px] text-muted-foreground">Lines changed</span>
+                    <div className="flex items-center gap-2 mt-0.5 font-mono text-sm">
+                        <span className="text-emerald-600 dark:text-emerald-400">+{result.diff.additions}</span>
+                        <span className="text-rose-600 dark:text-rose-400">-{result.diff.deletions}</span>
                     </div>
-                    <span className="text-[11px] text-muted-foreground font-mono">
-                        {result.transformationsSummary.length} transforms
-                    </span>
                 </div>
             </div>
 
-            {/* Transformations Breakdown */}
-            <div className="rounded-lg border border-border/60 bg-card/60 p-3">
-                <h4 className="text-xs font-semibold text-foreground uppercase tracking-wider mb-2">
-                    Applied Agentic Transformations
-                </h4>
-                <ul className="space-y-1.5 pl-1">
-                    {result.transformationsSummary.map((trans, i) => (
-                        <li key={i} className="text-xs text-muted-foreground flex items-start gap-2">
-                            <span className="text-emerald-500 font-bold">•</span>
-                            <span>{trans}</span>
-                        </li>
-                    ))}
-                </ul>
-            </div>
+            {result.aiNotice && <p className="text-xs text-muted-foreground rounded-lg border border-amber-500/40 bg-amber-500/5 p-3">{result.aiNotice}</p>}
+            {result.aiSummary && <p className="text-xs text-muted-foreground px-1">{result.aiSummary}</p>}
 
-            {/* Verification Probe */}
+            <List title="What changed" items={result.transformationsSummary} />
+            <List title="Not converted" items={result.aiUnsupported ?? []} />
+            <List title="Things to check" items={[...(result.aiRisks ?? []), ...validationReport.schemaWarnings, ...validationReport.antiPatternsDetected]} />
+
             {result.verificationSql && (
-                <div className="rounded-lg border border-border/60 bg-card/60 p-3">
-                    <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-2">
-                            <Terminal className="h-4 w-4 text-purple-400" />
-                            <h4 className="text-xs font-semibold text-foreground uppercase tracking-wider">
-                                Automated Runtime Equivalence Probe
-                            </h4>
+                <div className="rounded-lg border bg-card p-3">
+                    <div className="flex items-center justify-between gap-2 mb-2">
+                        <div>
+                            <h4 className="text-xs font-medium text-foreground">Check on your database</h4>
+                            <p className="text-[11px] text-muted-foreground">Counts the rows the converted query returns. Compare with the original on the same data.</p>
                         </div>
-                        <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={handleCopyVerification}
-                            className="h-7 text-xs gap-1.5"
-                        >
-                            {copied ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
-                            Copy Probe
+                        <Button size="sm" variant="outline" onClick={copyCheck} className="h-7 text-xs gap-1.5 shrink-0">
+                            <Copy className="size-3.5" /> Copy
                         </Button>
                     </div>
-                    <pre className="font-mono text-[11px] text-muted-foreground bg-muted/40 p-2.5 rounded-md overflow-x-auto select-all">
-                        {result.verificationSql}
-                    </pre>
+                    <pre className="font-mono text-[11px] text-muted-foreground bg-muted/40 p-2.5 rounded-md overflow-x-auto select-all">{result.verificationSql}</pre>
                 </div>
             )}
         </div>

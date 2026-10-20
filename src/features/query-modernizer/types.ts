@@ -1,7 +1,7 @@
 export type LegacyDialect = "oracle" | "mssql" | "mysql" | "db2" | "sqlite";
 export type TargetDialect = "postgresql" | "mysql" | "sqlite" | "oracle" | "mssql";
 
-export type AgentStepId = "mapper" | "transpiler" | "validator" | "optimizer" | "judge";
+export type AgentStepId = "mapper" | "transpiler" | "validator" | "optimizer" | "judge" | "ai";
 export type AgentStatus = "idle" | "running" | "success" | "warning" | "error" | "retrying";
 
 export interface AgentTrace {
@@ -79,6 +79,24 @@ export interface ModernizeResponse {
     transformationsSummary: string[];
     validationReport: ValidationReport;
     verificationSql?: string;
+    /** Who produced `optimizedSql`: the built-in rules, or the language model (always checked by the rules afterwards). */
+    source?: "rules" | "ai";
+    aiModel?: string;
+    aiSummary?: string;
+    aiRisks?: string[];
+    aiUnsupported?: string[];
+    /** Why the AI result isn't what is shown (not configured, failed, or failed validation). */
+    aiNotice?: string;
+}
+
+/** What the language model returns for one query (already validated by the server). */
+export interface AiConversion {
+    sql: string;
+    summary: string;
+    changes: string[];
+    risks: string[];
+    unsupported: string[];
+    indexSuggestions: { tableName: string; columns: string[]; unique?: boolean; reason: string }[];
 }
 
 export interface EnterpriseSampleQuery {

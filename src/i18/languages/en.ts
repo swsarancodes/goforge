@@ -10,6 +10,7 @@ export const en = {
             ai_schema: "AI Schema",
             data: "Data",
             modernizer: "Modernizer",
+            sql_editor: "SQL Editor",
             database: "Database",
             documentation: "Docs"
         },

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import useToast from "@/hooks/use-toast";
 import { RelationInfo, SavedConnection, TableDataPage, fetchRelations, fetchTableRows, listSavedConnections, warmConnection } from "@/lib/live-connection-api";
-import { FormattedCell, formatCell } from "@/utils/data-view/format-cell";
+import { formatRows, type FormattedRowCell } from "@/utils/data-view/format-rows";
 import { Relation, buildRelations } from "@/utils/data-view/relations";
 import { PageKeyParts, connectionPrefix, loadStoredRelations, pageCache, pageKey, storeRelations } from "./data-cache";
 
@@ -17,11 +17,6 @@ const PREFETCH_MAX_ESTIMATE = 100_000;
 const KEEP_ALIVE_MS = 45_000;
 
 export type SortState = { column: string; dir: "asc" | "desc" } | undefined;
-
-export interface FormattedRowCell {
-    cell: FormattedCell;
-    truncated: boolean;
-}
 
 interface Remembered {
     connectionId?: string;
@@ -409,17 +404,7 @@ export function useDataBrowser() {
         [raise, t],
     );
 
-    const formatted = useMemo<FormattedRowCell[][]>(() => {
-        if (!page) return [];
-        const columnCount = page.columns.length;
-        const truncated = new Set(page.truncatedCells.map(([row, column]) => row * columnCount + column));
-        return page.rows.map((row, rowIndex) =>
-            row.map((value, columnIndex) => {
-                const isTruncated = truncated.has(rowIndex * columnCount + columnIndex);
-                return { cell: formatCell(page.columns[columnIndex].dataType, value, isTruncated), truncated: isTruncated };
-            }),
-        );
-    }, [page]);
+    const formatted = useMemo<FormattedRowCell[][]>(() => (page ? formatRows(page.columns, page.rows, page.truncatedCells) : []), [page]);
 
     const copyRowAsJson = useCallback(
         (rowIndex: number) => {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
 import { toast } from "sonner";
 import { useTheme } from "@/providers/theme-provider/theme-provider";
@@ -122,8 +122,28 @@ const createEditorRuntime = async () => {
         ]),
     );
 
+    /**
+     * Cmd/Ctrl+Enter. The handler gets the selected text (empty when nothing is selected) and is looked up on every key
+     * press, so the editor never has to be rebuilt when the caller's callback changes.
+     */
+    const runKeymap = (getHandler: () => ((selectedText: string) => void) | undefined) =>
+        state.Prec.highest(
+            view.keymap.of([
+                {
+                    key: "Mod-Enter",
+                    run: (editorView) => {
+                        const handler = getHandler();
+                        if (!handler) return false;
+                        handler(selectedText(editorView));
+                        return true;
+                    },
+                },
+            ]),
+        );
+
     return {
         CodeMirror: codeMirror.default,
+        runKeymap,
         extensions: [sqlLanguage.sql(), editorKeyBoundary, macCtrlKeymap],
         darkTheme: [codeMirror.oneDark, darkOverride],
         lightTheme,
@@ -145,10 +165,17 @@ interface CodeEditorProps {
     readOnly?: boolean;
     onChange?: (sql: string) => void;
     autoFocus?: boolean;
+    /** Called on Cmd/Ctrl+Enter with the selected text (empty when there is no selection). */
+    onRun?: (selectedText: string) => void;
+    /** Gives the caller the CodeMirror view (to read the selection, move the cursor, ...). */
+    onCreateEditor?: (view: EditorView) => void;
 }
 
-const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className, readOnly = false, onChange, autoFocus = false }) => {
+const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className, readOnly = false, onChange, autoFocus = false, onRun, onCreateEditor }) => {
     const [editor, setEditor] = useState<EditorRuntime | null>(null);
+    const onRunRef = useRef(onRun);
+    onRunRef.current = onRun;
+    const runExtensions = useMemo(() => (editor && onRun ? [editor.runKeymap(() => onRunRef.current)] : []), [editor, onRun !== undefined]);
 
     useEffect(() => {
         let mounted = true;
@@ -181,7 +208,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
             // in via `selectable` - without it, drag-select, Cmd/Ctrl+A and
             // copy are all suppressed inside the SQL text.
             className={cn("selectable flex flex-1 w-full min-h-9 rounded-sm  h-full   bg-card border-1 border-border  !min-w-0 overflow-hidden", className)}
-            extensions={extensions}
+            extensions={runExtensions.length ? [...extensions, ...runExtensions] : extensions}
             readOnly={readOnly}
             autoFocus={autoFocus}
             onCreateEditor={(view) => {
@@ -190,6 +217,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
                 // explicitly once the editor has been created so select-all,
                 // paste, and delete operate on SQL text.
                 if (autoFocus) view.focus();
+                onCreateEditor?.(view);
             }}
             onKeyDown={(event) => {
                 // CodeMirror handles native editing at the contenteditable

@@ -1,6 +1,6 @@
 import React from "react";
 import { AgentTrace } from "../types";
-import { CheckCircle2, Clock, AlertCircle, RefreshCw, Sparkles, Database, Code2, ShieldCheck, Zap, Scale } from "lucide-react";
+import { CheckCircle2, Clock, AlertCircle, RefreshCw, Database, Code2, ShieldCheck, Zap, Scale } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
 interface AgentTimelineProps {
@@ -15,6 +15,7 @@ const AGENT_ICONS: Record<string, React.ReactNode> = {
     validator: <ShieldCheck className="h-4 w-4 text-emerald-400" />,
     optimizer: <Zap className="h-4 w-4 text-amber-400" />,
     judge: <Scale className="h-4 w-4 text-purple-400" />,
+    ai: <Code2 className="h-4 w-4 text-muted-foreground" />,
 };
 
 export const AgentTimeline: React.FC<AgentTimelineProps> = ({ traces, isExecuting }) => {
@@ -48,7 +49,7 @@ export const AgentTimeline: React.FC<AgentTimelineProps> = ({ traces, isExecutin
                             <div className="flex items-start justify-between gap-2">
                                 <div className="flex items-center gap-2.5">
                                     <div className="p-1.5 rounded-md bg-muted/60 border border-border/40">
-                                        {AGENT_ICONS[trace.agentId] || <Sparkles className="h-4 w-4 text-muted-foreground" />}
+                                        {AGENT_ICONS[trace.agentId] || <Code2 className="h-4 w-4 text-muted-foreground" />}
                                     </div>
                                     <div>
                                         <div className="flex items-center gap-2">
