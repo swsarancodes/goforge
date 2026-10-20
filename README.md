@@ -66,6 +66,8 @@ bun run dev
 
 Keep `ZEN_API_KEY` server-side. Never add it to a `VITE_*` variable or commit `server/.env`.
 
+The API can run SQL against your saved databases (SQL Editor, Push Changes), so it only listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` in `server/.env` if you really need to reach it from another machine; the Docker setup does this inside its private network, where the port is not published.
+
 The AI workflow sends schema metadata (table, column, relationship, and index definitions) to Zen. It does not send database rows or saved connection credentials. The default contributor-free Zen model may use prompts and completions to improve future models, so review its data policy before using sensitive schema names.
 
 ### How to Build

@@ -6,6 +6,7 @@ import { insertConnection, listConnections, getConnection, deleteConnection, typ
 import { toConnectionConfig, withPgClient } from "../services/pg-client.js";
 import { catalogCache } from "../services/catalog-cache.js";
 import { closeReadPool } from "../services/pg-pool.js";
+import { sqlSessions } from "../services/sql-sessions.js";
 
 export const connectionsRouter = Router();
 
@@ -73,6 +74,7 @@ connectionsRouter.delete("/:id", async (req, res) => {
     // Drop any open browsing connections (and the password they hold) along with the saved connection.
     catalogCache.clear(req.params.id);
     await closeReadPool(req.params.id);
+    await sqlSessions.closeForConnection(req.params.id);
     res.status(204).end();
 });
 

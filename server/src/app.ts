@@ -7,8 +7,8 @@ import { previewRouter } from "./routes/preview.js";
 import { executeRouter } from "./routes/execute.js";
 import { dataRouter } from "./routes/data.js";
 import { relationsRouter } from "./routes/relations.js";
+import { sqlRouter } from "./routes/sql.js";
 import { aiRouter } from "./routes/ai.js";
-import { modernizeRouter } from "./routes/modernize.js";
 
 export function createApp() {
     const app = express();
@@ -25,8 +25,8 @@ export function createApp() {
     app.use("/api/connections", executeRouter);
     app.use("/api/connections", dataRouter);
     app.use("/api/connections", relationsRouter);
+    app.use("/api/connections", sqlRouter);
     app.use("/api/ai", aiRouter);
-    app.use("/api/modernize", modernizeRouter);
 
     return app;
 }

@@ -28,6 +28,8 @@ services:
     restart: unless-stopped
     environment:
       - PORT=4000
+      # Reachable only from the nginx container on the compose network; the port is not published.
+      - HOST=0.0.0.0
       # Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
       - MASTER_KEY=${GOFORGE_MASTER_KEY}
       - CORS_ORIGIN=http://localhost:8080

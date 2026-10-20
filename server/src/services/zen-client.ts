@@ -195,16 +195,33 @@ function buildInstructions(request: AiSchemaPlanRequest): string {
     ].join("\n");
 }
 
-export async function createZenSchemaPlan(
-    request: AiSchemaPlanRequest,
-    requestSignal?: AbortSignal,
-): Promise<{ plan: AiSchemaPlan; model: string }> {
+export interface ZenCall {
+    instructions: string;
+    /** Sent as the model input (objects are JSON encoded). */
+    input: unknown;
+    maxOutputTokens?: number;
+    signal?: AbortSignal;
+}
+
+/** Whether a Zen API key is configured, and which model would be used. Never exposes the key. */
+export function getZenStatus(): { configured: boolean; model: string } {
+    return {
+        configured: Boolean(process.env.ZEN_API_KEY?.trim()),
+        model: process.env.ZEN_MODEL?.trim() || DEFAULT_MODEL,
+    };
+}
+
+/**
+ * One request to the Zen model: sends instructions + input, returns the parsed JSON object the model answered with.
+ * Throws "ZEN_API_KEY is not configured on the server" without a key, and "Zen request timed out" on timeout/abort.
+ */
+export async function callZenJson(call: ZenCall): Promise<{ output: unknown; model: string }> {
     const config = getConfig();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), config.timeoutMs);
     const cancelRequest = () => controller.abort();
-    if (requestSignal?.aborted) cancelRequest();
-    else requestSignal?.addEventListener("abort", cancelRequest, { once: true });
+    if (call.signal?.aborted) cancelRequest();
+    else call.signal?.addEventListener("abort", cancelRequest, { once: true });
 
     try {
         const response = await fetch(`${config.baseUrl}/responses`, {
@@ -216,20 +233,9 @@ export async function createZenSchemaPlan(
             body: JSON.stringify({
                 model: config.model,
                 store: false,
-                max_output_tokens: 8_000,
-                instructions: buildInstructions(request),
-                input: JSON.stringify({
-                    userRequest: request.prompt,
-                    scope: request.scope,
-                    currentSchema: {
-                        databaseName: request.databaseName,
-                        dialect: request.dialect,
-                        tables: request.tables,
-                        relationships: request.relationships,
-                    },
-                    selectedTables: request.selectedTables ?? [],
-                    allowedDataTypes: request.allowedDataTypes,
-                }),
+                max_output_tokens: call.maxOutputTokens ?? 8_000,
+                instructions: call.instructions,
+                input: typeof call.input === "string" ? call.input : JSON.stringify(call.input),
             }),
             signal: controller.signal,
         });
@@ -246,18 +252,42 @@ export async function createZenSchemaPlan(
             throw new Error(body.error?.message || `Zen request failed with status ${response.status}`);
         }
 
-        const parsed = aiSchemaPlanSchema.safeParse(normalizePlanOutput(parseJsonOutput(extractOutputText(body))));
-        if (!parsed.success) {
-            const details = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
-            throw new Error(`Zen returned an invalid schema plan: ${details}`);
-        }
-
-        return { plan: parsed.data, model: config.model };
+        return { output: parseJsonOutput(extractOutputText(body)), model: config.model };
     } catch (error) {
         if (error instanceof Error && error.name === "AbortError") throw new Error("Zen request timed out");
         throw error;
     } finally {
         clearTimeout(timeout);
-        requestSignal?.removeEventListener("abort", cancelRequest);
+        call.signal?.removeEventListener("abort", cancelRequest);
     }
+}
+
+export async function createZenSchemaPlan(
+    request: AiSchemaPlanRequest,
+    requestSignal?: AbortSignal,
+): Promise<{ plan: AiSchemaPlan; model: string }> {
+    const { output, model } = await callZenJson({
+        instructions: buildInstructions(request),
+        input: {
+            userRequest: request.prompt,
+            scope: request.scope,
+            currentSchema: {
+                databaseName: request.databaseName,
+                dialect: request.dialect,
+                tables: request.tables,
+                relationships: request.relationships,
+            },
+            selectedTables: request.selectedTables ?? [],
+            allowedDataTypes: request.allowedDataTypes,
+        },
+        signal: requestSignal,
+    });
+
+    const parsed = aiSchemaPlanSchema.safeParse(normalizePlanOutput(output));
+    if (!parsed.success) {
+        const details = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
+        throw new Error(`Zen returned an invalid schema plan: ${details}`);
+    }
+
+    return { plan: parsed.data, model };
 }

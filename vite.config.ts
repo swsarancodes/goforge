@@ -13,7 +13,7 @@ export default defineConfig({
     proxy: {
       // goforge-api (live database connections) - runs separately via
       // `bun run dev` in server/, defaults to :4000.
-      '/api': 'http://localhost:4000'
+      '/api': 'http://127.0.0.1:4000'
     }
   } ,
   optimizeDeps: {
