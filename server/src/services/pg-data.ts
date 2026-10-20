@@ -1,12 +1,13 @@
-import type { Client } from "pg";
+import { runReadOnly, type Queryable } from "./pg-read.js";
+import { loadRelationMeta, type RelationMeta, type RelKind } from "./pg-relations.js";
+import { DataRequestError, quoteIdent } from "./pg-sql.js";
+
+export { DataRequestError, quoteIdent, quoteLiteral } from "./pg-sql.js";
+export type { RelKind } from "./pg-relations.js";
 
 export const DEFAULT_LIMIT = 100;
 export const MAX_LIMIT = 500;
 export const CELL_MAX_CHARS = 4000;
-export const STATEMENT_TIMEOUT_MS = 15_000;
-
-// r = table, p = partitioned table, v = view, m = materialized view, f = foreign table
-export type RelKind = "r" | "p" | "v" | "m" | "f";
 
 export interface RelationColumn {
     name: string;
@@ -29,8 +30,8 @@ export interface RowsQueryInput {
 }
 
 export interface RowsQuery {
+    /** Self-contained SQL: LIMIT/OFFSET are validated integers, identifiers are quoted. No bound parameters. */
     text: string;
-    values: [number, number];
     limit: number;
     offset: number;
 }
@@ -57,20 +58,8 @@ export interface FetchTableRowsArgs {
     limit?: number;
     offset?: number;
     exactCount?: boolean;
-}
-
-/** A problem with what the caller asked for (unknown relation/column), as opposed to a connection or SQL failure. */
-export class DataRequestError extends Error {
-    constructor(message: string, public status = 400) {
-        super(message);
-        this.name = "DataRequestError";
-    }
-}
-
-/** Quotes a Postgres identifier. Equivalent to pg's Client#escapeIdentifier, but usable without a client. */
-export function quoteIdent(name: string): string {
-    if (name.includes("\0")) throw new DataRequestError("Identifier contains a null byte");
-    return `"${name.replace(/"/g, '""')}"`;
+    /** Catalog entry from the cache. Without it the relation is looked up first (one extra round trip). */
+    meta?: RelationMeta;
 }
 
 function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
@@ -82,13 +71,16 @@ function clampInt(value: number | undefined, fallback: number, min: number, max:
  * Builds the page query. Every column is selected as `left(col::text, N)` so values come back
  * losslessly as text regardless of type (and one huge value can't bloat the response), while
  * ORDER BY still uses the real column so numeric/date ordering is correct. Identifiers come from
- * the catalog and are quoted; the only bound values are LIMIT/OFFSET.
+ * the catalog and are quoted; LIMIT and OFFSET are clamped integers, so the whole statement can be sent
+ * as plain text in a single round trip.
  */
 export function buildRowsQuery(input: RowsQueryInput): RowsQuery {
     const { schema, table, columns, relkind, pkColumns, sort } = input;
     const dir: SortDirection = input.dir === "desc" ? "desc" : "asc";
     const limit = clampInt(input.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
     const offset = clampInt(input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+
+    if (!Number.isSafeInteger(limit) || !Number.isSafeInteger(offset)) throw new DataRequestError("Invalid limit or offset");
 
     if (columns.length === 0) throw new DataRequestError(`"${schema}"."${table}" has no columns to display`);
 
@@ -112,12 +104,12 @@ export function buildRowsQuery(input: RowsQueryInput): RowsQuery {
         `SELECT ${selectList.join(", ")}`,
         `FROM ${quoteIdent(schema)}.${quoteIdent(table)}`,
         orderBy.length > 0 ? `ORDER BY ${orderBy.join(", ")}` : "",
-        "LIMIT $1 OFFSET $2",
+        `LIMIT ${limit} OFFSET ${offset}`,
     ]
         .filter(Boolean)
         .join(" ");
 
-    return { text, values: [limit, offset], limit, offset };
+    return { text, limit, offset };
 }
 
 /** Cuts a cell to CELL_MAX_CHARS characters (code points, matching Postgres' left()). */
@@ -129,98 +121,58 @@ export function truncateCell(value: string): { value: string; truncated: boolean
     return { value: codePoints.slice(0, CELL_MAX_CHARS).join(""), truncated: true };
 }
 
-const RELATION_QUERY = `
-  SELECT c.oid::int8 AS oid, c.relkind, c.reltuples::int8 AS reltuples
-  FROM pg_class c
-  JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v', 'm', 'f');
-`;
-
-const COLUMNS_QUERY = `
-  SELECT a.attname AS name, format_type(a.atttypid, a.atttypmod) AS data_type
-  FROM pg_attribute a
-  WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
-  ORDER BY a.attnum;
-`;
-
-const PRIMARY_KEY_QUERY = `
-  SELECT a.attname AS name
-  FROM pg_index ix
-  JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = ANY(ix.indkey)
-  WHERE ix.indrelid = $1 AND ix.indisprimary
-  ORDER BY array_position(ix.indkey, a.attnum);
-`;
-
 /**
- * Reads one page of rows from a table/view/materialized view. Runs entirely inside a READ ONLY
- * transaction with a statement timeout and always rolls back, so it cannot change anything.
+ * Reads one page of rows from a table/view/materialized view in a single READ ONLY round trip (plus one more to
+ * look up the relation when it isn't in the catalog cache). Always rolls back, so it cannot change anything.
+ * Returns the catalog entry it used so the caller can cache it.
  */
-export async function fetchTableRows(client: Client, args: FetchTableRowsArgs): Promise<TableDataPage> {
-    await client.query("BEGIN READ ONLY");
-    try {
-        await client.query(`SET LOCAL statement_timeout = ${STATEMENT_TIMEOUT_MS}`);
+export async function fetchTableRows(client: Queryable, args: FetchTableRowsArgs): Promise<{ page: TableDataPage; meta: RelationMeta }> {
+    const meta = args.meta ?? (await loadRelationMeta(client, args.schema, args.table));
+    if (!meta) throw new DataRequestError(`Table or view "${args.schema}"."${args.table}" was not found`);
 
-        const relation = await client.query(RELATION_QUERY, [args.schema, args.table]);
-        if (relation.rowCount === 0) {
-            throw new DataRequestError(`Table or view "${args.schema}"."${args.table}" was not found`);
-        }
-        const { oid, relkind, reltuples } = relation.rows[0] as { oid: string; relkind: RelKind; reltuples: string };
+    const columns: RelationColumn[] = meta.columns.map((column) => ({ ...column, isPrimaryKey: meta.primaryKey.includes(column.name) }));
 
-        const [columnsRes, pkRes] = await Promise.all([client.query(COLUMNS_QUERY, [oid]), client.query(PRIMARY_KEY_QUERY, [oid])]);
-        const pkColumns: string[] = pkRes.rows.map((row) => row.name);
-        const columns: RelationColumn[] = columnsRes.rows.map((row) => ({
-            name: row.name,
-            dataType: row.data_type,
-            isPrimaryKey: pkColumns.includes(row.name),
-        }));
+    const query = buildRowsQuery({
+        schema: meta.schema,
+        table: meta.name,
+        columns,
+        relkind: meta.relkind,
+        pkColumns: meta.primaryKey,
+        sort: args.sort,
+        dir: args.dir,
+        limit: args.limit,
+        offset: args.offset,
+    });
 
-        const query = buildRowsQuery({
-            schema: args.schema,
-            table: args.table,
-            columns,
-            relkind,
-            pkColumns,
-            sort: args.sort,
-            dir: args.dir,
-            limit: args.limit,
-            offset: args.offset,
-        });
+    const statements = [query.text];
+    if (args.exactCount) statements.push(`SELECT count(*)::text AS total FROM ${quoteIdent(meta.schema)}.${quoteIdent(meta.name)}`);
 
-        const dataRes = await client.query({ text: query.text, values: query.values, rowMode: "array" });
+    const [dataResult, countResult] = await runReadOnly(client, statements);
 
-        const truncatedCells: [number, number][] = [];
-        const rows = (dataRes.rows as (string | null)[][]).map((row, rowIndex) =>
-            row.map((cell, columnIndex) => {
-                if (cell === null) return null;
-                const { value, truncated } = truncateCell(cell);
-                if (truncated) truncatedCells.push([rowIndex, columnIndex]);
-                return value;
-            }),
-        );
+    const truncatedCells: [number, number][] = [];
+    const rows = (dataResult.rows as Record<string, string | null>[]).map((row, rowIndex) =>
+        columns.map((_, columnIndex) => {
+            const cell = row[`c${columnIndex}`];
+            if (cell === null || cell === undefined) return null;
+            const { value, truncated } = truncateCell(cell);
+            if (truncated) truncatedCells.push([rowIndex, columnIndex]);
+            return value;
+        }),
+    );
 
-        // reltuples is -1 (never analyzed) or 0 for views, neither of which is a usable estimate.
-        const estimate = Number(reltuples);
-        const estimatedTotal = relkind !== "v" && relkind !== "f" && estimate > 0 ? estimate : null;
+    const exactTotal = countResult ? Number((countResult.rows[0] as { total: string }).total) : undefined;
 
-        let exactTotal: number | undefined;
-        if (args.exactCount) {
-            const countRes = await client.query(`SELECT count(*)::text AS total FROM ${quoteIdent(args.schema)}.${quoteIdent(args.table)}`);
-            exactTotal = Number(countRes.rows[0].total);
-        }
+    const page: TableDataPage = {
+        columns,
+        rows,
+        truncatedCells,
+        estimatedTotal: meta.estimatedRows,
+        ...(exactTotal !== undefined ? { exactTotal } : {}),
+        limit: query.limit,
+        offset: query.offset,
+        sort: args.sort ?? null,
+        dir: args.sort !== undefined ? (args.dir === "desc" ? "desc" : "asc") : null,
+    };
 
-        return {
-            columns,
-            rows,
-            truncatedCells,
-            estimatedTotal,
-            ...(exactTotal !== undefined ? { exactTotal } : {}),
-            limit: query.limit,
-            offset: query.offset,
-            sort: args.sort ?? null,
-            dir: args.sort !== undefined ? (args.dir === "desc" ? "desc" : "asc") : null,
-        };
-    } finally {
-        // Always roll back - this endpoint only reads, and must never leave a transaction open.
-        await client.query("ROLLBACK");
-    }
+    return { page, meta };
 }

@@ -4,6 +4,8 @@ import { z } from "zod";
 import { encryptSecret } from "../crypto/vault.js";
 import { insertConnection, listConnections, getConnection, deleteConnection, type ConnectionRow } from "../db/store.js";
 import { toConnectionConfig, withPgClient } from "../services/pg-client.js";
+import { catalogCache } from "../services/catalog-cache.js";
+import { closeReadPool } from "../services/pg-pool.js";
 
 export const connectionsRouter = Router();
 
@@ -64,10 +66,13 @@ connectionsRouter.get("/", (_req, res) => {
     res.json(listConnections().map(toPublicConnection));
 });
 
-connectionsRouter.delete("/:id", (req, res) => {
+connectionsRouter.delete("/:id", async (req, res) => {
     const row = getConnection(req.params.id);
     if (!row) return res.status(404).json({ error: "Connection not found" });
     deleteConnection(req.params.id);
+    // Drop any open browsing connections (and the password they hold) along with the saved connection.
+    catalogCache.clear(req.params.id);
+    await closeReadPool(req.params.id);
     res.status(204).end();
 });
 
