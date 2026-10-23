@@ -62,10 +62,10 @@ const SingleQueryView: React.FC = () => {
                     </div>
 
                     <div className="flex flex-wrap items-center gap-3">
-                        <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                            Check against
+                        <label className="flex min-w-0 max-w-full items-center gap-2 text-xs text-muted-foreground">
+                            <span className="shrink-0">Check against</span>
                             <Select value={m.connection?.id ?? NO_CONNECTION} onValueChange={(value) => m.changeConnection(value === NO_CONNECTION ? undefined : value)}>
-                                <SelectTrigger size="sm" className="h-8 w-52 text-xs" aria-label="Check against">
+                                <SelectTrigger size="sm" className="h-8 w-64 min-w-0 max-w-full text-xs" aria-label="Check against" title={m.connection?.name}>
                                     <SelectValue />
                                 </SelectTrigger>
                                 <SelectContent>
@@ -78,8 +78,8 @@ const SingleQueryView: React.FC = () => {
                                 </SelectContent>
                             </Select>
                         </label>
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground" title={m.aiConfigured ? undefined : (m.aiStatus?.problem ?? "Set OPENAI_API_KEY in server/.env (and pick a model under Schema Change → AI settings) to turn the model on")}>
-                            <span id="modernize-mode-label">Converted by</span>
+                        <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" title={m.aiConfigured ? undefined : (m.aiStatus?.problem ?? "Set OPENAI_API_KEY in server/.env (and pick a model under Schema Change → AI settings) to turn the model on")}>
+                            <span id="modernize-mode-label" className="shrink-0">Converted by</span>
                             <ToggleGroup
                                 type="single"
                                 variant="outline"
@@ -88,10 +88,11 @@ const SingleQueryView: React.FC = () => {
                                 onValueChange={(value) => value && m.changeMode(value as ModernizeMode)}
                                 disabled={m.running}
                                 aria-labelledby="modernize-mode-label"
+                                className="shrink-0"
                             >
-                                <ToggleGroupItem value="rules" className="h-8 px-2.5 text-xs" title="Fixed rules only. Nothing is sent to a model.">Rules</ToggleGroupItem>
-                                <ToggleGroupItem value="auto" className="h-8 px-2.5 text-xs" disabled={!m.aiConfigured} title={m.aiConfigured ? `Rules first; ${m.aiStatus?.model || "the model"} only for what the rules can't do` : "No model is set up"}>Rules, then AI</ToggleGroupItem>
-                                <ToggleGroupItem value="ai" className="h-8 px-2.5 text-xs" disabled={!m.aiConfigured} title={m.aiConfigured ? `${m.aiStatus?.model || "The model"} writes the conversion; PostgreSQL has to accept it, or the rules' version is shown` : "No model is set up"}>AI</ToggleGroupItem>
+                                <ToggleGroupItem value="rules" className="h-8 flex-none px-3 text-xs" title="Fixed rules only. Nothing is sent to a model.">Rules</ToggleGroupItem>
+                                <ToggleGroupItem value="auto" className="h-8 flex-none px-3 text-xs" disabled={!m.aiConfigured} title={m.aiConfigured ? `Rules first; ${m.aiStatus?.model || "the model"} only for what the rules can't do` : "No model is set up"}>Rules, then AI</ToggleGroupItem>
+                                <ToggleGroupItem value="ai" className="h-8 flex-none px-3 text-xs" disabled={!m.aiConfigured} title={m.aiConfigured ? `${m.aiStatus?.model || "The model"} writes the conversion; PostgreSQL has to accept it, or the rules' version is shown` : "No model is set up"}>AI</ToggleGroupItem>
                             </ToggleGroup>
                         </div>
                     </div>
