@@ -20,6 +20,14 @@ secret() { # a password per machine, kept in a git-ignored file
 }
 env_of() { docker inspect "$1" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n "s/^$2=//p"; }
 
+busy() { lsof -iTCP:"$1" -sTCP:LISTEN -P >/dev/null 2>&1; }
+need_free() { # a second copy of this script, or anything else on the port, would fail halfway with a stack trace
+  for port in "$@"; do
+    busy "$port" && { echo "Port $port is already in use, most likely by a copy of this script that is still running. Stop it (Ctrl-C in its terminal, or: lsof -ti tcp:$port | xargs kill) and run this again; or set API_PORT / UI_PORT to other ports." >&2; exit 1; }
+  done
+  return 0
+}
+
 ensure_containers() {
   docker info >/dev/null 2>&1 || { echo "Docker is not running. Start Docker Desktop and run this again." >&2; exit 1; }
   if ! docker inspect "$PG" >/dev/null 2>&1; then
@@ -46,9 +54,9 @@ start_api() {
 start_ui() { GOFORGE_API_URL="http://127.0.0.1:$API_PORT" exec npx vite --port "$UI_PORT" --strictPort; }
 
 case "${1:-all}" in
-  api) ensure_containers; start_api ;;
-  ui) start_ui ;;
-  all) ensure_containers
+  api) need_free "$API_PORT"; ensure_containers; start_api ;;
+  ui) need_free "$UI_PORT"; start_ui ;;
+  all) need_free "$API_PORT" "$UI_PORT"; ensure_containers
        (start_api) & API_PID=$!; trap 'kill $API_PID 2>/dev/null' EXIT INT TERM
        echo "GoForge: http://localhost:$UI_PORT  (API on $API_PORT; create an account, it is stored in the local PostgreSQL)"
        start_ui ;;
