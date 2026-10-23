@@ -11,6 +11,8 @@ import { getRenderer } from "@/utils/render/render-uttils";
 import { fromIntrospection } from "@/utils/import/from-introspection";
 import {
     SavedConnection,
+    connectionAddress,
+    connectionLabel,
     executeSql,
     introspectSavedConnection,
     listSavedConnections,
@@ -132,8 +134,8 @@ const PushLiveChangesModal: React.FC<ModalProps> = (props) => {
                         </SelectTrigger>
                         <SelectContent>
                             {connections.map((conn) => (
-                                <SelectItem key={conn.id} value={conn.id}>
-                                    {conn.name} ({conn.host}:{conn.port}/{conn.database})
+                                <SelectItem key={conn.id} value={conn.id} title={connectionAddress(conn)}>
+                                    {connectionLabel(conn, connections)}
                                 </SelectItem>
                             ))}
                         </SelectContent>

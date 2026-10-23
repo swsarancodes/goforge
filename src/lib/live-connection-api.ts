@@ -6,9 +6,23 @@ export interface SavedConnection {
     username: string;
     database: string;
     sslMode: "disable" | "allow" | "require" | "verify-full";
+    /** `cloud` for a database GoForge created for the account on its own server; deleting that connection deletes the database. */
+    kind?: "external" | "cloud";
     createdAt: string;
     updatedAt: string;
 }
+
+/**
+ * What a connection is called in a picker: its name, nothing else. Only when two saved connections have the same name is the
+ * database added, so two lines never read the same. The full address is for a tooltip (`connectionAddress`).
+ */
+export function connectionLabel(connection: Pick<SavedConnection, "id" | "name" | "database">, all: Pick<SavedConnection, "id" | "name">[]): string {
+    const clash = all.some((other) => other.id !== connection.id && other.name.trim().toLowerCase() === connection.name.trim().toLowerCase());
+    return clash ? `${connection.name} · ${connection.database}` : connection.name;
+}
+
+export const connectionAddress = (connection: Pick<SavedConnection, "username" | "host" | "port" | "database">): string =>
+    `${connection.username}@${connection.host}:${connection.port}/${connection.database}`;
 
 export interface CreateConnectionInput {
     name: string;
@@ -124,8 +138,12 @@ export function createSavedConnection(input: CreateConnectionInput): Promise<Sav
     return request("/", { method: "POST", body: JSON.stringify(input) });
 }
 
-export function deleteSavedConnection(id: string): Promise<void> {
-    return request(`/${id}`, { method: "DELETE" });
+export function renameSavedConnection(id: string, name: string): Promise<SavedConnection> {
+    return request(`/${id}`, { method: "PATCH", body: JSON.stringify({ name }) });
+}
+
+export function deleteSavedConnection(id: string, options: { dropDatabase?: boolean } = {}): Promise<void> {
+    return request(`/${id}${options.dropDatabase ? "?dropDatabase=true" : ""}`, { method: "DELETE" });
 }
 
 export function testSavedConnection(id: string): Promise<{ ok: boolean; error?: string }> {
@@ -138,6 +156,42 @@ export function introspectSavedConnection(id: string): Promise<IntrospectionResu
 
 export function previewSql(id: string, sql: string): Promise<{ valid: boolean; error?: string }> {
     return request(`/${id}/preview`, { method: "POST", body: JSON.stringify({ sql }) });
+}
+
+export interface CreateLiveDatabaseInput {
+    /** The new database's name. */
+    database: string;
+    /** What the saved connection to it is called; the database name when left out. */
+    name?: string;
+    /** The schema script to build in it. */
+    sql: string;
+}
+
+/**
+ * Creates a new database on the server a saved connection points at, builds `sql` in it as one transaction, and saves a connection to
+ * it. The returned connection is listed everywhere connections are.
+ */
+export function createLiveDatabase(serverConnectionId: string, input: CreateLiveDatabaseInput): Promise<{ connection: SavedConnection; statementsRun: number }> {
+    return request(`/${serverConnectionId}/create-database`, { method: "POST", body: JSON.stringify(input) });
+}
+
+/**
+ * Creates a database for the signed-in account on the GoForge server (no server to choose, no credentials to know), builds `sql` in it,
+ * and saves a connection to it. Only with accounts on.
+ */
+export async function createCloudDatabase(input: { name: string; sql: string }): Promise<{ connection: SavedConnection; statementsRun: number }> {
+    const response = await fetch("/api/cloud-databases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    if (!response.ok) {
+        let message = response.statusText || `HTTP ${response.status}`;
+        try {
+            const body = await response.json();
+            if (typeof body?.error === "string") message = body.error;
+        } catch {
+            // not JSON
+        }
+        throw new LiveConnectionApiError(message, response.status);
+    }
+    return response.json();
 }
 
 export function executeSql(id: string, sql: string): Promise<{ success: boolean; statementsRun: number }> {

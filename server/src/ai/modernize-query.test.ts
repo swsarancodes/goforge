@@ -1,6 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { callZenJson, createZenSchemaPlan, getZenStatus } from "../services/zen-client.js";
-import { buildModernizeInstructions, createZenQueryModernization, modernizeQueryRequestSchema, modernizeQueryResultSchema } from "./modernize-query.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createSchemaPlan } from "../services/schema-plan-client.js";
+import { installOpenAiBackend, type ModelRequest } from "./openai.js";
+import { DEFAULT_SETTINGS } from "./policy.js";
+import { installAiStores } from "./provider.js";
+import { buildModernizeInstructions, createQueryModernization, modernizeQueryRequestSchema, modernizeQueryResultSchema } from "./modernize-query.js";
 
 const request = modernizeQueryRequestSchema.parse({
     legacySql: "SELECT NVL(a, 0) FROM t WHERE ROWNUM <= 5",
@@ -9,24 +12,26 @@ const request = modernizeQueryRequestSchema.parse({
     draft: { sql: "SELECT COALESCE(a, 0) FROM t WHERE ROWNUM <= 5", changes: ["NVL → COALESCE"], notConverted: [{ construct: "ROWNUM <= 5", reason: "left in place" }], postgresError: 'column "rownum" does not exist' },
 });
 
-/** Makes `fetch` answer like the Zen /responses endpoint. */
-function stubZen(output: unknown, init: { ok?: boolean; status?: number; raw?: string } = {}) {
-    const fetchMock = vi.fn(async () => ({
-        ok: init.ok ?? true,
-        status: init.status ?? 200,
-        text: async () => init.raw ?? JSON.stringify(typeof output === "string" ? { output_text: output } : { output_text: JSON.stringify(output) }),
-    }));
-    vi.stubGlobal("fetch", fetchMock);
-    return fetchMock;
+const seen: ModelRequest[] = [];
+
+/** Makes the model answer with this value (as JSON text) through a stand-in OpenAI. */
+function stubModel(output: unknown) {
+    seen.length = 0;
+    installOpenAiBackend({
+        credentials: async () => ({ found: true, source: "OPENAI_API_KEY" }),
+        respond: async (modelRequest) => {
+            seen.push(modelRequest);
+            return { text: typeof output === "string" ? output : JSON.stringify(output), inputTokens: null, outputTokens: null, stopReason: "end_turn" };
+        },
+        listModels: async () => [],
+    });
 }
 
 beforeEach(() => {
-    vi.stubEnv("ZEN_API_KEY", "test-key");
-    vi.stubEnv("ZEN_MODEL", "test-model");
+    installAiStores({ settings: { read: () => ({ settings: { ...DEFAULT_SETTINGS, model: "test-model" } }), write: () => undefined }, audit: { record: () => 1, list: () => [], get: () => undefined } });
 });
 afterEach(() => {
-    vi.unstubAllEnvs();
-    vi.unstubAllGlobals();
+    installOpenAiBackend();
 });
 
 describe("modernize request and result schemas", () => {
@@ -76,60 +81,9 @@ describe("buildModernizeInstructions", () => {
     });
 });
 
-describe("callZenJson", () => {
-    it("sends the key, model and JSON input, and returns the parsed object", async () => {
-        const fetchMock = stubZen({ hello: "world" });
-        const { output, model } = await callZenJson({ instructions: "be brief", input: { a: 1 } });
-
-        expect(output).toEqual({ hello: "world" });
-        expect(model).toBe("test-model");
-        const [url, init] = fetchMock.mock.calls[0] as unknown as [string, { headers: Record<string, string>; body: string }];
-        expect(url).toMatch(/\/responses$/);
-        expect(init.headers.Authorization).toBe("Bearer test-key");
-        expect(JSON.parse(init.body)).toMatchObject({ model: "test-model", store: false, instructions: "be brief", input: '{"a":1}' });
-    });
-
-    it("accepts JSON wrapped in a markdown fence or prose", async () => {
-        stubZen('```json\n{"ok": true}\n```');
-        await expect(callZenJson({ instructions: "x", input: "y" })).resolves.toMatchObject({ output: { ok: true } });
-        stubZen('Sure! {"ok": 1} hope that helps');
-        await expect(callZenJson({ instructions: "x", input: "y" })).resolves.toMatchObject({ output: { ok: 1 } });
-    });
-
-    it("fails clearly without a key, on API errors, and on non-JSON replies", async () => {
-        vi.stubEnv("ZEN_API_KEY", "");
-        await expect(callZenJson({ instructions: "x", input: "y" })).rejects.toThrow("ZEN_API_KEY is not configured on the server");
-
-        vi.stubEnv("ZEN_API_KEY", "k");
-        stubZen(null, { ok: false, status: 429, raw: JSON.stringify({ error: { message: "rate limited" } }) });
-        await expect(callZenJson({ instructions: "x", input: "y" })).rejects.toThrow("rate limited");
-
-        stubZen(null, { raw: "<html>gateway</html>", status: 502 });
-        await expect(callZenJson({ instructions: "x", input: "y" })).rejects.toThrow(/non-JSON response \(502\)/);
-    });
-
-    it("reports a timeout as such", async () => {
-        vi.stubEnv("ZEN_TIMEOUT_MS", "20");
-        vi.stubGlobal(
-            "fetch",
-            vi.fn((_url: string, init: { signal: AbortSignal }) => new Promise((_resolve, reject) => init.signal.addEventListener("abort", () => reject(Object.assign(new Error("aborted"), { name: "AbortError" }))))),
-        );
-        await expect(callZenJson({ instructions: "x", input: "y" })).rejects.toThrow("Zen request timed out");
-    });
-});
-
-describe("getZenStatus", () => {
-    it("says whether a key is configured without exposing it", () => {
-        expect(getZenStatus()).toEqual({ configured: true, model: "test-model" });
-        vi.stubEnv("ZEN_API_KEY", "   ");
-        expect(getZenStatus().configured).toBe(false);
-        expect(JSON.stringify(getZenStatus())).not.toContain("test-key");
-    });
-});
-
-describe("createZenQueryModernization", () => {
+describe("createQueryModernization", () => {
     it("sends the query, dialects, schema and rule draft, and returns the validated conversion", async () => {
-        const fetchMock = stubZen({
+        stubModel({
             sql: "SELECT COALESCE(a, 0) FROM t ORDER BY a LIMIT 5",
             summary: "Converted NVL and ROWNUM.",
             changes: ["NVL -> COALESCE", "ROWNUM -> LIMIT"],
@@ -137,13 +91,15 @@ describe("createZenQueryModernization", () => {
             unsupported: [],
         });
 
-        const { result, model } = await createZenQueryModernization(request);
+        const { result, model } = await createQueryModernization(request);
 
         expect(model).toBe("test-model");
         expect(result.sql).toContain("LIMIT 5");
         expect(result.risks).toEqual(["ROWNUM applied before ORDER BY in Oracle"]);
-        const body = JSON.parse((fetchMock.mock.calls[0] as unknown as [string, { body: string }])[1].body);
-        const input = JSON.parse(body.input);
+        expect(seen[0]).toMatchObject({ model: "test-model" });
+        // the answer is asked for in the shape the result schema describes, and the schema is part of what is sent
+        expect(seen[0].format).toMatchObject({ name: "modernize_query", schema: { type: "object", required: ["sql", "summary", "changes", "risks", "unsupported"], additionalProperties: false } });
+        const input = JSON.parse(seen[0].input);
         expect(input).toMatchObject({ originalQuery: request.legacySql, sourceDialect: "oracle", targetDialect: "postgresql" });
         expect(input.schema.tables[0].name).toBe("t");
         expect(input.ruleBasedDraft.notConverted).toEqual([{ construct: "ROWNUM <= 5", reason: "left in place" }]);
@@ -151,15 +107,15 @@ describe("createZenQueryModernization", () => {
     });
 
     it("rejects an answer without SQL", async () => {
-        stubZen({ summary: "I could not do it" });
-        await expect(createZenQueryModernization(request)).rejects.toThrow(/invalid conversion/);
+        stubModel({ summary: "I could not do it" });
+        await expect(createQueryModernization(request)).rejects.toThrow(/invalid conversion/);
     });
 });
 
-describe("createZenSchemaPlan (unchanged behaviour after the refactor)", () => {
+describe("createSchemaPlan (the diagram's AI Schema)", () => {
     it("still returns a validated plan", async () => {
-        stubZen({ summary: "Add a table", assumptions: [], warnings: [], clarifyingQuestions: [], operations: [{ type: "add_index", tableName: "t", index: { name: "i", columns: ["a"] } }] });
-        const { plan, model } = await createZenSchemaPlan({
+        stubModel({ summary: "Add a table", assumptions: [], warnings: [], clarifyingQuestions: [], operations: [{ type: "add_index", tableName: "t", index: { name: "i", columns: ["a"] } }] });
+        const { plan, model } = await createSchemaPlan({
             prompt: "index a",
             scope: "database",
             dialect: "postgresql",

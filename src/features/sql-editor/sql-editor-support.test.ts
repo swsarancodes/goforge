@@ -35,6 +35,12 @@ describe("errorRange", () => {
 });
 
 describe("SQL handoff", () => {
+    it("carries the request for no-transaction mode, once", () => {
+        setSqlHandoff({ sql: "CREATE INDEX CONCURRENTLY i ON t (a);", source: "Schema Change", transactional: false });
+        expect(takeSqlHandoff()).toEqual({ sql: "CREATE INDEX CONCURRENTLY i ON t (a);", source: "Schema Change", transactional: false });
+        expect(takeSqlHandoff()).toBeUndefined();
+    });
+
     it("is taken once", () => {
         setSqlHandoff({ sql: "CREATE INDEX i ON t (a)", source: "Modernizer" });
         expect(takeSqlHandoff()).toEqual({ sql: "CREATE INDEX i ON t (a)", source: "Modernizer" });

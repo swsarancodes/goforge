@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getConnection } from "../db/store.js";
+import { findConnection } from "./connection-lookup.js";
 import { withReadClient } from "../services/pg-pool.js";
 import { previewQuery, validateSql } from "../services/pg-validate.js";
 import { isSingleReadQuery } from "../services/sql-tokens.js";
@@ -11,7 +11,7 @@ export const modernizerRouter = Router();
 const bodySchema = z.object({ sql: z.string().trim().min(1).max(200_000) });
 
 modernizerRouter.post("/:id/validate-sql", async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     if (!row) return res.status(404).json({ error: "Connection not found" });
     const parsed = bodySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
@@ -24,7 +24,7 @@ modernizerRouter.post("/:id/validate-sql", async (req, res) => {
 });
 
 modernizerRouter.post("/:id/query-preview", async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     if (!row) return res.status(404).json({ error: "Connection not found" });
     const parsed = bodySchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });

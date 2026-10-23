@@ -3,14 +3,17 @@ import CodeEditor from "@/components/code-editor";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Switch } from "@/components/ui/switch";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useCallback, useState } from "react";
+import { ScriptView } from "./batch/batch-view";
+import { setQueryHandoff } from "./query-handoff";
 import { ChangesPanel } from "./components/changes-panel";
 import { ChecksPanel } from "./components/checks-panel";
 import { CompareView } from "./components/compare-view";
 import { IndexRecommendations } from "./components/index-recommendations";
 import { ResultPanel } from "./components/result-panel";
-import { useModernizer } from "./use-modernizer";
+import { ModernizeMode, useModernizer } from "./use-modernizer";
 import { LEGACY_DIALECTS, LegacyDialect } from "./types";
 
 const NO_CONNECTION = "__none__";
@@ -20,7 +23,7 @@ const NO_CONNECTION = "__none__";
  * Fixed rules do the rewriting. A live connection lets PostgreSQL itself say whether it accepts the result. A model is only
  * asked about what the rules couldn't do, and its answer is only shown if PostgreSQL accepts it.
  */
-const QueryModernizerPage: React.FC = () => {
+const SingleQueryView: React.FC = () => {
     const m = useModernizer();
     const { outcome } = m;
     const hasTables = !!m.schema;
@@ -33,7 +36,6 @@ const QueryModernizerPage: React.FC = () => {
         <div className="w-full h-full min-h-0 overflow-y-auto bg-background">
             <div className="flex flex-col gap-3 p-4 lg:h-full lg:min-h-0">
                 <div className="min-w-0">
-                    <h1 className="text-base font-semibold">Query Modernizer</h1>
                     <p className="text-sm text-muted-foreground max-w-3xl">
                         Rewrites a query written for Oracle, SQL Server, MySQL or DB2 so it runs on PostgreSQL, and tells you what it could not convert and where the results can differ. It does not prove the new query returns the same rows.
                     </p>
@@ -76,10 +78,22 @@ const QueryModernizerPage: React.FC = () => {
                                 </SelectContent>
                             </Select>
                         </label>
-                        <label className="flex items-center gap-1.5 text-xs text-muted-foreground" title={m.aiConfigured ? `Let ${m.aiStatus?.model || "the model"} try what the rules can't do` : "Set ZEN_API_KEY in server/.env to turn this on"}>
-                            <Switch checked={m.useAi && m.aiConfigured} onCheckedChange={m.changeUseAi} disabled={!m.aiConfigured || m.running} aria-label="Use AI for what the rules can't convert" />
-                            Use AI for the rest
-                        </label>
+                        <div className="flex items-center gap-2 text-xs text-muted-foreground" title={m.aiConfigured ? undefined : (m.aiStatus?.problem ?? "Set OPENAI_API_KEY in server/.env (and pick a model under Schema Change → AI settings) to turn the model on")}>
+                            <span id="modernize-mode-label">Converted by</span>
+                            <ToggleGroup
+                                type="single"
+                                variant="outline"
+                                size="sm"
+                                value={m.mode}
+                                onValueChange={(value) => value && m.changeMode(value as ModernizeMode)}
+                                disabled={m.running}
+                                aria-labelledby="modernize-mode-label"
+                            >
+                                <ToggleGroupItem value="rules" className="h-8 px-2.5 text-xs" title="Fixed rules only. Nothing is sent to a model.">Rules</ToggleGroupItem>
+                                <ToggleGroupItem value="auto" className="h-8 px-2.5 text-xs" disabled={!m.aiConfigured} title={m.aiConfigured ? `Rules first; ${m.aiStatus?.model || "the model"} only for what the rules can't do` : "No model is set up"}>Rules, then AI</ToggleGroupItem>
+                                <ToggleGroupItem value="ai" className="h-8 px-2.5 text-xs" disabled={!m.aiConfigured} title={m.aiConfigured ? `${m.aiStatus?.model || "The model"} writes the conversion; PostgreSQL has to accept it, or the rules' version is shown` : "No model is set up"}>AI</ToggleGroupItem>
+                            </ToggleGroup>
+                        </div>
                     </div>
                 </div>
 
@@ -105,7 +119,7 @@ const QueryModernizerPage: React.FC = () => {
                                 </Button>
                             </div>
                         </div>
-                        {m.useAi && m.aiConfigured && <p className="px-3 py-1.5 text-[11px] text-muted-foreground border-b bg-muted/30">If the rules can't finish, the query and your table and column names are sent to the model. No data is.</p>}
+                        {m.mode !== "rules" && <p className="px-3 py-1.5 text-[11px] text-muted-foreground border-b bg-muted/30">{m.mode === "ai" ? "The query and your table and column names are sent to the model. No data is." : "If the rules can't finish, the query and your table and column names are sent to the model. No data is."}</p>}
                         <div className="flex-1 min-h-0 p-1">
                             <CodeEditor
                                 value={m.sql}
@@ -187,5 +201,45 @@ const EmptyState: React.FC<{ hasExample: boolean }> = ({ hasExample }) => (
         <p className="text-xs leading-relaxed">{hasExample ? "Click into the editor and press Tab to see an example written from your own tables." : "Paste a query to start."}</p>
     </div>
 );
+
+type Mode = "single" | "script";
+
+// Which view was open when the user went to another page.
+let lastMode: Mode = "single";
+
+/** Query Modernizer: one query at a time, or a whole file. */
+const QueryModernizerPage: React.FC = () => {
+    const [mode, setModeState] = useState<Mode>(lastMode);
+    const setMode = useCallback((next: Mode) => {
+        lastMode = next;
+        setModeState(next);
+    }, []);
+
+    return (
+        <div className="flex h-full min-h-0 w-full flex-col bg-background">
+            <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2 border-b px-4 py-2">
+                <h1 className="text-base font-semibold">Query Modernizer</h1>
+                <Tabs value={mode} onValueChange={(value) => setMode(value as Mode)}>
+                    <TabsList className="h-8">
+                        <TabsTrigger value="single" className="px-3 text-xs">One query</TabsTrigger>
+                        <TabsTrigger value="script" className="px-3 text-xs">A script</TabsTrigger>
+                    </TabsList>
+                </Tabs>
+            </div>
+            <div className="min-h-0 flex-1">
+                {mode === "single" ? (
+                    <SingleQueryView />
+                ) : (
+                    <ScriptView
+                        onOpenSingle={(sql, dialect) => {
+                            setQueryHandoff({ sql, dialect });
+                            setMode("single");
+                        }}
+                    />
+                )}
+            </div>
+        </div>
+    );
+};
 
 export default QueryModernizerPage;

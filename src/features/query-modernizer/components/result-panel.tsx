@@ -8,6 +8,8 @@ import { useOpenInSqlEditor } from "@/features/sql-editor/use-open-in-sql-editor
 import { cn } from "@/lib/utils";
 import { formatRows } from "@/utils/data-view/format-rows";
 import type { ModernizeOutcome } from "../modernize";
+import { OutputCheck } from "./output-check";
+import { LEGACY_DIALECTS } from "../types";
 import type { PreviewState } from "../use-modernizer";
 
 type Tone = "pass" | "warn" | "fail";
@@ -92,6 +94,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ outcome, preview, prev
                 </div>
             )}
             {preview.status === "done" && preview.response.ok && formatted && (
+                <>
                 <div className="flex min-h-0 flex-1 flex-col rounded-lg border bg-card">
                     <p className="border-b px-3 py-1.5 text-[11px] text-muted-foreground">
                         {preview.response.result.rows.length} row{preview.response.result.rows.length === 1 ? "" : "s"}
@@ -101,6 +104,8 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ outcome, preview, prev
                         <RowsTable columns={preview.response.result.columns} rows={formatted} emptyText="The query returned no rows." />
                     </div>
                 </div>
+                <OutputCheck result={preview.response.result} dialectLabel={LEGACY_DIALECTS.find((candidate) => candidate.value === outcome.dialect)?.label ?? outcome.dialect} />
+                </>
             )}
         </div>
     );

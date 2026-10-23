@@ -26,7 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { buildAiDiagramPreview } from "@/lib/ai-diagram-preview";
-import { requestAiSchemaPlan } from "@/lib/ai-api";
+import { AiStatus, fetchAiStatus, requestAiSchemaPlan } from "@/lib/ai-api";
 import {
     AiSchemaOperation,
     AiSchemaPlanResponse,
@@ -95,6 +95,13 @@ const AiSchemaController: React.FC = () => {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isApplying, setIsApplying] = useState(false);
     const [destructiveAccepted, setDestructiveAccepted] = useState(false);
+    const [aiStatus, setAiStatus] = useState<AiStatus>();
+
+    useEffect(() => {
+        const controller = new AbortController();
+        fetchAiStatus(controller.signal).then(setAiStatus).catch(() => setAiStatus(undefined));
+        return () => controller.abort();
+    }, []);
 
     const clarifyingQuestions = preview?.response.plan.clarifyingQuestions ?? [];
     const hasClarifications = clarifyingQuestions.length > 0;
@@ -427,7 +434,9 @@ const AiSchemaController: React.FC = () => {
                         <ShieldCheck className="text-amber-600" />
                         <AlertTitle className="text-xs">Schema metadata only</AlertTitle>
                         <AlertDescription className="text-xs">
-                            Sends definitions—not rows or credentials. The contributor-free model may use prompts and completions for training.
+                            Sends definitions, not rows or credentials{aiStatus?.model ? `, to ${aiStatus.model} on OpenAI` : ""}.
+                            {aiStatus?.problem ? ` ${aiStatus.problem}` : ""}
+                            {" "}Which endpoint and models are allowed, and whether names are hidden, is set under Schema Change → AI settings.
                         </AlertDescription>
                     </Alert>
 

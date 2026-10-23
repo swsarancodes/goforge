@@ -2,6 +2,8 @@ export interface SqlHandoff {
     sql: string;
     /** Where it came from, shown in a comment above the SQL ("AI Schema", "Modernizer"). */
     source: string;
+    /** false: the SQL needs each statement on its own (CREATE INDEX CONCURRENTLY, batches that commit), so the editor leaves transaction mode. */
+    transactional?: boolean;
 }
 
 // Other pages send SQL to the editor by leaving it here and navigating; the editor takes it once when it opens.

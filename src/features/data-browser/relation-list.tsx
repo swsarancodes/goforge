@@ -7,6 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
+import { connectionAddress, connectionLabel } from "@/lib/live-connection-api";
 import { cn } from "@/lib/utils";
 import { formatRowEstimate, groupRelations } from "@/utils/data-view/relations";
 import type { DataBrowser } from "./use-data-browser";
@@ -66,8 +67,8 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
                         </SelectTrigger>
                         <SelectContent>
                             {browser.connections.map((conn) => (
-                                <SelectItem key={conn.id} value={conn.id}>
-                                    {conn.name} ({conn.host}:{conn.port}/{conn.database})
+                                <SelectItem key={conn.id} value={conn.id} title={connectionAddress(conn)}>
+                                    {connectionLabel(conn, browser.connections)}
                                 </SelectItem>
                             ))}
                         </SelectContent>

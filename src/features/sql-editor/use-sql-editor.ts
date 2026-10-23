@@ -122,7 +122,13 @@ export function useSqlEditor() {
 
         let draft = storage.get(draftKey(connectionId)) ?? "";
         const handoff = takeSqlHandoff();
-        if (handoff) draft = applySqlHandoff(draft, handoff);
+        if (handoff) {
+            draft = applySqlHandoff(draft, handoff);
+            if (handoff.transactional === false) {
+                setTransactional(false);
+                toast.info(`${handoff.source} needs each statement run on its own, so the transaction switch is off.`);
+            }
+        }
         setSql(draft);
         setView(undefined);
         setRequestError(undefined);

@@ -1,7 +1,7 @@
 import {
     IconTableAlias,
     IconVectorSpline,
-    IconSparkles,
+    IconGitCompare,
     IconDatabase,
     IconTransform,
     IconTerminal2,
@@ -31,9 +31,9 @@ export const useSidebarData = () => {
                         icon: IconVectorSpline,
                     },
                     {
-                        title: t("sidebar.ai_schema", { defaultValue: "AI Schema" }),
-                        url: '/database/ai-schema',
-                        icon: IconSparkles,
+                        title: t("sidebar.schema_change", { defaultValue: "Schema Change" }),
+                        url: '/database/schema-change',
+                        icon: IconGitCompare,
                     },
                     {
                         title: t("sidebar.data", { defaultValue: "Data" }),

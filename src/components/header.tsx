@@ -16,6 +16,7 @@ import RenameDb from '@/features/database/components/rename-db'
 import LanguagesDropdown from './languages-dropdown'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { ShieldCheck } from 'lucide-react'
+import { AccountMenu } from './account-menu'
 
 interface HeaderProps extends React.HTMLAttributes<HTMLElement> {
   fixed?: boolean
@@ -93,6 +94,7 @@ export const Header = ({
 
           <ThemeSwitch />
           <LanguagesDropdown />
+          <AccountMenu />
 
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getConnection, type ConnectionRow } from "../db/store.js";
+import type { ConnectionRow } from "../db/stores.js";
+import { findConnection } from "./connection-lookup.js";
 import { SqlSessionError, sqlSessions } from "../services/sql-sessions.js";
 
 export const sqlRouter = Router();
@@ -15,8 +16,8 @@ const runSchema = z.object({
     expectOpenTransaction: z.boolean().default(false),
 });
 
-function connectionOr404(id: string, res: import("express").Response): ConnectionRow | undefined {
-    const row = getConnection(id);
+async function connectionOr404(req: import("express").Request, res: import("express").Response): Promise<ConnectionRow | undefined> {
+    const row = await findConnection(req);
     if (!row) res.status(404).json({ error: "Connection not found" });
     return row;
 }
@@ -27,7 +28,7 @@ function fail(res: import("express").Response, error: unknown) {
 }
 
 sqlRouter.post("/:id/sql/run", async (req, res) => {
-    const row = connectionOr404(req.params.id, res);
+    const row = await connectionOr404(req, res);
     if (!row) return;
 
     const parsed = runSchema.safeParse(req.body);
@@ -43,7 +44,7 @@ sqlRouter.post("/:id/sql/run", async (req, res) => {
 
 for (const action of ["commit", "rollback"] as const) {
     sqlRouter.post(`/:id/sql/sessions/:sessionId/${action}`, async (req, res) => {
-        const row = connectionOr404(req.params.id, res);
+        const row = await connectionOr404(req, res);
         if (!row) return;
         const sessionId = sessionIdSchema.safeParse(req.params.sessionId);
         if (!sessionId.success) return res.status(400).json({ error: "Invalid session id" });
@@ -57,7 +58,7 @@ for (const action of ["commit", "rollback"] as const) {
 }
 
 sqlRouter.post("/:id/sql/sessions/:sessionId/cancel", async (req, res) => {
-    const row = connectionOr404(req.params.id, res);
+    const row = await connectionOr404(req, res);
     if (!row) return;
     const sessionId = sessionIdSchema.safeParse(req.params.sessionId);
     if (!sessionId.success) return res.status(400).json({ error: "Invalid session id" });
@@ -69,8 +70,8 @@ sqlRouter.post("/:id/sql/sessions/:sessionId/cancel", async (req, res) => {
     }
 });
 
-sqlRouter.get("/:id/sql/sessions/:sessionId", (req, res) => {
-    const row = connectionOr404(req.params.id, res);
+sqlRouter.get("/:id/sql/sessions/:sessionId", async (req, res) => {
+    const row = await connectionOr404(req, res);
     if (!row) return;
     const sessionId = sessionIdSchema.safeParse(req.params.sessionId);
     if (!sessionId.success) return res.status(400).json({ error: "Invalid session id" });
@@ -85,7 +86,7 @@ sqlRouter.get("/:id/sql/sessions/:sessionId", (req, res) => {
 
 // DELETE for fetch(); POST .../close for navigator.sendBeacon when the tab is closing (beacons can only POST).
 const closeSession: import("express").RequestHandler = async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     const sessionId = sessionIdSchema.safeParse(req.params.sessionId);
     if (!row || !sessionId.success) return res.status(204).end();
 

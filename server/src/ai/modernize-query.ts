@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { callZenJson } from "../services/zen-client.js";
+import { callModelJson } from "./provider.js";
 
 const name = z.string().trim().min(1).max(256);
 
@@ -78,8 +78,8 @@ export function buildModernizeInstructions(request: ModernizeQueryRequest): stri
     ].join("\n");
 }
 
-export async function createZenQueryModernization(request: ModernizeQueryRequest, signal?: AbortSignal): Promise<{ result: ModernizeQueryResult; model: string }> {
-    const { output, model } = await callZenJson({
+export async function createQueryModernization(request: ModernizeQueryRequest, signal?: AbortSignal): Promise<{ result: ModernizeQueryResult; model: string }> {
+    const { output, model } = await callModelJson({
         instructions: buildModernizeInstructions(request),
         input: {
             originalQuery: request.legacySql,
@@ -89,13 +89,14 @@ export async function createZenQueryModernization(request: ModernizeQueryRequest
             ruleBasedDraft: request.draft ?? null,
         },
         maxOutputTokens: 8_000,
+        format: { name: "modernize_query", schema: modernizeQueryResultSchema },
         signal,
     });
 
     const parsed = modernizeQueryResultSchema.safeParse(output);
     if (!parsed.success) {
         const details = parsed.error.issues.slice(0, 5).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ");
-        throw new Error(`Zen returned an invalid conversion: ${details}`);
+        throw new Error(`The model returned an invalid conversion: ${details}`);
     }
     return { result: parsed.data, model };
 }

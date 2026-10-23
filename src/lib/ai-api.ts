@@ -46,9 +46,15 @@ export async function requestAiSchemaPlan(
 export interface AiStatus {
     configured: boolean;
     model: string;
+    /** Models are called through the OpenAI API only. Absent from servers older than that. */
+    provider?: "openai";
+    allowed?: boolean;
+    /** The first thing that stops a request, in words; null when one can be made. */
+    problem?: string | null;
+    redactNames?: boolean;
 }
 
-/** Whether the API has a model key configured (never the key itself). */
+/** Whether an OpenAI model can be called from the API (never the key). */
 export async function fetchAiStatus(signal?: AbortSignal): Promise<AiStatus> {
     const response = await fetch("/api/ai/status", { signal });
     if (!response.ok) throw await errorFromResponse(response, "Could not read the AI status");

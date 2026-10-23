@@ -29,6 +29,11 @@ interface Remembered {
 // picking the connection and table again.
 let remembered: Remembered = {};
 
+/** Opens the Data page on this connection the next time it is shown (its own memory lasts until the page is reloaded). */
+export const rememberDataConnection = (connectionId: string): void => {
+    remembered = { connectionId };
+};
+
 const relationsMemory = new Map<string, RelationInfo[]>();
 const inflight = new Map<string, Promise<TableDataPage>>();
 

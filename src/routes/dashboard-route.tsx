@@ -5,6 +5,7 @@ import useDatabaseRoutes from './database-route';
 import DataBrowserPage from '@/features/data-browser';
 import QueryModernizerPage from '@/features/query-modernizer';
 import SqlEditorPage from '@/features/sql-editor';
+import SchemaChangePage from '@/features/schema-change';
 
 
 
@@ -18,6 +19,7 @@ const useDashboardRoutes = () => {
             <Route path="/database/data" element={<DataBrowserPage />} />
             <Route path="/database/modernizer" element={<QueryModernizerPage />} />
             <Route path="/database/sql" element={<SqlEditorPage />} />
+            <Route path="/database/schema-change" element={<SchemaChangePage />} />
         </Route>
 
     );

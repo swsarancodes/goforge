@@ -14,12 +14,12 @@ import {
     CreateConnectionInput,
     SavedConnection,
     createSavedConnection,
-    deleteSavedConnection,
     introspectSavedConnection,
     listSavedConnections,
     testSavedConnection,
 } from "@/lib/live-connection-api";
 import { TableInsertType } from "@/lib/schemas/table-schema";
+import { forgetConnection } from "../forget-connection";
 
 type View = "list" | "new";
 
@@ -98,8 +98,12 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
         }
     }, []);
 
-    const onDelete = useCallback(async (id: string) => {
-        await deleteSavedConnection(id);
+    const onDelete = useCallback(async (connection: SavedConnection) => {
+        try {
+            await forgetConnection(connection);
+        } catch (caught) {
+            setConnectError(caught instanceof Error ? caught.message : String(caught));
+        }
         await refreshConnections();
     }, [refreshConnections]);
 
@@ -165,7 +169,7 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
                         {connections.map((conn) => (
                             <div key={conn.id} className="flex items-center justify-between gap-2 rounded-md border p-3 min-w-0">
                                 <div className="min-w-0 flex-1">
-                                    <p className="font-medium truncate">{conn.name}</p>
+                                    <p className="font-medium truncate">{conn.name}{conn.kind === "cloud" && <span className="ml-2 rounded border px-1 py-0.5 text-[10px] font-normal text-muted-foreground">cloud</span>}</p>
                                     <p
                                         className="text-xs text-muted-foreground truncate"
                                         title={`${conn.username}@${conn.host}:${conn.port}/${conn.database}`}
@@ -182,7 +186,7 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
                                     <Button size="sm" onClick={() => onConnect(conn.id)} disabled={connectingId === conn.id}>
                                         {connectingId === conn.id ? <Loader2 className="size-4 animate-spin" /> : <Plug className="size-4" />}
                                     </Button>
-                                    <Button variant="ghost" size="sm" onClick={() => onDelete(conn.id)}>
+                                    <Button variant="ghost" size="sm" onClick={() => void onDelete(conn)}>
                                         <Trash2 className="size-4 text-destructive" />
                                     </Button>
                                 </div>

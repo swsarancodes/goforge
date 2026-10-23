@@ -13,7 +13,8 @@ export default defineConfig({
     proxy: {
       // goforge-api (live database connections) - runs separately via
       // `bun run dev` in server/, defaults to :4000.
-      '/api': 'http://127.0.0.1:4000'
+      // The Host header is passed on as the browser sent it (changeOrigin false): the API refuses a changing request whose Origin is not its Host.
+      '/api': { target: process.env.GOFORGE_API_URL ?? 'http://127.0.0.1:4000', changeOrigin: false }
     }
   } ,
   optimizeDeps: {

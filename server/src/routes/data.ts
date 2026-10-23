@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getConnection } from "../db/store.js";
+import { findConnection } from "./connection-lookup.js";
 import { catalogCache } from "../services/catalog-cache.js";
 import { DataRequestError, fetchTableRows } from "../services/pg-data.js";
 import { withReadClient, type PoolTimings } from "../services/pg-pool.js";
@@ -23,7 +23,7 @@ const dataQuerySchema = z.object({
 const STALE_CATALOG_CODES = new Set(["42703", "42P01"]);
 
 dataRouter.get("/:id/data", async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     if (!row) return res.status(404).json({ error: "Connection not found" });
 
     const parsed = dataQuerySchema.safeParse(req.query);

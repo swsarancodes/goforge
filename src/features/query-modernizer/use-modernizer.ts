@@ -7,11 +7,13 @@ import { useDatabase } from "@/providers/database-provider/database-provider";
 import { checkPostgresSyntax } from "./engine/checks";
 import { neutralizeParameters } from "./engine/convert";
 import { buildExampleQuery } from "./example-query";
+import { takeQueryHandoff } from "./query-handoff";
 import { ModernizeOutcome, modernize } from "./modernize";
 import { schemaFromDatabase } from "./schema-context";
 import type { LegacyDialect } from "./types";
 
 const USE_AI_KEY = "goforge.modernizer.ai";
+const MODE_KEY = "goforge.modernizer.mode";
 const CONNECTION_KEY = "goforge.modernizer.connection";
 const SQL_EDITOR_CONNECTION_KEY = "goforge.sql.connection";
 
@@ -30,6 +32,16 @@ const write = (key: string, value: string) => {
     }
 };
 
+/** Who writes the PostgreSQL: the rules alone, the rules with the model for what they cannot do (the default), or the model. */
+export type ModernizeMode = "rules" | "auto" | "ai";
+
+const isMode = (value: string | null): value is ModernizeMode => value === "rules" || value === "auto" || value === "ai";
+// Before there were three modes there was one switch, "use AI for the rest".
+const initialMode = (): ModernizeMode => {
+    const stored = read(MODE_KEY);
+    return isMode(stored) ? stored : read(USE_AI_KEY) === "false" ? "rules" : "auto";
+};
+
 export type PreviewState = { status: "idle" } | { status: "running" } | { status: "done"; response: PreviewResponse } | { status: "failed"; message: string };
 
 interface Saved {
@@ -45,11 +57,13 @@ let saved: Saved | undefined;
 /** State and actions behind the Modernizer page. */
 export function useModernizer() {
     const { database } = useDatabase();
+    // A statement sent over from the script view replaces what was here.
+    const [handoff] = useState(() => takeQueryHandoff());
     const schema = useMemo(() => schemaFromDatabase(database), [database]);
 
-    const [dialect, setDialect] = useState<LegacyDialect>(saved?.dialect ?? "oracle");
-    const [sql, setSql] = useState<string>(saved?.sql ?? "");
-    const [outcome, setOutcome] = useState<ModernizeOutcome | undefined>(saved?.outcome);
+    const [dialect, setDialect] = useState<LegacyDialect>(handoff?.dialect ?? saved?.dialect ?? "oracle");
+    const [sql, setSql] = useState<string>(handoff?.sql ?? saved?.sql ?? "");
+    const [outcome, setOutcome] = useState<ModernizeOutcome | undefined>(handoff ? undefined : saved?.outcome);
     const [tab, setTab] = useState<string>(saved?.tab ?? "result");
     const [running, setRunning] = useState(false);
     const [stage, setStage] = useState("");
@@ -58,7 +72,7 @@ export function useModernizer() {
     const [connections, setConnections] = useState<SavedConnection[]>([]);
     const [connectionId, setConnectionId] = useState<string | undefined>(undefined);
     const [aiStatus, setAiStatus] = useState<AiStatus | undefined>(undefined);
-    const [useAi, setUseAi] = useState<boolean>(() => read(USE_AI_KEY) !== "false");
+    const [chosenMode, setChosenMode] = useState<ModernizeMode>(initialMode);
 
     const abortRef = useRef<AbortController | null>(null);
 
@@ -85,6 +99,8 @@ export function useModernizer() {
 
     const connection = connections.find((candidate) => candidate.id === connectionId);
     const aiConfigured = aiStatus?.configured === true;
+    // The model modes need a model. Without one the rules do everything, whatever was chosen.
+    const mode: ModernizeMode = aiConfigured ? chosenMode : "rules";
 
     const ghostText = useMemo(() => buildExampleQuery({ dialect, schema }), [dialect, schema]);
 
@@ -93,9 +109,9 @@ export function useModernizer() {
         write(CONNECTION_KEY, id ?? "none");
     }, []);
 
-    const changeUseAi = useCallback((value: boolean) => {
-        setUseAi(value);
-        write(USE_AI_KEY, String(value));
+    const changeMode = useCallback((value: ModernizeMode) => {
+        setChosenMode(value);
+        write(MODE_KEY, value);
     }, []);
 
     const run = useCallback(async () => {
@@ -112,7 +128,8 @@ export function useModernizer() {
                     syntax: checkPostgresSyntax,
                     validate: connection ? (text) => validateSqlOnConnection(connection.id, text, controller.signal) : undefined,
                     connectionName: connection?.name,
-                    ask: useAi && aiConfigured ? (request) => requestQueryModernization(request, controller.signal) : undefined,
+                    ask: mode !== "rules" ? (request) => requestQueryModernization(request, controller.signal) : undefined,
+                    aiFirst: mode === "ai",
                     onStage: setStage,
                 },
             );
@@ -125,7 +142,7 @@ export function useModernizer() {
             if (abortRef.current === controller) abortRef.current = null;
             setRunning(false);
         }
-    }, [sql, dialect, schema, connection, useAi, aiConfigured, running]);
+    }, [sql, dialect, schema, connection, mode, running]);
 
     const stop = useCallback(() => abortRef.current?.abort(), []);
 
@@ -150,5 +167,5 @@ export function useModernizer() {
         }
     }, [connection, previewSql, previewBlocker]);
 
-    return { dialect, setDialect, sql, setSql, outcome, tab, setTab, running, stage, run, stop, connections, connection, changeConnection, aiStatus, aiConfigured, useAi, changeUseAi, ghostText, schema, preview, runPreview, previewBlocker };
+    return { dialect, setDialect, sql, setSql, outcome, tab, setTab, running, stage, run, stop, connections, connection, changeConnection, aiStatus, aiConfigured, mode, chosenMode, changeMode, ghostText, schema, preview, runPreview, previewBlocker };
 }

@@ -73,6 +73,20 @@ describe("modernize", () => {
         expect(outcome.aiNotice).toMatch(/not accepted after 2 tries \(syntax error/);
     });
 
+    it("does not ask the model when the only complaint is that a table is not on the connection", async () => {
+        const ask = vi.fn(async () => reply("SELECT 1"));
+        const missing: ValidationResponse = { status: "rejected", statements: [{ index: 0, sql: "", status: "rejected", error: { message: 'relation "emp" does not exist', code: "42P01", position: 15 } }], elapsedMs: 2 };
+        const outcome = await modernize({ sql: "SELECT NVL(a, 0) FROM emp", dialect: "oracle" }, deps({ ask, validate: async () => missing }));
+        expect(ask).not.toHaveBeenCalled();
+        expect(outcome.source).toBe("rules");
+        expect(outcome.postgres.status).toBe("rejected");
+
+        // an unconverted construct still gets the model, whatever else is missing
+        const unconverted = await modernize({ sql: "SELECT TRUNC(hired) FROM emp", dialect: "oracle" }, deps({ ask, validate: async () => missing }));
+        expect(unconverted.engine.unconverted).toHaveLength(1);
+        expect(ask).toHaveBeenCalled();
+    });
+
     it("sends the model back when PostgreSQL rejects the rules' own SQL", async () => {
         const ask = vi.fn(async () => reply("SELECT 1"));
         const validate = vi.fn(async (sql: string) => (sql === "SELECT 1" ? accepted : rejected('relation "nope" does not exist')));
@@ -133,6 +147,54 @@ describe("modernize", () => {
         expect(outcome.sql).toBe("SELECT 'oops");
         expect(outcome.syntax.ok).toBe(false);
         expect(outcome.postgres.status).toBe("not-run");
+    });
+
+    describe("when the model is asked first", () => {
+        it("asks even though the rules finished and PostgreSQL accepts their SQL, and shows the model's answer", async () => {
+            const ask = vi.fn(async (_request: QueryModernizationRequest) => reply("SELECT coalesce(a, 0) AS a FROM t"));
+            const outcome = await modernize({ sql: "SELECT NVL(a, 0) FROM t", dialect: "oracle" }, deps({ ask, aiFirst: true, validate: async () => accepted }));
+
+            expect(ask).toHaveBeenCalledTimes(1);
+            expect(outcome.source).toBe("ai");
+            expect(outcome.sql).toBe("SELECT coalesce(a, 0) AS a FROM t");
+            // the rules still ran, and are what the model was given as a draft
+            expect(outcome.engine.sql).toBe("SELECT COALESCE(a, 0) FROM t");
+            expect(ask.mock.calls[0][0].draft?.sql).toBe("SELECT COALESCE(a, 0) FROM t");
+            expect(ask.mock.calls[0][0].legacySql).toBe("SELECT NVL(a, 0) FROM t");
+        });
+
+        it("falls back to the rules' SQL, saying so, when the model's answer is never accepted", async () => {
+            const ask = vi.fn(async () => reply("SELECT broken FROM"));
+            const outcome = await modernize({ sql: "SELECT NVL(a, 0) FROM t", dialect: "oracle" }, deps({ ask, aiFirst: true, validate: async (sql) => (sql.includes("broken") ? rejected("syntax error") : accepted) }));
+            expect(ask).toHaveBeenCalledTimes(MAX_AI_ATTEMPTS);
+            expect(outcome.source).toBe("rules");
+            expect(outcome.sql).toBe("SELECT COALESCE(a, 0) FROM t");
+            expect(outcome.aiNotice).toMatch(/not accepted after 2 tries/);
+        });
+
+        it("does nothing different when there is no model to ask", async () => {
+            const outcome = await modernize({ sql: "SELECT NVL(a, 0) FROM t", dialect: "oracle" }, deps({ aiFirst: true, validate: async () => accepted }));
+            expect(outcome.source).toBe("rules");
+            expect(outcome.aiNotice).toBeUndefined();
+        });
+
+        it("lets the model read a query the rules could not, and keeps the unreadable-query verdict if it cannot either", async () => {
+            const ask = vi.fn(async () => reply("SELECT 'oops'"));
+            const helped = await modernize({ sql: "SELECT 'oops", dialect: "oracle" }, deps({ ask, aiFirst: true }));
+            expect(ask).toHaveBeenCalledTimes(1);
+            expect(helped.source).toBe("ai");
+            expect(helped.sql).toBe("SELECT 'oops'");
+
+            const refused = await modernize({ sql: "SELECT 'oops", dialect: "oracle" }, deps({ ask: async () => reply("SELECT broken"), aiFirst: true, syntax: async (sql) => (sql.includes("broken") ? { ok: false, error: "syntax error" } : { ok: true }) }));
+            expect(refused.source).toBe("rules");
+            expect(refused.engine.syntaxError).toBeDefined();
+        });
+
+        it("never asks in the default mode when the rules are enough", async () => {
+            const ask = vi.fn(async () => reply("SELECT 1"));
+            await modernize({ sql: "SELECT NVL(a, 0) FROM t", dialect: "oracle" }, deps({ ask, validate: async () => accepted }));
+            expect(ask).not.toHaveBeenCalled();
+        });
     });
 
     it("suggests indexes for the tables it was given", async () => {

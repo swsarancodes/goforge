@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { getConnection } from "../db/store.js";
+import { findConnection } from "./connection-lookup.js";
 import { catalogCache } from "../services/catalog-cache.js";
 import { withReadClient, type PoolTimings } from "../services/pg-pool.js";
 import { loadAllRelations } from "../services/pg-relations.js";
@@ -9,7 +9,7 @@ export const relationsRouter = Router();
 // The table list the Data page shows. One round trip; also fills the catalog cache so the first page of
 // any table afterwards needs no catalog lookup.
 relationsRouter.get("/:id/relations", async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     if (!row) return res.status(404).json({ error: "Connection not found" });
 
     const startedAt = performance.now();
@@ -28,7 +28,7 @@ relationsRouter.get("/:id/relations", async (req, res) => {
 
 // Opens (or keeps open) the pooled connection so the next click doesn't pay for the handshake.
 relationsRouter.post("/:id/warm", async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     if (!row) return res.status(404).json({ ok: false, error: "Connection not found" });
 
     const startedAt = performance.now();

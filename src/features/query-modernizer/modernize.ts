@@ -54,10 +54,20 @@ export interface ModernizeDeps {
     connectionName?: string;
     /** Asks the model. Absent when it's off or not configured. */
     ask?: (request: QueryModernizationRequest) => Promise<{ result: AiConversion; model: string }>;
+    /**
+     * Ask the model for the answer whatever the rules did, instead of only for what they could not do. The rules' conversion is still
+     * made, shown as the fallback, and given to the model as a draft. The model's answer is still shown only if PostgreSQL accepts it.
+     */
+    aiFirst?: boolean;
     onStage?: (label: string) => void;
 }
 
 const NOT_RUN: PostgresCheck = { status: "not-run", statements: [] };
+
+/** PostgreSQL says the table or the schema is not there. That is about the connection, not the SQL: a model cannot repair it, so it is not asked. */
+export const MISSING_OBJECT_CODES = new Set(["42P01", "3F000"]);
+
+const objectMissing = (check: PostgresCheck): boolean => check.status === "rejected" && check.statements.some((statement) => statement.status === "rejected" && MISSING_OBJECT_CODES.has(statement.error?.code ?? ""));
 
 async function askPostgres(sql: string, deps: ModernizeDeps): Promise<PostgresCheck> {
     if (!deps.validate) return NOT_RUN;
@@ -89,7 +99,8 @@ export async function modernize(input: { sql: string; dialect: LegacyDialect; sc
     stage("Converting with the rules");
     const engine = convertQuery({ sql: input.sql, dialect: input.dialect, schema: input.schema });
     const base = { dialect: input.dialect, original: input.sql, engine };
-    if (engine.syntaxError) {
+    // The model may still read a query the rules could not parse, when it is the one asked to do the conversion.
+    if (engine.syntaxError && !(deps.aiFirst && deps.ask)) {
         return { ...base, sql: input.sql, source: "rules", syntax: { ok: false, error: engine.syntaxError }, postgres: NOT_RUN, advice: { recommendations: [], notes: [] }, elapsedMs: Math.round(performance.now() - startedAt) };
     }
 
@@ -101,7 +112,7 @@ export async function modernize(input: { sql: string; dialect: LegacyDialect; sc
     let ai: AiRun | undefined;
     let aiNotice: string | undefined;
 
-    const needsHelp = engine.unconverted.length > 0 || postgres.status === "rejected" || (postgres.status !== "accepted" && !syntax.ok);
+    const needsHelp = (deps.aiFirst === true && deps.ask !== undefined) || engine.unconverted.length > 0 || (postgres.status === "rejected" && !objectMissing(postgres)) || (postgres.status !== "accepted" && !syntax.ok);
     if (needsHelp && deps.ask) {
         let lastError = firstError(postgres) ?? (!syntax.ok ? syntax.error : undefined);
         let candidate = engine.sql;

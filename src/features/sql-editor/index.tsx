@@ -9,6 +9,7 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/componen
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useDelayedFlag } from "@/hooks/use-delayed-flag";
+import { connectionAddress, connectionLabel } from "@/lib/live-connection-api";
 import { cn } from "@/lib/utils";
 import { positionToLineColumn } from "./error-position";
 import { useSqlEditor, type SqlEditor } from "./use-sql-editor";
@@ -194,8 +195,8 @@ const SqlEditorPage: React.FC = () => {
                     </SelectTrigger>
                     <SelectContent>
                         {editor.connections.map((connection) => (
-                            <SelectItem key={connection.id} value={connection.id}>
-                                {connection.name} ({connection.host}:{connection.port}/{connection.database})
+                            <SelectItem key={connection.id} value={connection.id} title={connectionAddress(connection)}>
+                                {connectionLabel(connection, editor.connections)}
                             </SelectItem>
                         ))}
                     </SelectContent>

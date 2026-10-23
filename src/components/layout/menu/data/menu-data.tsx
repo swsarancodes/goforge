@@ -33,8 +33,15 @@ export const useMenuData = () => {
             title: t("menu.file"),
             children: [
                 {
+                    id: "menu.connect_database",
+                    title: t("menu.connect_database", { defaultValue: "Connect to a database…" }),
+                    clickHandler: () => {
+                        open(Modals.CONNECT_DATABASE)
+                    }
+                },
+                {
                     id: "menu.new",
-                    title: t("menu.new"),
+                    title: t("menu.new_empty", { defaultValue: "New empty diagram" }),
                     clickHandler: () => {
                         open(Modals.CREATE_DATABASE)
                     }
@@ -115,6 +122,14 @@ export const useMenuData = () => {
                     title: t("menu.connect_live_database"),
                     clickHandler: () => {
                         open(Modals.CONNECT_LIVE_DATABASE)
+                    }
+                },
+                {
+                    id: "menu.create_live_database",
+                    title: t("menu.create_live_database", { defaultValue: "Create a live database from this diagram…" }),
+                    isDisabled: !database,
+                    clickHandler: () => {
+                        open(Modals.CREATE_LIVE_DATABASE)
                     }
                 },
                 {
