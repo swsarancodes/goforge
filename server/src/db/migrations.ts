@@ -100,6 +100,22 @@ CREATE TABLE ai_audit (
 CREATE INDEX ai_audit_owner_idx ON ai_audit (owner_id, id DESC);
 `,
     },
+    {
+        id: "002_connection_engine",
+        sql: `
+ALTER TABLE connections ADD COLUMN engine text NOT NULL DEFAULT 'postgres' CHECK (engine IN ('postgres', 'oracle'));
+`,
+    },
+    {
+        id: "003_oracle_schema_unique",
+        sql: `
+-- A PostgreSQL cloud database is its own physical database. An Oracle one is a schema (the user name) on a shared server, so there the
+-- database_name (the service) is the same for all of them and the schema is what must be unique.
+DROP INDEX connections_cloud_database_key;
+CREATE UNIQUE INDEX connections_cloud_database_key ON connections (database_name) WHERE kind = 'cloud' AND engine = 'postgres';
+CREATE UNIQUE INDEX connections_oracle_schema_key ON connections (host, port, database_name, username) WHERE kind = 'cloud' AND engine = 'oracle';
+`,
+    },
 ];
 
 /** Runs every step that has not run yet, in order, in one transaction under a lock so two servers starting together do not collide. */

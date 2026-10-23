@@ -8,6 +8,8 @@ import { findConnection } from "./connection-lookup.js";
 import { handle } from "./async-handler.js";
 import { dropCloudDatabase } from "../services/cloud-databases.js";
 import { toConnectionConfig, withPgClient } from "../services/pg-client.js";
+import { withOracle } from "../services/oracle-client.js";
+import { dropOracleSchema, getOracleServer } from "../services/oracle-schemas.js";
 import { catalogCache } from "../services/catalog-cache.js";
 import { closeReadPool } from "../services/pg-pool.js";
 import { sqlSessions } from "../services/sql-sessions.js";
@@ -40,6 +42,8 @@ export function toPublicConnection(row: ConnectionRow) {
         sslMode: row.ssl_mode,
         /** `cloud` for a database this app created for the account; deleting it deletes the database. */
         kind: row.kind ?? "external",
+        /** `postgres`, or `oracle` for a schema on the app's Oracle server. */
+        engine: row.engine ?? "postgres",
         createdAt: row.created_at,
         updatedAt: row.updated_at,
     };
@@ -74,8 +78,11 @@ connectionsRouter.post("/", handle(async (req, res) => {
     res.status(201).json(toPublicConnection(row));
 }));
 
+/** `?engine=postgres` (the default, so every page that predates Oracle sees what it always saw), `oracle`, or `all`. */
 connectionsRouter.get("/", handle(async (req, res) => {
-    res.json((await getConnectionStore().list(ownerOf(req))).map(toPublicConnection));
+    const wanted = req.query.engine === "oracle" || req.query.engine === "all" ? req.query.engine : "postgres";
+    const rows = await getConnectionStore().list(ownerOf(req));
+    res.json(rows.filter((row) => wanted === "all" || (row.engine ?? "postgres") === wanted).map(toPublicConnection));
 }));
 
 connectionsRouter.patch("/:id", handle(async (req, res) => {
@@ -89,7 +96,7 @@ connectionsRouter.patch("/:id", handle(async (req, res) => {
 }));
 
 connectionsRouter.delete("/:id", handle(async (req, res) => {
-    const row = await findConnection(req);
+    const row = await findConnection(req, req.params.id, { engine: "any" });
     if (!row) return res.status(404).json({ error: "Connection not found" });
 
     // A database this app created exists only through this connection, so removing the connection removes the database. That cannot be
@@ -103,7 +110,15 @@ connectionsRouter.delete("/:id", handle(async (req, res) => {
     await closeReadPool(row.id);
     await sqlSessions.closeForConnection(row.id);
 
-    if (row.kind === "cloud") {
+    if (row.kind === "cloud" && row.engine === "oracle") {
+        const oracle = getOracleServer();
+        if (!oracle) return res.status(409).json({ error: "This database lives on the Oracle server, which is not configured here." });
+        try {
+            await dropOracleSchema(oracle.admin, row.username);
+        } catch (error) {
+            return res.status(502).json({ error: `Could not delete the database: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    } else if (row.kind === "cloud") {
         const cloud = getCloud();
         if (!cloud) return res.status(409).json({ error: "This database lives on the application server, which is not configured here." });
         try {
@@ -117,11 +132,15 @@ connectionsRouter.delete("/:id", handle(async (req, res) => {
 }));
 
 connectionsRouter.post("/:id/test", async (req, res) => {
-    const row = await findConnection(req);
+    const row = await findConnection(req, req.params.id, { engine: "any" });
     if (!row) return res.status(404).json({ ok: false, error: "Connection not found" });
 
     try {
         const config = toConnectionConfig(row);
+        if (row.engine === "oracle") {
+            await withOracle(config, (connection) => connection.execute("SELECT 1 FROM dual"));
+            return res.json({ ok: true });
+        }
         await withPgClient(config, (client) => client.query("SELECT 1"));
         res.json({ ok: true });
     } catch (err) {

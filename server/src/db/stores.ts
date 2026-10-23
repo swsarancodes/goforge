@@ -20,8 +20,10 @@ export interface ConnectionStore {
     get(ownerId: string, id: string): Promise<ConnectionRow | undefined>;
     rename(ownerId: string, id: string, name: string): Promise<ConnectionRow | undefined>;
     delete(ownerId: string, id: string): Promise<void>;
-    /** How many databases this app created for the owner on its own server. */
+    /** How many PostgreSQL databases this app created for the owner on its own server. */
     countCloud(ownerId: string): Promise<number>;
+    /** How many databases of this engine this app created for the owner on its own servers. */
+    countManaged(ownerId: string, engine: "postgres" | "oracle"): Promise<number>;
 }
 
 export interface UserRecord {

@@ -1,7 +1,7 @@
 import type { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { SavedConnection, listSavedConnections } from "@/lib/live-connection-api";
+import { SavedConnection, deleteSavedConnection, listSavedConnections } from "@/lib/live-connection-api";
 import {
     SqlApiError,
     SqlRunError,
@@ -104,7 +104,7 @@ export function useSqlEditor() {
 
     // ---- connections ------------------------------------------------------------------------------------------
     useEffect(() => {
-        listSavedConnections()
+        listSavedConnections("all")
             .then((list) => {
                 setConnections(list);
                 const last = storage.get(LAST_CONNECTION_KEY);
@@ -193,7 +193,8 @@ export function useSqlEditor() {
                 const response: SqlRunResponse = await runSql(id, {
                     sessionId: sessionIdFor(id),
                     sql: picked,
-                    transactional,
+                    // an Oracle schema commits as it goes: there is no transaction to keep open
+                    transactional: connections.find((candidate) => candidate.id === id)?.engine === "oracle" ? false : transactional,
                     expectOpenTransaction: transaction.open && transaction.hasChanges,
                 });
                 if (connectionRef.current !== id) return;
@@ -216,7 +217,7 @@ export function useSqlEditor() {
                 setIsRunning(false);
             }
         },
-        [isRunning, selectedText, sql, transactional, transaction.open, transaction.hasChanges],
+        [isRunning, selectedText, sql, transactional, transaction.open, transaction.hasChanges, connections],
     );
 
     const finish = useCallback(
@@ -263,6 +264,16 @@ export function useSqlEditor() {
         current.focus();
     }, []);
 
+    /** Deletes a database GoForge created (an Oracle schema, and everything in it) and forgets its connection. */
+    const deleteDatabase = useCallback(async (id: string) => {
+        await deleteSavedConnection(id, { dropDatabase: true });
+        setConnections((list) => list.filter((candidate) => candidate.id !== id));
+        if (connectionRef.current === id) {
+            setConnectionId(undefined);
+            setView(undefined);
+        }
+    }, []);
+
     const loadFromHistory = useCallback((entry: SqlHistoryEntry) => setSql(entry.sql), []);
     const clearHistory = useCallback(() => {
         clearSqlHistory();
@@ -278,6 +289,7 @@ export function useSqlEditor() {
         connectionId,
         connection,
         selectConnection: setConnectionId,
+        deleteDatabase,
         sql,
         setSql,
         transactional,

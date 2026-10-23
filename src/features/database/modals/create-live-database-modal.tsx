@@ -5,6 +5,7 @@ import { AlertCircleIcon } from "lucide-react";
 import useToast from "@/hooks/use-toast";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
 import { LiveDatabaseOption, useLiveDatabase } from "../components/live-database-option";
+import { liveDatabaseCreatedText } from "../live-database";
 
 /** Builds the open diagram as a real PostgreSQL database on a saved server, and saves a connection to it. */
 const CreateLiveDatabaseModal: React.FC<Omit<ModalProps, "title" | "children">> = ({ isOpen, onOpenChange }) => {
@@ -22,7 +23,7 @@ const CreateLiveDatabaseModal: React.FC<Omit<ModalProps, "title" | "children">> 
         try {
             const created = await live.create(database, data_types);
             onOpenChange?.(false);
-            raise("Database created", `"${created.connection.name}" is now a live database under Data, Modernizer, Schema Change and SQL.`, "SUCCESS");
+            raise("Database created", liveDatabaseCreatedText(created.connection), "SUCCESS");
         } catch (caught) {
             setError(caught instanceof Error ? caught.message : String(caught));
         }
@@ -36,7 +37,7 @@ const CreateLiveDatabaseModal: React.FC<Omit<ModalProps, "title" | "children">> 
             description="Creates a new PostgreSQL database on a server you have saved, builds this diagram's tables in it, and saves a connection to it. Nothing is changed in the diagram."
             actionName="Create database"
             actionHandler={onCreate}
-            isDisabled={!hasTables || !live.supported || (live.connections.length === 0 && !live.cloudAvailable) || Boolean(live.problem)}
+            isDisabled={!hasTables || !live.supported || !live.canCreate || Boolean(live.problem)}
             className="md:min-w-[520px] w-full"
         >
             <div className="flex flex-col gap-3">

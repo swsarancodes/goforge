@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertCircle, Check, History, Loader2, Play, Square, Terminal, Undo2 } from "lucide-react";
+import { AlertCircle, Check, History, Loader2, Play, Square, Terminal, Trash2, Undo2 } from "lucide-react";
 import CodeEditor from "@/components/code-editor";
 import { RowsTable, RowsTableSkeleton } from "@/components/rows-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -170,13 +171,60 @@ const HistoryMenu: React.FC<{ editor: SqlEditor }> = ({ editor }) => {
     );
 };
 
+/** Deleting an Oracle database GoForge made: asked for, because it deletes the schema and everything in it for good. */
+const DeleteDatabase: React.FC<{ editor: SqlEditor }> = ({ editor }) => {
+    const [open, setOpen] = useState(false);
+    const [busy, setBusy] = useState(false);
+    const [error, setError] = useState<string | undefined>(undefined);
+    const connection = editor.connection;
+    if (!connection || connection.engine !== "oracle" || connection.kind !== "cloud") return null;
+
+    const confirm = async () => {
+        setBusy(true);
+        setError(undefined);
+        try {
+            await editor.deleteDatabase(connection.id);
+            setOpen(false);
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : String(caught));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    return (
+        <>
+            <Button size="sm" variant="outline" className="h-8 gap-1.5" onClick={() => setOpen(true)} disabled={editor.isRunning} aria-label={`Delete the database ${connection.name}`}>
+                <Trash2 className="size-3.5" /> Delete database
+            </Button>
+            <Dialog open={open} onOpenChange={(next) => !busy && setOpen(next)}>
+                <DialogContent>
+                    <DialogHeader>
+                        <DialogTitle>Delete “{connection.name}”?</DialogTitle>
+                        <DialogDescription>This deletes the Oracle schema GoForge created for you, with every table and row in it. It cannot be undone.</DialogDescription>
+                    </DialogHeader>
+                    {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+                    <DialogFooter>
+                        <Button variant="outline" onClick={() => setOpen(false)} disabled={busy}>Keep it</Button>
+                        <Button variant="destructive" onClick={() => void confirm()} disabled={busy}>
+                            {busy ? <Loader2 className="size-3.5 animate-spin" /> : null} Delete database
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+        </>
+    );
+};
+
 /**
- * SQL editor for a saved Postgres connection. Runs happen inside a transaction that stays open until you commit or
- * roll back, so you can look at what a change did before it becomes permanent.
+ * SQL editor for a saved connection: PostgreSQL, or an Oracle database GoForge created. On PostgreSQL, runs happen inside a transaction that
+ * stays open until you commit or roll back, so you can look at what a change did before it becomes permanent. An Oracle database commits each
+ * statement as it runs (Oracle commits DDL by itself anyway), so there is no transaction to manage.
  */
 const SqlEditorPage: React.FC = () => {
     const editor = useSqlEditor();
     const { transaction } = editor;
+    const isOracle = editor.connection?.engine === "oracle";
 
     const noConnections = !editor.isLoadingConnections && editor.connections.length === 0;
     const transactionLabel = useMemo(() => {
@@ -197,6 +245,7 @@ const SqlEditorPage: React.FC = () => {
                         {editor.connections.map((connection) => (
                             <SelectItem key={connection.id} value={connection.id} title={connectionAddress(connection)}>
                                 {connectionLabel(connection, editor.connections)}
+                                {connection.engine === "oracle" && <span className="ml-2 rounded border px-1 py-0.5 text-[10px] font-normal text-muted-foreground">Oracle</span>}
                             </SelectItem>
                         ))}
                     </SelectContent>
@@ -213,13 +262,19 @@ const SqlEditorPage: React.FC = () => {
                     </Button>
                 )}
 
-                <label
-                    className="flex items-center gap-2 text-xs text-muted-foreground"
-                    title="Changes stay uncommitted until you press Commit. Turn this off for statements Postgres can't run in a transaction, such as CREATE INDEX CONCURRENTLY."
-                >
-                    <Switch checked={editor.transactional} onCheckedChange={editor.setTransactional} disabled={transaction.open} aria-label="Run in a transaction" />
-                    Transaction
-                </label>
+                {isOracle ? (
+                    <Badge variant="outline" className="font-normal" title="Oracle commits DDL by itself, and this database is yours alone, so each statement commits as it runs. Separate statements with ;, and end a PL/SQL block with a line holding only /.">
+                        Oracle · each statement commits as it runs
+                    </Badge>
+                ) : (
+                    <label
+                        className="flex items-center gap-2 text-xs text-muted-foreground"
+                        title="Changes stay uncommitted until you press Commit. Turn this off for statements Postgres can't run in a transaction, such as CREATE INDEX CONCURRENTLY."
+                    >
+                        <Switch checked={editor.transactional} onCheckedChange={editor.setTransactional} disabled={transaction.open} aria-label="Run in a transaction" />
+                        Transaction
+                    </label>
+                )}
 
                 <div className="ml-auto flex flex-wrap items-center gap-2">
                     {transactionLabel && (
@@ -237,6 +292,7 @@ const SqlEditorPage: React.FC = () => {
                             </Button>
                         </>
                     )}
+                    <DeleteDatabase editor={editor} />
                     <HistoryMenu editor={editor} />
                 </div>
             </div>
@@ -248,7 +304,7 @@ const SqlEditorPage: React.FC = () => {
             )}
 
             {noConnections ? (
-                <div className="flex-1 flex items-center justify-center p-6 text-sm text-muted-foreground text-center">No saved connections yet. Add one from File &gt; Connect Live Database.</div>
+                <div className="flex-1 flex items-center justify-center p-6 text-sm text-muted-foreground text-center">No saved connections yet. Add one from File &gt; Connect Live Database, or create an Oracle database from an Oracle diagram.</div>
             ) : (
                 <ResizablePanelGroup direction="vertical" autoSaveId="goforge-sql-editor" className="flex-1 min-h-0">
                     <ResizablePanel id="sql-editor-input" order={1} defaultSize={45} minSize={15}>

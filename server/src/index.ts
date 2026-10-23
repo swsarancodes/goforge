@@ -1,3 +1,4 @@
+import { getOracleServer } from "./services/oracle-schemas.js";
 import "dotenv/config";
 import { createApp } from "./app.js";
 import { getMasterKey } from "./crypto/vault.js";
@@ -52,6 +53,15 @@ if (dbConfig) {
 } else {
     // Local mode: one anonymous owner, everything in the SQLite file next to the API.
     installAiStores(createSqliteAiStores());
+}
+
+// Oracle databases (schemas on the app's own Oracle server) are optional: they exist when ORACLE_ADMIN_URL is set.
+try {
+    const oracle = getOracleServer();
+    if (oracle) console.log(`oracle server: ${oracle.admin.host}:${oracle.admin.port}/${oracle.admin.database} (a schema per Oracle database, up to ${oracle.maxSchemasPerUser} per account)`);
+} catch (error) {
+    console.error(`Could not read ORACLE_ADMIN_URL: ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
 }
 
 const port = Number(process.env.PORT) || 4000;

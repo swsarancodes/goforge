@@ -18,6 +18,8 @@ const { installCloud, installConnectionStore, getConnectionStore } = await impor
 const { toConnectionConfig } = await import("../services/pg-client.js");
 const { installAiStores } = await import("../ai/provider.js");
 const { CreateDatabaseError, DatabaseExistsError } = await import("../services/pg-create-database.js");
+const { installOracleServer } = await import("../services/oracle-schemas.js");
+const oracleCreated: string[] = [];
 
 type CloudCall = { database: string; sql: string; user: string; owner?: { role: string; password: string; connectionLimit?: number } };
 const created: CloudCall[] = [];
@@ -58,7 +60,16 @@ beforeAll(async () => {
             },
             dropDatabase: async () => undefined,
         },
+        // Oracle itself is replaced (see oracle.integration.test.ts); what is under test here is the accounts, the allowance and the store
+        oracleDatabases: {
+            createSchema: async (_admin, schema, _password, sql) => {
+                oracleCreated.push(schema);
+                return { statementsRun: sql.split(";").filter((piece) => piece.trim()).length };
+            },
+            dropSchema: async () => undefined,
+        },
     });
+    installOracleServer({ admin: { host: "127.0.0.1", port: 1, user: "system", password: "admin-secret-not-real", database: "FREEPDB1", sslMode: "disable" }, maxSchemasPerUser: 2 });
     server = app.listen(0, "127.0.0.1");
     await new Promise((resolve) => server.once("listening", resolve));
     base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -345,5 +356,52 @@ describe("the server", () => {
         const response = await fetch(`${base}/api/auth/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{not json" });
         expect(response.status).toBe(400);
         expect((await response.json()).error).toMatch(/not valid JSON/);
+    });
+});
+
+describe("Oracle databases with accounts on", () => {
+    const ddl = "CREATE TABLE t (id NUMBER);";
+    let postgresUsedBefore = -1;
+
+    it("keeps them behind an account", async () => {
+        expect((await browser().send("GET", "/api/oracle-databases/status")).status).toBe(401);
+        expect((await browser().send("POST", "/api/oracle-databases", { name: "x", sql: ddl })).status).toBe(401);
+    });
+
+    it("lets one account have several, on the same Oracle service, each as its own schema", async () => {
+        expect((await ada.send("GET", "/api/oracle-databases/status")).body).toEqual({ configured: true, limit: 2, used: 0 });
+        postgresUsedBefore = (await ada.send("GET", "/api/auth/me")).body.cloudDatabases.used;
+        const first = await ada.send("POST", "/api/oracle-databases", { name: "insurance", sql: ddl });
+        const second = await ada.send("POST", "/api/oracle-databases", { name: "claims", sql: ddl });
+        expect([first.status, second.status]).toEqual([201, 201]);
+        expect(first.body.connection.database).toBe("FREEPDB1");
+        expect(second.body.connection.database).toBe("FREEPDB1");
+        expect(first.body.connection.username).not.toBe(second.body.connection.username);
+        expect((await ada.send("GET", "/api/oracle-databases/status")).body).toMatchObject({ used: 2 });
+    });
+
+    it("counts the allowance per account and per engine", async () => {
+        const over = await ada.send("POST", "/api/oracle-databases", { name: "third", sql: ddl });
+        expect(over.status).toBe(403);
+        expect(over.body.code).toBe("oracle-database-limit");
+        // another account has its own allowance, and the same name is fine for it
+        const his = await bob.send("POST", "/api/oracle-databases", { name: "insurance", sql: ddl });
+        expect(his.status).toBe(201);
+        expect(his.body.connection.username).not.toBe(oracleCreated[0]);
+        // the PostgreSQL cloud allowance is separate: Oracle databases did not use any of it
+        expect((await ada.send("GET", "/api/auth/me")).body.cloudDatabases.used).toBe(postgresUsedBefore);
+    });
+
+    it("shows an account only its own, and never another account's", async () => {
+        const mine = (await ada.send("GET", "/api/connections?engine=oracle")).body as { id: string; username: string }[];
+        const his = (await bob.send("GET", "/api/connections?engine=oracle")).body as { id: string; username: string }[];
+        expect(mine).toHaveLength(2);
+        expect(his).toHaveLength(1);
+        expect(mine.map((c) => c.id)).not.toContain(his[0].id);
+        // someone else's id is simply not found, in the SQL editor too
+        expect((await ada.send("GET", `/api/connections/${his[0].id}/sql/sessions/abcdefgh1234`)).status).toBe(404);
+        expect((await ada.send("POST", `/api/connections/${his[0].id}/sql/run`, { sessionId: "abcdefgh1234", sql: "SELECT 1 FROM dual" })).status).toBe(404);
+        // and the PostgreSQL list of either account has none of them
+        expect(((await ada.send("GET", "/api/connections")).body as { engine?: string }[]).some((c) => c.engine === "oracle")).toBe(false);
     });
 });

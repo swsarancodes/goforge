@@ -21,6 +21,7 @@ import { useVersionHistoryActions } from "@/hooks/use-version-history";
 import { PreparedSqlSchemaChange, prepareSqlSchemaChange } from "@/utils/import/prepare-sql-schema-change";
 import { DBDiffOperation } from "@/utils/database";
 import { LiveDatabaseOption, useLiveDatabase } from "../live-database-option";
+import { liveDatabaseCreatedText } from "../../live-database";
 
 const SQL_OPERATION_LABELS: Record<string, string> = {
     RENAME_DATABASE: "database rename(s)",
@@ -291,10 +292,10 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
             // The live database goes first: if the server refuses, nothing in the diagram has changed yet and the choice can be undone.
             if (live.active) {
                 const created = await live.create(preparedChange.targetDatabase, data_types);
-                createdDatabase = created.connection.name;
+                createdDatabase = liveDatabaseCreatedText(created.connection);
             }
             const recorded = preparedChange.operations.length > 0 ? await applyRecorded(preparedChange.operations, { name: "SQL editor changes", origin: "sql-editor" }) : undefined;
-            const liveNote = createdDatabase ? ` "${createdDatabase}" is now a live database under Data, Modernizer, Schema Change and SQL.` : "";
+            const liveNote = createdDatabase ? ` ${createdDatabase}` : "";
             raise(
                 createdDatabase ? (recorded ? "Database created and changes applied" : "Database created") : "SQL changes applied",
                 recorded

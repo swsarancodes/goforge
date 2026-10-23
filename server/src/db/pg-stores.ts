@@ -38,6 +38,7 @@ interface ConnectionDbRow {
     password_iv: Uint8Array;
     password_auth_tag: Uint8Array;
     kind: "external" | "cloud";
+    engine: "postgres" | "oracle";
     created_at: unknown;
     updated_at: unknown;
 }
@@ -54,6 +55,7 @@ const toConnection = (row: ConnectionDbRow): ConnectionRow => ({
     password_iv: bytes(row.password_iv),
     password_auth_tag: bytes(row.password_auth_tag),
     kind: row.kind,
+    engine: row.engine ?? "postgres",
     created_at: iso(row.created_at),
     updated_at: iso(row.updated_at),
 });
@@ -62,9 +64,9 @@ export function createPgConnectionStore(db: Queryable): ConnectionStore {
     return {
         async insert(ownerId, row) {
             await db.query(
-                `INSERT INTO connections (id, owner_id, name, host, port, username, database_name, ssl_mode, password_ciphertext, password_iv, password_auth_tag, kind, created_at, updated_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
-                [row.id, ownerId, row.name, row.host, row.port, row.username, row.database_name, row.ssl_mode, row.password_ciphertext, row.password_iv, row.password_auth_tag, row.kind ?? "external", row.created_at, row.updated_at],
+                `INSERT INTO connections (id, owner_id, name, host, port, username, database_name, ssl_mode, password_ciphertext, password_iv, password_auth_tag, kind, engine, created_at, updated_at)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+                [row.id, ownerId, row.name, row.host, row.port, row.username, row.database_name, row.ssl_mode, row.password_ciphertext, row.password_iv, row.password_auth_tag, row.kind ?? "external", row.engine ?? "postgres", row.created_at, row.updated_at],
             );
         },
         async list(ownerId) {
@@ -83,7 +85,11 @@ export function createPgConnectionStore(db: Queryable): ConnectionStore {
             await db.query("DELETE FROM connections WHERE owner_id = $1 AND id = $2", [ownerId, id]);
         },
         async countCloud(ownerId) {
-            const result = await db.query<{ n: unknown }>("SELECT count(*) AS n FROM connections WHERE owner_id = $1 AND kind = 'cloud'", [ownerId]);
+            const result = await db.query<{ n: unknown }>("SELECT count(*) AS n FROM connections WHERE owner_id = $1 AND kind = 'cloud' AND engine = 'postgres'", [ownerId]);
+            return num(result.rows[0]?.n ?? 0);
+        },
+        async countManaged(ownerId, engine) {
+            const result = await db.query<{ n: unknown }>("SELECT count(*) AS n FROM connections WHERE owner_id = $1 AND kind = 'cloud' AND engine = $2", [ownerId, engine]);
             return num(result.rows[0]?.n ?? 0);
         },
     };

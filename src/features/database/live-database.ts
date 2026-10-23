@@ -42,6 +42,18 @@ export async function liveSchemaSql(database: DatabaseType, dataTypes: DataType[
     return renderer.renderDDL(database);
 }
 
+/** The Oracle script that builds an Oracle diagram in a new Oracle database (a schema). It is the diagram's own Oracle DDL, nothing converted. */
+export async function oracleSchemaSql(database: DatabaseType, dataTypes: DataType[]): Promise<string> {
+    if (database.dialect !== DatabaseDialect.ORACLE) throw new Error(`Only an Oracle schema can be created as an Oracle database; this one is ${database.dialect}.`);
+    const renderer = getRenderer(database.dialect, dataTypes);
+    if (!renderer) throw new Error("There is no SQL renderer for Oracle.");
+    return renderer.renderDDL(database);
+}
+
+/** What to tell the person once a live database exists: where it shows up depends on its engine (no page but the SQL editor reads Oracle). */
+export const liveDatabaseCreatedText = (connection: { name: string; engine?: "postgres" | "oracle" }): string =>
+    connection.engine === "oracle" ? `"${connection.name}" is now an Oracle database. Open it under SQL to run Oracle queries.` : `"${connection.name}" is now a live database under Data, Modernizer, Schema Change and SQL.`;
+
 const keyOf = (item: { name: string; namespace?: string | null }) => qualifiedTableName(item as never);
 
 /**
@@ -108,8 +120,19 @@ function safeStorage(): Storage | undefined {
     }
 }
 
+/** The SQL editor's remembered connection (an Oracle database is read there and nowhere else). */
+export const SQL_CONNECTION_KEY = "goforge.sql.connection";
+
+export function rememberSqlConnection(connectionId: string, storage: Pick<Storage, "setItem"> | undefined = safeStorage()): void {
+    try {
+        storage?.setItem(SQL_CONNECTION_KEY, connectionId);
+    } catch {
+        // storage is full or blocked: the picker just opens on its default
+    }
+}
+
 /** The pages that list saved connections each remember the one last used; point them at a database that was just created. */
-export const PAGE_CONNECTION_KEYS = ["goforge.sql.connection", "goforge.schemaChange.connection", "goforge.modernizer.connection"] as const;
+export const PAGE_CONNECTION_KEYS = [SQL_CONNECTION_KEY, "goforge.schemaChange.connection", "goforge.modernizer.connection"] as const;
 
 export function rememberConnectionOnPages(connectionId: string, storage: Pick<Storage, "setItem"> | undefined = safeStorage()): void {
     for (const key of PAGE_CONNECTION_KEYS) {

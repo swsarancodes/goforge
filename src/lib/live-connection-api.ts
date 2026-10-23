@@ -8,6 +8,8 @@ export interface SavedConnection {
     sslMode: "disable" | "allow" | "require" | "verify-full";
     /** `cloud` for a database GoForge created for the account on its own server; deleting that connection deletes the database. */
     kind?: "external" | "cloud";
+    /** `oracle` for a schema on the GoForge Oracle server; absent or `postgres` for everything else. */
+    engine?: "postgres" | "oracle";
     createdAt: string;
     updatedAt: string;
 }
@@ -130,8 +132,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return res.json() as Promise<T>;
 }
 
-export function listSavedConnections(): Promise<SavedConnection[]> {
-    return request("/");
+/** PostgreSQL connections by default (what every page but the SQL editor works on); `"all"` adds the Oracle ones. */
+export function listSavedConnections(engine: "postgres" | "oracle" | "all" = "postgres"): Promise<SavedConnection[]> {
+    return request(engine === "postgres" ? "/" : `/?engine=${engine}`);
 }
 
 export function createSavedConnection(input: CreateConnectionInput): Promise<SavedConnection> {
@@ -181,6 +184,32 @@ export function createLiveDatabase(serverConnectionId: string, input: CreateLive
  */
 export async function createCloudDatabase(input: { name: string; sql: string }): Promise<{ connection: SavedConnection; statementsRun: number }> {
     const response = await fetch("/api/cloud-databases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
+    if (!response.ok) {
+        let message = response.statusText || `HTTP ${response.status}`;
+        try {
+            const body = await response.json();
+            if (typeof body?.error === "string") message = body.error;
+        } catch {
+            // not JSON
+        }
+        throw new LiveConnectionApiError(message, response.status);
+    }
+    return response.json();
+}
+
+/** Whether this server can create Oracle databases, and how many the account has used. */
+export async function getOracleStatus(): Promise<{ configured: boolean; limit?: number; used?: number }> {
+    const response = await fetch("/api/oracle-databases/status");
+    if (!response.ok) return { configured: false };
+    return response.json();
+}
+
+/**
+ * Creates an Oracle database (a schema on the GoForge Oracle server) for the account, builds the Oracle script `sql` in it, and saves a
+ * connection to it. The connection is listed in the SQL editor; no other page reads Oracle.
+ */
+export async function createOracleDatabase(input: { name: string; sql: string }): Promise<{ connection: SavedConnection; statementsRun: number }> {
+    const response = await fetch("/api/oracle-databases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });
     if (!response.ok) {
         let message = response.statusText || `HTTP ${response.status}`;
         try {

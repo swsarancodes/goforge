@@ -121,6 +121,35 @@ describe("connections", () => {
         await expect(stores.connections.insert(dave.id, connection({ kind: "cloud", database_name: "gf_aaaaaaaa_shop" }))).rejects.toThrow();
     });
 
+    it("keeps the engine of a connection, defaults old rows to PostgreSQL, and counts each engine's managed databases separately", async () => {
+        const erin = await user("oracle-erin@example.com");
+        const [pg, oracle] = [connection({ kind: "cloud", database_name: "gf_bbbbbbbb_shop" }), connection({ kind: "cloud", engine: "oracle", database_name: "FREEPDB1", username: "GF_BBBBBBBB_INS" })];
+        const plain = connection({ kind: "external" });
+        delete (plain as { engine?: string }).engine;
+        for (const row of [pg, oracle, plain]) await stores.connections.insert(erin.id, row);
+
+        expect((await stores.connections.get(erin.id, oracle.id))?.engine).toBe("oracle");
+        expect((await stores.connections.get(erin.id, pg.id))?.engine).toBe("postgres");
+        expect((await stores.connections.get(erin.id, plain.id))?.engine).toBe("postgres");
+        // the PostgreSQL allowance is not eaten by Oracle databases, and the other way round
+        expect(await stores.connections.countCloud(erin.id)).toBe(1);
+        expect(await stores.connections.countManaged(erin.id, "postgres")).toBe(1);
+        expect(await stores.connections.countManaged(erin.id, "oracle")).toBe(1);
+        // two accounts' Oracle schemas may share a service name; the unique rule is on the physical database of a PostgreSQL cloud database only
+        const frank = await user("oracle-frank@example.com");
+        await stores.connections.insert(frank.id, connection({ kind: "cloud", engine: "oracle", database_name: "FREEPDB1", username: "GF_CCCCCCCC_INS" }));
+        expect(await stores.connections.countManaged(frank.id, "oracle")).toBe(1);
+        // ...but the same schema on the same server can only be recorded once
+        await expect(stores.connections.insert(frank.id, connection({ kind: "cloud", engine: "oracle", database_name: "FREEPDB1", username: "GF_CCCCCCCC_INS" }))).rejects.toThrow();
+        // and a PostgreSQL cloud database is still unique by its database name
+        await expect(stores.connections.insert(frank.id, connection({ kind: "cloud", database_name: "gf_bbbbbbbb_shop" }))).rejects.toThrow();
+    });
+
+    it("refuses an engine it does not know", async () => {
+        const gina = await user("oracle-gina@example.com");
+        await expect(stores.connections.insert(gina.id, connection({ engine: "mysql" as never }))).rejects.toThrow();
+    });
+
     it("go away with their owner", async () => {
         const gone = await user("gone@example.com");
         const row = connection();

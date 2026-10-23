@@ -21,7 +21,7 @@ import CodeEditor from "@/components/code-editor";
 import { MAX_IMPORT_FILE_BYTES, readTextFile } from "@/utils/file";
 import useToast from "@/hooks/use-toast";
 import { LiveDatabaseOption, useLiveDatabase } from "../components/live-database-option";
-import { liveTargetFromImport } from "../live-database";
+import { liveDatabaseCreatedText, liveTargetFromImport } from "../live-database";
 
 
 const options: ImportDatabaseOption[] = [{
@@ -280,7 +280,7 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
         if (live.active && database) {
             try {
                 const created = await live.create(liveTargetFromImport(parsedDatabase, database, data_types), data_types);
-                createdDatabase = created.connection.name;
+                createdDatabase = liveDatabaseCreatedText(created.connection);
             } catch (caught) {
                 setLiveError(caught instanceof Error ? caught.message : String(caught));
                 return;
@@ -307,7 +307,7 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                     await importDatabase(adjustedTables, parsedDatabase.relationships, parsedDatabase.indexes, parsedDatabase.views, parsedDatabase.sequences);
 
                     onOpenChange && onOpenChange(false);
-                    if (createdDatabase) raise("Database created", `"${createdDatabase}" is now a live database under Data, Modernizer, Schema Change and SQL.`, "SUCCESS");
+                    if (createdDatabase) raise("Database created", createdDatabase, "SUCCESS");
 
                     setTimeout(() => {
                         fitView({
