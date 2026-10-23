@@ -1,0 +1,20 @@
+source_table,source_column,target_table,target_column,note
+CUST_MST,CUST_ID,customers,customer_id,
+CUST_MST,CUST_NM,customers,customer_name,
+CUST_MST,CUST_EMAIL,customers,email,Oracle treats '' as NULL; the load maps '' to NULL
+CUST_MST,SEGMT_CD,customers,segment_code,
+CUST_MST,JOIN_DT,customers,joined_on,DATE with time 00:00:00 -> date
+POLCY_HDR,POLCY_ID,policies,policy_id,
+POLCY_HDR,CUST_ID,policies,customer_id,
+POLCY_HDR,POLCY_TYP_CD,policies,policy_type,
+POLCY_HDR,EFF_DT,policies,effective_date,DATE with time 00:00:00 -> date
+POLCY_HDR,EXP_DT,policies,expiry_date,DATE with time 00:00:00 -> date
+POLCY_HDR,ANNL_PREM,policies,annual_premium,
+POLCY_HDR,STAT_CD,policies,status_code,
+CLM_DTL,CLM_ID,claims,claim_id,
+CLM_DTL,POLCY_ID,claims,policy_id,
+CLM_DTL,CLM_DT,claims,claim_date,DATE with time of day -> timestamp(0)
+CLM_DTL,CLM_AMT,claims,claim_amount,
+CLM_DTL,CLM_STAT_CD,claims,claim_status,
+CLM_DTL,ADJ_NOTE,claims,adjuster_note,Oracle treats '' as NULL; the load maps '' to NULL
+CLM_DTL,PAID_AMT,claims,paid_amount,

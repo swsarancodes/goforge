@@ -1,0 +1,79 @@
+{
+  "id": "case-01",
+  "title": "Customers and their active 2026 policies (Oracle outer join)",
+  "businessPurpose": "Underwriting wants every customer with the number and premium of policies that started in 2026 and are active, including customers with none, for the renewal outreach list.",
+  "difficulty": "medium",
+  "risks": [
+    "join_semantics",
+    "null_type_or_aggregation_semantics",
+    "silent_executable_failure"
+  ],
+  "legacyDialect": "oracle",
+  "legacyQuery": "legacy_query.sql",
+  "expected": "expected_result.csv",
+  "orderSensitive": false,
+  "invariants": [
+    {
+      "name": "one row per customer",
+      "kind": "row_count_equals",
+      "sql": "SELECT count(*) FROM customers"
+    },
+    {
+      "name": "policy count is conserved",
+      "kind": "column_sum_equals",
+      "column": "polcy_cnt",
+      "sql": "SELECT count(*) FROM policies WHERE status_code = 'AC' AND effective_date >= DATE '2026-01-01'"
+    },
+    {
+      "name": "premium is conserved",
+      "kind": "column_sum_equals",
+      "column": "tot_prem",
+      "sql": "SELECT COALESCE(sum(annual_premium), 0) FROM policies WHERE status_code = 'AC' AND effective_date >= DATE '2026-01-01'"
+    }
+  ],
+  "candidates": [
+    {
+      "file": "candidates/correct.sql",
+      "expect": "pass",
+      "why": "Both Oracle (+) predicates are in the LEFT JOIN's ON clause.",
+      "flags": []
+    },
+    {
+      "file": "candidates/silent_where_filter.sql",
+      "expect": "fail",
+      "why": "Executable and plausible, but drops customers 5, 6 and 7. The headline silent failure.",
+      "catchBy": "primary",
+      "flags": [
+        "outer_join_filtered_in_where"
+      ]
+    },
+    {
+      "file": "candidates/count_star.sql",
+      "expect": "fail",
+      "why": "COUNT(*) instead of COUNT(p.policy_id) reports a policy for customers who have none.",
+      "catchBy": "primary",
+      "flags": [
+        "count_star_over_outer_join"
+      ]
+    },
+    {
+      "file": "candidates/status_in_where.sql",
+      "expect": "fail",
+      "why": "Half-moved predicate: customers whose only policy is lapsed are dropped.",
+      "catchBy": "primary",
+      "flags": [
+        "outer_join_filtered_in_where"
+      ]
+    },
+    {
+      "file": "candidates/overfit_hardcoded_customers.sql",
+      "expect": "fail",
+      "catchBy": "heldout",
+      "why": "Right on every primary row by construction: customers above id 4 are forced to zero. Only data it has not seen shows it is wrong.",
+      "flags": [
+        "fitted_to_a_literal"
+      ]
+    }
+  ],
+  "heldOutExpected": "expected_heldout.csv"
+}

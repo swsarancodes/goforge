@@ -1,0 +1,7 @@
+cust_id,contact_label,clm_cnt,tot_claimed,avg_paid,open_ratio
+1,Asha Rao <asha.rao@example.com>,3,4400.00,700.00,0.3333
+2,Brightline Logistics <>,3,4920.25,1206.67,0.3333
+3,Carlos Mendes <carlos@example.com>,2,6400.00,150.00,0.5
+4,Dunmore Foods <accounts@dunmore.example>,2,18000.00,2666.67,0.5
+6,Farah Khan <farah@example.com>,1,450.00,450.00,0
+7,Gita Nair <gita@example.com>,0,0,0.00,

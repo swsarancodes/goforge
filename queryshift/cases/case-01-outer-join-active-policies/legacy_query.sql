@@ -1,0 +1,11 @@
+SELECT c.CUST_ID,
+       c.CUST_NM,
+       COUNT(p.POLCY_ID)            AS POLCY_CNT,
+       SUM(NVL(p.ANNL_PREM, 0))     AS TOT_PREM
+FROM CUST_MST c,
+     POLCY_HDR p
+WHERE c.CUST_ID = p.CUST_ID(+)
+  AND p.EFF_DT(+) >= TO_DATE('2026-01-01', 'YYYY-MM-DD')
+  AND p.STAT_CD(+) = 'AC'
+GROUP BY c.CUST_ID, c.CUST_NM
+ORDER BY c.CUST_ID

@@ -8,6 +8,6 @@ export default defineConfig({
   plugins: [tsconfigPaths()],
   test: {
     environment: "node",
-    include: ["src/**/*.test.ts", "server/src/**/*.test.ts"],
+    include: ["src/**/*.test.ts", "server/src/**/*.test.ts", "queryshift/**/*.test.ts"],
   },
 });

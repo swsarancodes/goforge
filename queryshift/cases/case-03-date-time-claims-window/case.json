@@ -1,0 +1,67 @@
+{
+  "id": "case-03",
+  "title": "Five largest March claims (date and time semantics, ROWNUM)",
+  "businessPurpose": "Claims leadership wants the five largest claims of March 2026 with the claim day, how many days after the policy started the claim came in, and the policy's six-month review date.",
+  "difficulty": "hard",
+  "risks": [
+    "date_or_time_semantics",
+    "silent_executable_failure"
+  ],
+  "legacyDialect": "oracle",
+  "legacyQuery": "legacy_query.sql",
+  "expected": "expected_result.csv",
+  "orderSensitive": true,
+  "invariants": [
+    {
+      "name": "at most five rows, and all five when there are that many March claims",
+      "kind": "row_count_equals",
+      "sql": "SELECT LEAST(5, count(*)) FROM claims WHERE claim_date::date BETWEEN DATE '2026-03-01' AND DATE '2026-03-31'"
+    }
+  ],
+  "candidates": [
+    {
+      "file": "candidates/correct.sql",
+      "expect": "pass",
+      "why": "Half-open day range, epoch-based day difference, ADD_MONTHS last-day rule, deterministic tie-break.",
+      "flags": []
+    },
+    {
+      "file": "candidates/silent_between_without_trunc.sql",
+      "expect": "fail",
+      "why": "BETWEEN on a timestamp ends at 00:00 on March 31: claim 9002 is lost and 9010 appears. Executable, plausible, wrong.",
+      "catchBy": "primary",
+      "flags": [
+        "timestamp_vs_date_boundary"
+      ]
+    },
+    {
+      "file": "candidates/add_months_plain_interval.sql",
+      "expect": "fail",
+      "why": "Review dates for policy 103 (starts on Feb 28) come out as Aug 28 instead of Aug 31.",
+      "catchBy": "primary",
+      "flags": [
+        "month_arithmetic_without_month_end_rule"
+      ]
+    },
+    {
+      "file": "candidates/date_difference_as_interval.sql",
+      "expect": "fail",
+      "why": "Day count returned as an interval, not as a number of days.",
+      "catchBy": "primary",
+      "flags": [
+        "interval_result"
+      ]
+    },
+    {
+      "file": "candidates/overfit_special_cased_review_date.sql",
+      "expect": "fail",
+      "catchBy": "heldout",
+      "why": "The ADD_MONTHS month-end rule is applied only to 2026-02-28. Right on the primary data, wrong for any other month-end start date.",
+      "flags": [
+        "fitted_to_a_literal",
+        "month_arithmetic_without_month_end_rule"
+      ]
+    }
+  ],
+  "heldOutExpected": "expected_heldout.csv"
+}

@@ -12,7 +12,9 @@
     "test:watch": "vitest",
     "mcp": "bun run src/mcp/cli.ts",
     "test:corpus": "server/node_modules/.bin/tsx scripts/modernizer-corpus.ts",
-    "corpus:golden": "server/node_modules/.bin/tsx scripts/modernizer-golden.ts"
+    "corpus:golden": "server/node_modules/.bin/tsx scripts/modernizer-golden.ts",
+    "queryshift": "server/node_modules/.bin/tsx queryshift/run.ts",
+    "queryshift:check-model": "server/node_modules/.bin/tsx queryshift/check-model.ts"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.3",
