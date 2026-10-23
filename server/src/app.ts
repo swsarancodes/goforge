@@ -17,9 +17,10 @@ import { authRouter } from "./routes/auth.js";
 import { projectsRouter } from "./routes/projects.js";
 import { createCloudDatabasesRouter, type CloudDatabaseDeps } from "./routes/cloud-databases.js";
 import { createOracleDatabasesRouter, type OracleDatabaseDeps } from "./routes/oracle-databases.js";
+import { createMigrationsRouter, type MigrationDeps } from "./routes/migrations.js";
 import { errorHandler } from "./routes/async-handler.js";
 
-export function createApp(options: { cloudDatabases?: CloudDatabaseDeps; oracleDatabases?: OracleDatabaseDeps } = {}) {
+export function createApp(options: { cloudDatabases?: CloudDatabaseDeps; oracleDatabases?: OracleDatabaseDeps; migrations?: MigrationDeps } = {}) {
     const app = express();
 
     // Behind nginx or another proxy the client address is in X-Forwarded-For; the sign-in rate limit needs the real one.
@@ -41,6 +42,7 @@ export function createApp(options: { cloudDatabases?: CloudDatabaseDeps; oracleD
     app.use("/api/projects", projectsRouter);
     app.use("/api/cloud-databases", createCloudDatabasesRouter(options.cloudDatabases));
     app.use("/api/oracle-databases", createOracleDatabasesRouter(options.oracleDatabases));
+    app.use("/api/migrations", createMigrationsRouter(options.migrations));
     app.use("/api/connections", connectionsRouter);
     app.use("/api/connections", introspectRouter);
     app.use("/api/connections", previewRouter);

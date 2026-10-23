@@ -52,14 +52,14 @@ SELECT (SELECT COALESCE(MAX(polcy_id), 0) FROM polcy_hdr) + row_number() OVER (O
        CASE WHEN random() < 0.85 THEN 'AC' ELSE 'LP' END
 FROM starts s;
 
--- 3. claims: 0 to 3 per policy that has none yet, dated within the policy's term and not after 22 Oct 2026 -------------------
+-- 3. claims: 0 to 3 per policy that has none yet and has started by 22 Oct 2026, dated within the policy's term and not after that day -------------------
 INSERT INTO clm_dtl (clm_id, polcy_id, clm_dt, clm_amt, clm_stat_cd, adj_note, paid_amt)
 WITH wanted AS (
     SELECT p.polcy_id, p.eff_dt, p.exp_dt,
            GREATEST(0, floor(extract(epoch FROM (LEAST(p.exp_dt, TIMESTAMP '2026-10-22 00:00:00') - p.eff_dt)) / 86400))::int AS span_days,
            floor(random() * 4)::int AS n
     FROM polcy_hdr p
-    WHERE NOT EXISTS (SELECT 1 FROM clm_dtl c WHERE c.polcy_id = p.polcy_id)
+    WHERE p.eff_dt <= TIMESTAMP '2026-10-22 00:00:00' AND NOT EXISTS (SELECT 1 FROM clm_dtl c WHERE c.polcy_id = p.polcy_id)
 ), raw AS (
     SELECT w.polcy_id,
            CASE WHEN random() < 0.08                                              -- the last day of a month, at the end of it
