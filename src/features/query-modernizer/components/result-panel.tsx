@@ -104,7 +104,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ outcome, preview, prev
                         <RowsTable columns={preview.response.result.columns} rows={formatted} emptyText="The query returned no rows." />
                     </div>
                 </div>
-                <OutputCheck result={preview.response.result} dialectLabel={LEGACY_DIALECTS.find((candidate) => candidate.value === outcome.dialect)?.label ?? outcome.dialect} />
+                <OutputCheck result={preview.response.result} dialectLabel={LEGACY_DIALECTS.find((candidate) => candidate.value === outcome.dialect)?.label ?? outcome.dialect} originalSql={outcome.original} dialect={outcome.dialect} />
                 </>
             )}
         </div>

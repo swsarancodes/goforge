@@ -12,6 +12,7 @@ import { Switch } from "@/components/ui/switch";
 import { useDelayedFlag } from "@/hooks/use-delayed-flag";
 import { connectionAddress, connectionLabel } from "@/lib/live-connection-api";
 import { cn } from "@/lib/utils";
+import { MigrateDatabase } from "./migrate-database";
 import { positionToLineColumn } from "./error-position";
 import { useSqlEditor, type SqlEditor } from "./use-sql-editor";
 
@@ -292,6 +293,7 @@ const SqlEditorPage: React.FC = () => {
                             </Button>
                         </>
                     )}
+                    <MigrateDatabase editor={editor} />
                     <DeleteDatabase editor={editor} />
                     <HistoryMenu editor={editor} />
                 </div>

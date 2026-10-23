@@ -264,6 +264,13 @@ export function useSqlEditor() {
         current.focus();
     }, []);
 
+    /** Reads the saved connections again (a database was just created from this page) and, when `selectId` is given, switches to it. */
+    const refreshConnections = useCallback(async (selectId?: string) => {
+        const list = await listSavedConnections("all");
+        setConnections(list);
+        if (selectId && list.some((candidate) => candidate.id === selectId)) setConnectionId(selectId);
+    }, []);
+
     /** Deletes a database GoForge created (an Oracle schema, and everything in it) and forgets its connection. */
     const deleteDatabase = useCallback(async (id: string) => {
         await deleteSavedConnection(id, { dropDatabase: true });
@@ -290,6 +297,7 @@ export function useSqlEditor() {
         connection,
         selectConnection: setConnectionId,
         deleteDatabase,
+        refreshConnections,
         sql,
         setSql,
         transactional,
