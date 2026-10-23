@@ -1,0 +1,172 @@
+{
+  "caseId": "case-02",
+  "outcome": "verified",
+  "heldOut": "passed",
+  "findings": [],
+  "reasons": [],
+  "finalSql": "SELECT c.customer_id AS cust_id,\n       c.customer_name || ' <' || COALESCE(c.email, '') || '>' AS contact_label,\n       COUNT(cl.claim_id) AS clm_cnt,\n       COALESCE(SUM(cl.claim_amount), 0) AS tot_claimed,\n       ROUND(AVG(COALESCE(cl.paid_amount, 0)), 2) AS avg_paid,\n       ROUND(COUNT(CASE WHEN cl.claim_status = 'OP' THEN 1 END)::numeric\n             / NULLIF(COUNT(cl.claim_id), 0), 4) AS open_ratio\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nLEFT JOIN claims cl ON cl.policy_id = p.policy_id\nGROUP BY c.customer_id, c.customer_name, c.email\nORDER BY c.customer_id",
+  "attempts": [
+    {
+      "n": 0,
+      "source": "rule-engine",
+      "sql": "SELECT c.customer_id AS CUST_ID,\n       c.customer_name || ' <' || c.email || '>'                                   AS CONTACT_LABEL,\n       COUNT(cl.claim_id)                                                           AS CLM_CNT,\n       COALESCE(SUM(cl.claim_amount), 0)                                                    AS TOT_CLAIMED,\n       ROUND(AVG(COALESCE(cl.paid_amount, 0)), 2)                                         AS AVG_PAID,\n       ROUND(COUNT(CASE WHEN cl.claim_status = 'OP' THEN 1 END)\n             / NULLIF(COUNT(cl.claim_id), 0), 4)                                    AS OPEN_RATIO\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nLEFT JOIN claims cl ON cl.policy_id = p.policy_id\nGROUP BY c.customer_id, c.customer_name, c.email\nORDER BY c.customer_id",
+      "verdict": "fail",
+      "summary": "4 expected row(s) missing, 4 unexpected row(s) returned.",
+      "findings": [
+        {
+          "id": "null_in_concatenation",
+          "category": "null_type_or_aggregation_semantics",
+          "severity": "warning",
+          "title": "|| with a nullable column",
+          "detail": "c.email can be NULL. Oracle treats NULL as an empty string in ||; in PostgreSQL the whole result becomes NULL. Wrap it in COALESCE(…, '') or use CONCAT."
+        },
+        {
+          "id": "integer_division",
+          "category": "null_type_or_aggregation_semantics",
+          "severity": "warning",
+          "title": "Integer division",
+          "detail": "`COUNT(…) / NULLIF(…)` divides two integers. PostgreSQL truncates the result (1/3 is 0); Oracle's NUMBER division keeps the fraction. Cast one side to numeric."
+        }
+      ],
+      "evidence": {
+        "kind": "mismatch",
+        "message": "4 expected row(s) missing, 4 unexpected row(s) returned.",
+        "expectedColumns": [
+          "cust_id",
+          "contact_label",
+          "clm_cnt",
+          "tot_claimed",
+          "avg_paid",
+          "open_ratio"
+        ],
+        "missingRows": [
+          [
+            "1",
+            "Asha Rao <asha.rao@example.com>",
+            "3",
+            "4400.00",
+            "700.00",
+            "0.3333"
+          ],
+          [
+            "2",
+            "Brightline Logistics <>",
+            "3",
+            "4920.25",
+            "1206.67",
+            "0.3333"
+          ],
+          [
+            "3",
+            "Carlos Mendes <carlos@example.com>",
+            "2",
+            "6400.00",
+            "150.00",
+            "0.5"
+          ],
+          [
+            "4",
+            "Dunmore Foods <accounts@dunmore.example>",
+            "2",
+            "18000.00",
+            "2666.67",
+            "0.5"
+          ]
+        ],
+        "unexpectedRows": [
+          [
+            "1",
+            "Asha Rao <asha.rao@example.com>",
+            "3",
+            "4400.00",
+            "700.00",
+            "0.0000"
+          ],
+          [
+            "2",
+            null,
+            "3",
+            "4920.25",
+            "1206.67",
+            "0.0000"
+          ],
+          [
+            "3",
+            "Carlos Mendes <carlos@example.com>",
+            "2",
+            "6400.00",
+            "150.00",
+            "0.0000"
+          ],
+          [
+            "4",
+            "Dunmore Foods <accounts@dunmore.example>",
+            "2",
+            "18000.00",
+            "2666.67",
+            "0.0000"
+          ]
+        ],
+        "missingCount": 4,
+        "unexpectedCount": 4,
+        "differingColumns": [
+          {
+            "column": "open_ratio",
+            "rows": 4
+          },
+          {
+            "column": "contact_label",
+            "rows": 1
+          }
+        ],
+        "brokenInvariants": [],
+        "staticFindings": [
+          {
+            "id": "null_in_concatenation",
+            "title": "|| with a nullable column",
+            "detail": "c.email can be NULL. Oracle treats NULL as an empty string in ||; in PostgreSQL the whole result becomes NULL. Wrap it in COALESCE(…, '') or use CONCAT."
+          },
+          {
+            "id": "integer_division",
+            "title": "Integer division",
+            "detail": "`COUNT(…) / NULLIF(…)` divides two integers. PostgreSQL truncates the result (1/3 is 0); Oracle's NUMBER division keeps the fraction. Cast one side to numeric."
+          }
+        ]
+      }
+    },
+    {
+      "n": 1,
+      "source": "model",
+      "sql": "SELECT c.customer_id AS cust_id,\n       c.customer_name || ' <' || COALESCE(c.email, '') || '>' AS contact_label,\n       COUNT(cl.claim_id) AS clm_cnt,\n       COALESCE(SUM(cl.claim_amount), 0) AS tot_claimed,\n       ROUND(AVG(COALESCE(cl.paid_amount, 0)), 2) AS avg_paid,\n       ROUND(COUNT(CASE WHEN cl.claim_status = 'OP' THEN 1 END)::numeric\n             / NULLIF(COUNT(cl.claim_id), 0), 4) AS open_ratio\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nLEFT JOIN claims cl ON cl.policy_id = p.policy_id\nGROUP BY c.customer_id, c.customer_name, c.email\nORDER BY c.customer_id",
+      "verdict": "pass",
+      "summary": "Matches the reference result and all 3 invariant(s) hold.",
+      "findings": [],
+      "proposal": {
+        "explanation": "The measured differences identify two PostgreSQL-versus-Oracle behaviors. PostgreSQL propagates NULL through ||, while Oracle treats NULL as an empty string, so the nullable email must be wrapped in COALESCE. PostgreSQL performs integer division when both COUNT expressions are integers, producing 0 for ratios such as 1/3; casting the numerator to numeric preserves the fractional Oracle result.",
+        "changes": [
+          "Wrapped c.email in COALESCE(c.email, '') for Oracle-compatible concatenation.",
+          "Cast the open-claim COUNT to numeric before division to avoid PostgreSQL integer division.",
+          "Added explicit result aliases matching expectedColumns."
+        ],
+        "risks": [],
+        "model": "gpt-5.6-luna",
+        "auditId": 1,
+        "usage": {
+          "inputTokens": 2369,
+          "outputTokens": 415
+        },
+        "latencyMs": 5036
+      },
+      "heldOut": {
+        "verdict": "pass",
+        "summary": "Matches the reference result and all 3 invariant(s) hold."
+      }
+    }
+  ],
+  "maxCorrections": 3,
+  "engineWarnings": [
+    "|| with a NULL gives a different result",
+    "Dividing two integers"
+  ],
+  "proposerRisks": []
+}
