@@ -28,10 +28,15 @@ export function toConnectionConfig(row: ConnectionRow): ConnectionConfig {
     };
 }
 
+export function sslOption(sslMode: string) {
+    return sslMode === "disable" ? false : { rejectUnauthorized: sslMode !== "allow" };
+}
+
 /**
  * Opens a short-lived pg.Client for a single unit of work and always closes it,
- * even if `fn` throws. Never cache/pool clients across requests — credentials
- * are decrypted fresh per call and must not linger in memory longer than needed.
+ * even if `fn` throws. Used for everything that can change data or must see a clean
+ * session (test, preview, execute): credentials are decrypted fresh per call and do
+ * not linger in memory. Read-only browsing uses the short-lived pool in pg-pool.ts instead.
  */
 export async function withPgClient<T>(config: ConnectionConfig, fn: (client: Client) => Promise<T>): Promise<T> {
     const client = new Client({
@@ -40,7 +45,7 @@ export async function withPgClient<T>(config: ConnectionConfig, fn: (client: Cli
         user: config.user,
         password: config.password,
         database: config.database,
-        ssl: config.sslMode === "disable" ? false : { rejectUnauthorized: config.sslMode !== "allow" },
+        ssl: sslOption(config.sslMode),
         connectionTimeoutMillis: 10_000,
         query_timeout: 30_000,
     });

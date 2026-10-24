@@ -1,12 +1,12 @@
 import { Router } from "express";
-import { getConnection } from "../db/store.js";
+import { findConnection } from "./connection-lookup.js";
 import { toConnectionConfig, withPgClient } from "../services/pg-client.js";
 import { introspectPostgres } from "../services/pg-introspect.js";
 
 export const introspectRouter = Router();
 
 introspectRouter.get("/:id/introspect", async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     if (!row) return res.status(404).json({ error: "Connection not found" });
 
     try {

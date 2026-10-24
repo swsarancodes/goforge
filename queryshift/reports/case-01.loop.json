@@ -1,0 +1,25 @@
+{
+  "caseId": "case-01",
+  "outcome": "verified",
+  "heldOut": "passed",
+  "findings": [],
+  "reasons": [],
+  "finalSql": "SELECT c.customer_id AS CUST_ID,\n       c.customer_name AS CUST_NM,\n       COUNT(p.policy_id)            AS POLCY_CNT,\n       SUM(COALESCE(p.annual_premium, 0))     AS TOT_PREM\nFROM customers c\n    LEFT JOIN policies p ON c.customer_id = p.customer_id AND p.effective_date >= TO_DATE('2026-01-01', 'YYYY-MM-DD') AND p.status_code = 'AC'\nGROUP BY c.customer_id, c.customer_name\nORDER BY c.customer_id",
+  "attempts": [
+    {
+      "n": 0,
+      "source": "rule-engine",
+      "sql": "SELECT c.customer_id AS CUST_ID,\n       c.customer_name AS CUST_NM,\n       COUNT(p.policy_id)            AS POLCY_CNT,\n       SUM(COALESCE(p.annual_premium, 0))     AS TOT_PREM\nFROM customers c\n    LEFT JOIN policies p ON c.customer_id = p.customer_id AND p.effective_date >= TO_DATE('2026-01-01', 'YYYY-MM-DD') AND p.status_code = 'AC'\nGROUP BY c.customer_id, c.customer_name\nORDER BY c.customer_id",
+      "verdict": "pass",
+      "summary": "Matches the reference result and all 3 invariant(s) hold.",
+      "findings": [],
+      "heldOut": {
+        "verdict": "pass",
+        "summary": "Matches the reference result and all 3 invariant(s) hold."
+      }
+    }
+  ],
+  "maxCorrections": 3,
+  "engineWarnings": [],
+  "proposerRisks": []
+}

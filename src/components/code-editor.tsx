@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import type { EditorView } from "@codemirror/view";
+import { toast } from "sonner";
 import { useTheme } from "@/providers/theme-provider/theme-provider";
 import { cn } from "@/lib/utils";
 import { Spinner } from "./ui/shadcn-io/spinner";
@@ -55,6 +56,52 @@ const createEditorRuntime = async () => {
             .join("\n");
 
     /**
+     * Copy/cut through the browser's own clipboard pipeline. execCommand needs
+     * no permission and fires the DOM copy/cut event, which CodeMirror already
+     * handles for Cmd+C/Cmd+X (including whole-line copy on an empty
+     * selection). The async clipboard API is only a fallback because browsers
+     * and embedded webviews often deny it outright.
+     */
+    const copyOrCut = (cut: boolean) => (editorView: EditorView) => {
+        const command = cut && !editorView.state.readOnly ? "cut" : "copy";
+        editorView.focus();
+        if (document.execCommand(command)) return true;
+
+        const text = selectedText(editorView);
+        if (!text) return true;
+        void navigator.clipboard?.writeText(text).catch(() => undefined);
+        if (command === "cut") {
+            editorView.dispatch({ ...editorView.state.replaceSelection(""), userEvent: "delete.cut", scrollIntoView: true });
+        }
+        return true;
+    };
+
+    /**
+     * Browsers fire a native paste event only for Cmd+V, so Ctrl+V has to read
+     * the clipboard explicitly. That needs the clipboard-read permission,
+     * which the user may have denied; say so instead of silently doing nothing.
+     */
+    const pasteFromClipboard = (editorView: EditorView) => {
+        if (editorView.state.readOnly) return true;
+        const clipboard = navigator.clipboard;
+        const blocked = () =>
+            toast.error("Clipboard access is blocked", {
+                description: "Press ⌘V to paste, or allow clipboard access for this site in your browser's site settings.",
+            });
+        if (!clipboard?.readText) {
+            blocked();
+            return true;
+        }
+        clipboard
+            .readText()
+            .then((text) => {
+                editorView.dispatch({ ...editorView.state.replaceSelection(text), userEvent: "input.paste", scrollIntoView: true });
+            })
+            .catch(blocked);
+        return true;
+    };
+
+    /**
      * On macOS CodeMirror maps Ctrl+A/E/K... to their Emacs meanings
      * (Ctrl+A = start of line) and the browser's clipboard shortcuts are
      * Cmd-only, so Ctrl+A/C/X/V/Z/Y do nothing useful there. Bind them here
@@ -66,42 +113,86 @@ const createEditorRuntime = async () => {
     const macCtrlKeymap = state.Prec.high(
         view.keymap.of([
         { mac: "Ctrl-a", run: commands.selectAll },
-        {
-            mac: "Ctrl-c",
-            run: (editorView) => {
-                const text = selectedText(editorView);
-                if (text) void navigator.clipboard?.writeText(text).catch(() => undefined);
-                return true;
-            },
-        },
-        {
-            mac: "Ctrl-x",
-            run: (editorView) => {
-                const text = selectedText(editorView);
-                if (!text || editorView.state.readOnly) return true;
-                void navigator.clipboard?.writeText(text).catch(() => undefined);
-                editorView.dispatch({ ...editorView.state.replaceSelection(""), userEvent: "delete.cut", scrollIntoView: true });
-                return true;
-            },
-        },
-        {
-            mac: "Ctrl-v",
-            run: (editorView) => {
-                if (editorView.state.readOnly) return true;
-                void navigator.clipboard?.readText().then((text) => {
-                    editorView.dispatch({ ...editorView.state.replaceSelection(text), userEvent: "input.paste", scrollIntoView: true });
-                }).catch(() => undefined);
-                return true;
-            },
-        },
+        { mac: "Ctrl-c", run: copyOrCut(false) },
+        { mac: "Ctrl-x", run: copyOrCut(true) },
+        { mac: "Ctrl-v", run: pasteFromClipboard },
         { mac: "Ctrl-z", run: commands.undo },
         { mac: "Shift-Ctrl-z", run: commands.redo },
         { mac: "Ctrl-y", run: commands.redo },
         ]),
     );
 
+    /**
+     * Cmd/Ctrl+Enter. The handler gets the selected text (empty when nothing is selected) and is looked up on every key
+     * press, so the editor never has to be rebuilt when the caller's callback changes.
+     */
+    const runKeymap = (getHandler: () => ((selectedText: string) => void) | undefined) =>
+        state.Prec.highest(
+            view.keymap.of([
+                {
+                    key: "Mod-Enter",
+                    run: (editorView) => {
+                        const handler = getHandler();
+                        if (!handler) return false;
+                        handler(selectedText(editorView));
+                        return true;
+                    },
+                },
+            ]),
+        );
+
+    /**
+     * Grey text shown while the editor is empty. With a suggestion, Tab fills the editor with it (Escape hides it, and typing
+     * simply replaces it, because the text is a placeholder and not part of the document).
+     */
+    const ghostExtensions = (options: { suggestion?: string; placeholder?: string; hint: string; onDismiss: () => void }) => {
+        const text = options.suggestion ?? options.placeholder;
+        if (!text) return [];
+        const element = document.createElement("div");
+        element.setAttribute("aria-hidden", "true");
+        element.style.whiteSpace = "pre";
+        element.style.opacity = "0.55";
+        const body = document.createElement("div");
+        body.textContent = text;
+        element.append(body);
+        if (options.suggestion) {
+            const hint = document.createElement("div");
+            hint.textContent = options.hint;
+            hint.style.cssText = "margin-top:10px;font-family:system-ui,sans-serif;font-size:11px;opacity:.9";
+            element.append(hint);
+        }
+        const keys = options.suggestion
+            ? [
+                  state.Prec.highest(
+                      view.keymap.of([
+                          {
+                              key: "Tab",
+                              run: (editorView) => {
+                                  if (editorView.state.doc.length > 0) return false;
+                                  editorView.dispatch({ changes: { from: 0, insert: options.suggestion! }, selection: { anchor: options.suggestion!.length }, userEvent: "input.complete", scrollIntoView: true });
+                                  return true;
+                              },
+                          },
+                          {
+                              key: "Escape",
+                              run: (editorView) => {
+                                  if (editorView.state.doc.length > 0) return false;
+                                  options.onDismiss();
+                                  return true;
+                              },
+                          },
+                      ]),
+                  ),
+                  view.EditorView.contentAttributes.of({ "aria-description": options.hint }),
+              ]
+            : [];
+        return [view.placeholder(element), ...keys];
+    };
+
     return {
         CodeMirror: codeMirror.default,
+        ghostExtensions,
+        runKeymap,
         extensions: [sqlLanguage.sql(), editorKeyBoundary, macCtrlKeymap],
         darkTheme: [codeMirror.oneDark, darkOverride],
         lightTheme,
@@ -123,10 +214,28 @@ interface CodeEditorProps {
     readOnly?: boolean;
     onChange?: (sql: string) => void;
     autoFocus?: boolean;
+    /** Called on Cmd/Ctrl+Enter with the selected text (empty when there is no selection). */
+    onRun?: (selectedText: string) => void;
+    /** Gives the caller the CodeMirror view (to read the selection, move the cursor, ...). */
+    onCreateEditor?: (view: EditorView) => void;
+    /** Grey example text in the empty editor. Tab inserts it, Escape hides it. */
+    ghostText?: string;
+    /** Grey text in the empty editor that Tab does not insert (used when there is no example to offer). */
+    placeholder?: string;
 }
 
-const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className, readOnly = false, onChange, autoFocus = false }) => {
+const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className, readOnly = false, onChange, autoFocus = false, onRun, onCreateEditor, ghostText, placeholder }) => {
     const [editor, setEditor] = useState<EditorRuntime | null>(null);
+    const onRunRef = useRef(onRun);
+    onRunRef.current = onRun;
+    const runExtensions = useMemo(() => (editor && onRun ? [editor.runKeymap(() => onRunRef.current)] : []), [editor, onRun !== undefined]);
+
+    // Escape hides the example until it changes (a different dialect gives a different example).
+    const [dismissed, setDismissed] = useState<string | undefined>(undefined);
+    const ghostExtensions = useMemo(
+        () => (editor && !readOnly ? editor.ghostExtensions({ suggestion: ghostText && dismissed !== ghostText ? ghostText : undefined, placeholder: ghostText ? (dismissed === ghostText ? undefined : placeholder) : placeholder, hint: "Press Tab to insert this example. Escape hides it.", onDismiss: () => setDismissed(ghostText) }) : []),
+        [editor, readOnly, ghostText, placeholder, dismissed],
+    );
 
     useEffect(() => {
         let mounted = true;
@@ -141,6 +250,8 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
     }, []);
 
     const { theme } = useTheme();
+    // A new array on every render would reconfigure CodeMirror every time, so it is rebuilt only when a part changes.
+    const allExtensions = useMemo(() => (editor ? [...editor.extensions, ...runExtensions, ...ghostExtensions] : []), [editor, runExtensions, ghostExtensions]);
 
     if (!editor) {
         return (
@@ -150,7 +261,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
         );
     }
 
-    const { CodeMirror, extensions, darkTheme, lightTheme } = editor;
+    const { CodeMirror, darkTheme, lightTheme } = editor;
     return (
         <CodeMirror
             value={value ?? defaultValue ?? ""}
@@ -159,7 +270,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
             // in via `selectable` - without it, drag-select, Cmd/Ctrl+A and
             // copy are all suppressed inside the SQL text.
             className={cn("selectable flex flex-1 w-full min-h-9 rounded-sm  h-full   bg-card border-1 border-border  !min-w-0 overflow-hidden", className)}
-            extensions={extensions}
+            extensions={allExtensions}
             readOnly={readOnly}
             autoFocus={autoFocus}
             onCreateEditor={(view) => {
@@ -168,6 +279,7 @@ const CodeEditor: React.FC<CodeEditorProps> = ({ defaultValue, value, className,
                 // explicitly once the editor has been created so select-all,
                 // paste, and delete operate on SQL text.
                 if (autoFocus) view.focus();
+                onCreateEditor?.(view);
             }}
             onKeyDown={(event) => {
                 // CodeMirror handles native editing at the contenteditable

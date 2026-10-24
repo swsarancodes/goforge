@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next"
 import { MenuItem } from "../../types";
 import { useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { Modals } from "@/providers/modal-provider/modal-contxet";
 
 
@@ -16,6 +17,7 @@ import { useTheme } from "@/providers/theme-provider/theme-provider";
 export const useMenuData = () => {
 
     const { t } = useTranslation();
+    const navigate = useNavigate();
     const { setTheme, theme } = useTheme()
  
     const { open } = useModal();
@@ -31,8 +33,15 @@ export const useMenuData = () => {
             title: t("menu.file"),
             children: [
                 {
+                    id: "menu.connect_database",
+                    title: t("menu.connect_database", { defaultValue: "Connect to a database…" }),
+                    clickHandler: () => {
+                        open(Modals.CONNECT_DATABASE)
+                    }
+                },
+                {
                     id: "menu.new",
-                    title: t("menu.new"),
+                    title: t("menu.new_empty", { defaultValue: "New empty diagram" }),
                     clickHandler: () => {
                         open(Modals.CREATE_DATABASE)
                     }
@@ -116,6 +125,14 @@ export const useMenuData = () => {
                     }
                 },
                 {
+                    id: "menu.create_live_database",
+                    title: t("menu.create_live_database", { defaultValue: "Create a live database from this diagram…" }),
+                    isDisabled: !database,
+                    clickHandler: () => {
+                        open(Modals.CREATE_LIVE_DATABASE)
+                    }
+                },
+                {
                     id: "menu.push_live_changes",
                     title: t("menu.push_live_changes"),
                     clickHandler: () => {
@@ -131,9 +148,9 @@ export const useMenuData = () => {
                 },
                 {
                     id: "menu.query_modernizer",
-                    title: t("menu.query_modernizer", { defaultValue: "Query Modernizer (Multi-Agent AI)" }),
+                    title: t("menu.query_modernizer", { defaultValue: "Query Modernizer" }),
                     clickHandler: () => {
-                        open(Modals.QUERY_MODERNIZER)
+                        navigate("/database/modernizer")
                     }
                 },
                 {

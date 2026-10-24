@@ -7,11 +7,14 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 export default defineConfig({
   plugins: [react() , tailwindcss(), tsconfigPaths() , topLevelAwait()],
   server : {
-    port : 7000,
+    port : 5173,
+    // Loopback IPv4: reachable as both localhost and 127.0.0.1 (a bare `localhost` bind is IPv6-only on this stack), but not from the LAN.
+    host : "127.0.0.1",
     proxy: {
       // goforge-api (live database connections) - runs separately via
       // `bun run dev` in server/, defaults to :4000.
-      '/api': 'http://localhost:4000'
+      // The Host header is passed on as the browser sent it (changeOrigin false): the API refuses a changing request whose Origin is not its Host.
+      '/api': { target: process.env.GOFORGE_API_URL ?? 'http://127.0.0.1:4000', changeOrigin: false }
     }
   } ,
   optimizeDeps: {

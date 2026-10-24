@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
-import { getConnection } from "../db/store.js";
+import { findConnection } from "./connection-lookup.js";
 import { toConnectionConfig, withPgClient } from "../services/pg-client.js";
 import { splitStatements } from "../services/sql-utils.js";
 
@@ -9,7 +9,7 @@ export const previewRouter = Router();
 const previewSchema = z.object({ sql: z.string().min(1) });
 
 previewRouter.post("/:id/preview", async (req, res) => {
-    const row = getConnection(req.params.id);
+    const row = await findConnection(req);
     if (!row) return res.status(404).json({ valid: false, error: "Connection not found" });
 
     const parsed = previewSchema.safeParse(req.body);

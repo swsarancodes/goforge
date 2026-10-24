@@ -62,37 +62,42 @@ const currentRelationshipSchema = aiRelationshipSchema.extend({
     onUpdate: foreignKeyActionSchema.nullable().optional(),
 }).strict();
 
-export const aiSchemaOperationSchema = z.discriminatedUnion("type", [
-    z.object({
-        type: z.literal("create_table"),
-        table: z.object({
-            name: identifier,
-            note: z.string().max(2_000).nullable().optional(),
-            fields: z.array(aiFieldSchema).min(1).max(100),
-            indexes: z.array(aiIndexSchema).max(50).optional(),
+/** The operations a plan may contain. `changes` is what an alter_column carries: the model is given a slightly different one (see `aiFieldChangesModelSchema`). */
+function makeOperationSchema<Changes extends z.ZodTypeAny>(changes: Changes) {
+    return z.discriminatedUnion("type", [
+        z.object({
+            type: z.literal("create_table"),
+            table: z.object({
+                name: identifier,
+                note: z.string().max(2_000).nullable().optional(),
+                fields: z.array(aiFieldSchema).min(1).max(100),
+                indexes: z.array(aiIndexSchema).max(50).optional(),
+            }).strict(),
         }).strict(),
-    }).strict(),
-    z.object({ type: z.literal("rename_table"), tableName: identifier, newName: identifier }).strict(),
-    z.object({ type: z.literal("drop_table"), tableName: identifier }).strict(),
-    z.object({ type: z.literal("add_column"), tableName: identifier, field: aiFieldSchema }).strict(),
-    z.object({
-        type: z.literal("alter_column"),
-        tableName: identifier,
-        columnName: identifier,
-        changes: aiFieldChangesSchema,
-    }).strict(),
-    z.object({ type: z.literal("drop_column"), tableName: identifier, columnName: identifier }).strict(),
-    z.object({ type: z.literal("add_relationship"), relationship: aiRelationshipSchema }).strict(),
-    z.object({
-        type: z.literal("drop_relationship"),
-        sourceTable: identifier,
-        sourceColumn: identifier,
-        targetTable: identifier,
-        targetColumn: identifier,
-    }).strict(),
-    z.object({ type: z.literal("add_index"), tableName: identifier, index: aiIndexSchema }).strict(),
-    z.object({ type: z.literal("drop_index"), tableName: identifier, indexName: identifier }).strict(),
-]);
+        z.object({ type: z.literal("rename_table"), tableName: identifier, newName: identifier }).strict(),
+        z.object({ type: z.literal("drop_table"), tableName: identifier }).strict(),
+        z.object({ type: z.literal("add_column"), tableName: identifier, field: aiFieldSchema }).strict(),
+        z.object({
+            type: z.literal("alter_column"),
+            tableName: identifier,
+            columnName: identifier,
+            changes,
+        }).strict(),
+        z.object({ type: z.literal("drop_column"), tableName: identifier, columnName: identifier }).strict(),
+        z.object({ type: z.literal("add_relationship"), relationship: aiRelationshipSchema }).strict(),
+        z.object({
+            type: z.literal("drop_relationship"),
+            sourceTable: identifier,
+            sourceColumn: identifier,
+            targetTable: identifier,
+            targetColumn: identifier,
+        }).strict(),
+        z.object({ type: z.literal("add_index"), tableName: identifier, index: aiIndexSchema }).strict(),
+        z.object({ type: z.literal("drop_index"), tableName: identifier, indexName: identifier }).strict(),
+    ]);
+}
+
+export const aiSchemaOperationSchema = makeOperationSchema(aiFieldChangesSchema);
 
 export const aiSchemaPlanSchema = z.object({
     summary: z.string().trim().min(1).max(4_000),
@@ -109,6 +114,22 @@ export const aiSchemaPlanSchema = z.object({
         });
     }
 });
+
+/**
+ * What the model is told an alter_column may change. Strict structured outputs make every key present, so "no default given" and
+ * "remove the default" (null, in `aiFieldChangesSchema`) would look the same; `dropDefault` says the second one in words.
+ * `fromModelPlan` (plan-normalize.ts) turns it back into the validator's form.
+ */
+export const aiFieldChangesModelSchema = aiFieldChangesSchema.extend({ dropDefault: z.boolean().optional() }).strict();
+
+/** The plan as the model is asked to write it (structured outputs): the plan schema with the alter_column variant above. Checked afterwards by `aiSchemaPlanSchema`. */
+export const aiSchemaPlanModelSchema = z.object({
+    summary: z.string().trim().min(1).max(4_000),
+    assumptions: z.array(z.string().max(1_000)).max(20).default([]),
+    warnings: z.array(z.string().max(1_000)).max(20).default([]),
+    clarifyingQuestions: z.array(z.string().trim().min(1).max(1_000)).max(10).default([]),
+    operations: z.array(makeOperationSchema(aiFieldChangesModelSchema)).max(100),
+}).strict();
 
 const currentFieldSchema = z.object({
     name: identifier,

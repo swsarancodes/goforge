@@ -1,0 +1,236 @@
+[
+  {
+    "case": "case-01",
+    "risks": [
+      "join_semantics",
+      "null_type_or_aggregation_semantics",
+      "silent_executable_failure"
+    ],
+    "runs": [
+      {
+        "file": "candidates/correct.sql",
+        "expect": "pass",
+        "catchBy": "primary",
+        "verdict": "pass",
+        "heldOutVerdict": "pass",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 3 invariant(s) hold.",
+        "heldOutSummary": "Matches the reference result and all 3 invariant(s) hold."
+      },
+      {
+        "file": "candidates/silent_where_filter.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "outer_join_filtered_in_where",
+          "outer_join_filtered_in_where"
+        ],
+        "asExpected": true,
+        "summary": "3 expected row(s) missing, 0 unexpected row(s) returned. Invariant broken: one row per customer (4 row(s) returned, 7 expected).",
+        "heldOutSummary": "4 expected row(s) missing, 0 unexpected row(s) returned. Invariant broken: one row per customer (4 row(s) returned, 8 expected)."
+      },
+      {
+        "file": "candidates/count_star.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "count_star_over_outer_join"
+        ],
+        "asExpected": true,
+        "summary": "3 expected row(s) missing, 3 unexpected row(s) returned. Invariant broken: policy count is conserved (sum of polcy_cnt is 8, 5 expected).",
+        "heldOutSummary": "4 expected row(s) missing, 4 unexpected row(s) returned. Invariant broken: policy count is conserved (sum of polcy_cnt is 9, 5 expected)."
+      },
+      {
+        "file": "candidates/status_in_where.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "outer_join_filtered_in_where"
+        ],
+        "asExpected": true,
+        "summary": "1 expected row(s) missing, 0 unexpected row(s) returned. Invariant broken: one row per customer (6 row(s) returned, 7 expected).",
+        "heldOutSummary": "1 expected row(s) missing, 0 unexpected row(s) returned. Invariant broken: one row per customer (7 row(s) returned, 8 expected)."
+      },
+      {
+        "file": "candidates/overfit_hardcoded_customers.sql",
+        "expect": "fail",
+        "catchBy": "heldout",
+        "verdict": "pass",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "fitted_to_a_literal",
+          "fitted_to_a_literal"
+        ],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 3 invariant(s) hold.",
+        "heldOutSummary": "4 expected row(s) missing, 4 unexpected row(s) returned. Invariant broken: policy count is conserved (sum of polcy_cnt is 0, 5 expected). Invariant broken: premium is conserved (sum of tot_prem is 0, 5400.75 expected)."
+      }
+    ]
+  },
+  {
+    "case": "case-02",
+    "risks": [
+      "null_type_or_aggregation_semantics",
+      "silent_executable_failure"
+    ],
+    "runs": [
+      {
+        "file": "candidates/correct.sql",
+        "expect": "pass",
+        "catchBy": "primary",
+        "verdict": "pass",
+        "heldOutVerdict": "pass",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 3 invariant(s) hold.",
+        "heldOutSummary": "Matches the reference result and all 3 invariant(s) hold."
+      },
+      {
+        "file": "candidates/silent_concat_null.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "null_in_concatenation"
+        ],
+        "asExpected": true,
+        "summary": "1 expected row(s) missing, 1 unexpected row(s) returned.",
+        "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned."
+      },
+      {
+        "file": "candidates/integer_division.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "integer_division"
+        ],
+        "asExpected": true,
+        "summary": "4 expected row(s) missing, 4 unexpected row(s) returned.",
+        "heldOutSummary": "3 expected row(s) missing, 3 unexpected row(s) returned."
+      },
+      {
+        "file": "candidates/avg_without_nvl.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "average_ignores_nulls"
+        ],
+        "asExpected": true,
+        "summary": "5 expected row(s) missing, 5 unexpected row(s) returned.",
+        "heldOutSummary": "6 expected row(s) missing, 6 unexpected row(s) returned."
+      },
+      {
+        "file": "candidates/count_star_claims.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "count_star_over_outer_join"
+        ],
+        "asExpected": true,
+        "summary": "2 expected row(s) missing, 2 unexpected row(s) returned. Invariant broken: claim count is conserved (sum of clm_cnt is 13, 11 expected).",
+        "heldOutSummary": "4 expected row(s) missing, 4 unexpected row(s) returned. Invariant broken: claim count is conserved (sum of clm_cnt is 14, 10 expected)."
+      },
+      {
+        "file": "candidates/overfit_customer_2_label.sql",
+        "expect": "fail",
+        "catchBy": "heldout",
+        "verdict": "pass",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "fitted_to_a_literal",
+          "null_in_concatenation"
+        ],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 3 invariant(s) hold.",
+        "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned."
+      }
+    ]
+  },
+  {
+    "case": "case-03",
+    "risks": [
+      "date_or_time_semantics",
+      "silent_executable_failure"
+    ],
+    "runs": [
+      {
+        "file": "candidates/correct.sql",
+        "expect": "pass",
+        "catchBy": "primary",
+        "verdict": "pass",
+        "heldOutVerdict": "pass",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 1 invariant(s) hold.",
+        "heldOutSummary": "Matches the reference result and all 1 invariant(s) hold."
+      },
+      {
+        "file": "candidates/silent_between_without_trunc.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "timestamp_vs_date_boundary"
+        ],
+        "asExpected": true,
+        "summary": "1 expected row(s) missing, 1 unexpected row(s) returned.",
+        "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned."
+      },
+      {
+        "file": "candidates/add_months_plain_interval.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "month_arithmetic_without_month_end_rule"
+        ],
+        "asExpected": true,
+        "summary": "2 expected row(s) missing, 2 unexpected row(s) returned.",
+        "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned."
+      },
+      {
+        "file": "candidates/date_difference_as_interval.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "interval_result"
+        ],
+        "asExpected": true,
+        "summary": "5 expected row(s) missing, 5 unexpected row(s) returned.",
+        "heldOutSummary": "5 expected row(s) missing, 5 unexpected row(s) returned."
+      },
+      {
+        "file": "candidates/overfit_special_cased_review_date.sql",
+        "expect": "fail",
+        "catchBy": "heldout",
+        "verdict": "pass",
+        "heldOutVerdict": "fail",
+        "findings": [
+          "month_arithmetic_without_month_end_rule",
+          "fitted_to_a_literal"
+        ],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 1 invariant(s) hold.",
+        "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned."
+      }
+    ]
+  }
+]

@@ -14,7 +14,7 @@ const useDatabaseRoutes = () => {
             <Route path='tables' element={<TablesController />}></Route>
             <Route path='relationships' element={<RelationshipController />}></Route>
             <Route path='ai-schema' element={<AiSchemaController />}></Route>
-        
+
         </Route>
     );
 };

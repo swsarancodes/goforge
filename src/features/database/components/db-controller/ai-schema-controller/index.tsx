@@ -18,6 +18,7 @@ import {
 import { toast } from "sonner";
 
 import Clipboard from "@/components/clipboard";
+import { useOpenInSqlEditor } from "@/features/sql-editor/use-open-in-sql-editor";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -25,7 +26,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { buildAiDiagramPreview } from "@/lib/ai-diagram-preview";
-import { requestAiSchemaPlan } from "@/lib/ai-api";
+import { AiStatus, fetchAiStatus, requestAiSchemaPlan } from "@/lib/ai-api";
 import {
     AiSchemaOperation,
     AiSchemaPlanResponse,
@@ -80,6 +81,7 @@ const AiSchemaController: React.FC = () => {
     const { database } = useDatabase();
     const { data_types } = useDatabaseOperations();
     const { applyUndoableOperations } = useDatabaseHistory();
+    const openInSqlEditor = useOpenInSqlEditor();
     const { setAiPreview } = useDiagram();
     const promptRef = useRef<HTMLTextAreaElement>(null);
     const requestControllerRef = useRef<AbortController>();
@@ -93,6 +95,13 @@ const AiSchemaController: React.FC = () => {
     const [isGenerating, setIsGenerating] = useState(false);
     const [isApplying, setIsApplying] = useState(false);
     const [destructiveAccepted, setDestructiveAccepted] = useState(false);
+    const [aiStatus, setAiStatus] = useState<AiStatus>();
+
+    useEffect(() => {
+        const controller = new AbortController();
+        fetchAiStatus(controller.signal).then(setAiStatus).catch(() => setAiStatus(undefined));
+        return () => controller.abort();
+    }, []);
 
     const clarifyingQuestions = preview?.response.plan.clarifyingQuestions ?? [];
     const hasClarifications = clarifyingQuestions.length > 0;
@@ -425,7 +434,9 @@ const AiSchemaController: React.FC = () => {
                         <ShieldCheck className="text-amber-600" />
                         <AlertTitle className="text-xs">Schema metadata only</AlertTitle>
                         <AlertDescription className="text-xs">
-                            Sends definitions—not rows or credentials. The contributor-free model may use prompts and completions for training.
+                            Sends definitions, not rows or credentials{aiStatus?.model ? `, to ${aiStatus.model} on OpenAI` : ""}.
+                            {aiStatus?.problem ? ` ${aiStatus.problem}` : ""}
+                            {" "}Which endpoint and models are allowed, and whether names are hidden, is set under Schema Change → AI settings.
                         </AlertDescription>
                     </Alert>
 
@@ -502,7 +513,18 @@ const AiSchemaController: React.FC = () => {
                                 <div className="overflow-hidden rounded-md border bg-background">
                                     <div className="flex items-center gap-2 border-b bg-muted/50 px-2.5 py-2 text-xs font-medium">
                                         <Code2 className="size-3.5" /> Migration preview
-                                        <span className="ml-auto"><Clipboard text={preview.sql} /></span>
+                                        <span className="ml-auto flex items-center gap-1">
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-6 px-1.5 text-[11px]"
+                                                onClick={() => openInSqlEditor(preview.sql, "AI Schema")}
+                                                title="Open this SQL in the SQL Editor to run it against a live PostgreSQL connection"
+                                            >
+                                                Open in SQL Editor
+                                            </Button>
+                                            <Clipboard text={preview.sql} />
+                                        </span>
                                     </div>
                                     <pre className="max-h-64 overflow-auto whitespace-pre-wrap p-2.5 font-mono text-[11px] leading-5">{preview.sql}</pre>
                                 </div>

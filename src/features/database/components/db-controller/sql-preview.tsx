@@ -20,6 +20,8 @@ import { downloadTextFile, toSafeFileName } from "@/utils/file";
 import { useVersionHistoryActions } from "@/hooks/use-version-history";
 import { PreparedSqlSchemaChange, prepareSqlSchemaChange } from "@/utils/import/prepare-sql-schema-change";
 import { DBDiffOperation } from "@/utils/database";
+import { LiveDatabaseOption, useLiveDatabase } from "../live-database-option";
+import { liveDatabaseCreatedText } from "../../live-database";
 
 const SQL_OPERATION_LABELS: Record<string, string> = {
     RENAME_DATABASE: "database rename(s)",
@@ -186,6 +188,7 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
     const [applyError, setApplyError] = useState<string | undefined>(undefined);
     const [preparedChange, setPreparedChange] = useState<PreparedSqlSchemaChange>();
     const [destructiveAccepted, setDestructiveAccepted] = useState(false);
+    const live = useLiveDatabase(currentDatabase?.name, currentDatabase?.dialect);
 
     const database = useMemo(() => {
         if (!tableFilterIds) return currentDatabase;
@@ -268,8 +271,9 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
         if (!preparedChange) {
             try {
                 const prepared = await prepareSqlSchemaChange(draftSql, currentDatabase, data_types);
-                if (prepared.operations.length === 0) {
-                    raise("No schema changes", "The pasted SQL already matches the current diagram.");
+                // Nothing to change in the diagram is still worth reviewing when a live database is to be created from it.
+                if (prepared.operations.length === 0 && !live.active) {
+                    raise("No schema changes", "The pasted schema already matches the current diagram.");
                     setIsEditing(false);
                     return;
                 }
@@ -283,11 +287,20 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
         if (preparedChange.destructiveOperations.length > 0 && !destructiveAccepted) return;
 
         setIsApplying(true);
+        let createdDatabase: string | undefined;
         try {
-            const recorded = await applyRecorded(preparedChange.operations, { name: "SQL editor changes", origin: "sql-editor" });
+            // The live database goes first: if the server refuses, nothing in the diagram has changed yet and the choice can be undone.
+            if (live.active) {
+                const created = await live.create(preparedChange.targetDatabase, data_types);
+                createdDatabase = liveDatabaseCreatedText(created.connection);
+            }
+            const recorded = preparedChange.operations.length > 0 ? await applyRecorded(preparedChange.operations, { name: "SQL editor changes", origin: "sql-editor" }) : undefined;
+            const liveNote = createdDatabase ? ` ${createdDatabase}` : "";
             raise(
-                "SQL changes applied",
-                `${preparedChange.operations.length} schema operation(s) completed in one transaction.${recorded.migrationId ? " Recorded in version history." : recorded.skippedReason ? ` Saved to version history without migration SQL: ${recorded.skippedReason.split(". ")[0]}.` : ""}`,
+                createdDatabase ? (recorded ? "Database created and changes applied" : "Database created") : "SQL changes applied",
+                recorded
+                    ? `${preparedChange.operations.length} schema operation(s) completed in one transaction.${recorded.migrationId ? " Recorded in version history." : recorded.skippedReason ? ` Saved to version history without migration SQL: ${recorded.skippedReason.split(". ")[0]}.` : ""}${liveNote}`
+                    : `The diagram already had this schema.${liveNote}`,
                 "SUCCESS",
             );
 
@@ -296,11 +309,12 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
             setDestructiveAccepted(false);
             onApplied?.();
         } catch (error) {
-            setApplyError(error instanceof Error ? error.message : String(error));
+            const text = error instanceof Error ? error.message : String(error);
+            setApplyError(createdDatabase ? `The live database "${createdDatabase}" was created, but the diagram could not be updated: ${text}` : text);
         } finally {
             setIsApplying(false);
         }
-    }, [currentDatabase, data_types, destructiveAccepted, draftSql, applyRecorded, onApplied, preparedChange, raise]);
+    }, [currentDatabase, data_types, destructiveAccepted, draftSql, applyRecorded, onApplied, preparedChange, raise, live]);
 
     if (circularDependency) return <CircularDependencyAlert error={circularDependency} />;
     else
@@ -309,7 +323,7 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
                 <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b px-2">
                     <div className="flex min-w-0 items-center gap-2 text-xs font-medium">
                         <Code2 className="size-4 text-muted-foreground" />
-                        <span>{isEditing ? "Paste or edit SQL" : "Generated SQL"}</span>
+                        <span>{isEditing ? "Paste or edit SQL or DBML" : "Generated SQL"}</span>
                     </div>
                     <div className="flex items-center gap-1">
                         {!isEditing && editable && (
@@ -322,9 +336,9 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
                                 <Button variant="ghost" size="sm" className="gap-1.5" onClick={onCancelEdit} disabled={isApplying}>
                                     <X className="size-3.5" /> Cancel
                                 </Button>
-                                <Button size="sm" className="gap-1.5" variant={preparedChange?.destructiveOperations.length ? "destructive" : "default"} onClick={onApplyEdit} disabled={isApplying || !draftSql.trim() || Boolean(preparedChange?.destructiveOperations.length && !destructiveAccepted)}>
+                                <Button size="sm" className="gap-1.5" variant={preparedChange?.destructiveOperations.length ? "destructive" : "default"} onClick={onApplyEdit} disabled={isApplying || !draftSql.trim() || Boolean(preparedChange?.destructiveOperations.length && !destructiveAccepted) || Boolean(preparedChange && live.enabled && live.problem)}>
                                     {isApplying ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                                    {isApplying ? "Applying…" : preparedChange ? `Apply ${preparedChange.operations.length} change(s)` : "Review SQL"}
+                                    {isApplying ? (live.active && preparedChange ? "Creating…" : "Applying…") : preparedChange ? preparedChange.operations.length === 0 ? "Create database" : `Apply ${preparedChange.operations.length} change(s)${live.active ? " and create database" : ""}` : "Review SQL"}
                                 </Button>
                             </>
                         )}
@@ -365,8 +379,8 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
                 </div>
                 {preparedChange && (
                     <div className="space-y-2 border-t bg-muted/30 px-3 py-2 text-xs">
-                        <p className="font-medium">{preparedChange.operations.length} schema change(s) ready to apply</p>
-                        <p className="text-muted-foreground">{summarizeOperations(preparedChange.operations)}</p>
+                        <p className="font-medium">{preparedChange.operations.length === 0 ? "The diagram already has this schema" : `${preparedChange.operations.length} schema change(s) ready to apply`}</p>
+                        <p className="text-muted-foreground">{preparedChange.operations.length === 0 ? "Nothing in the diagram changes." : summarizeOperations(preparedChange.operations)}</p>
                         <SchemaPreview database={preparedChange.targetDatabase} />
                         <ul className="max-h-28 space-y-1 overflow-auto rounded-md border bg-background p-2 text-muted-foreground">
                             {preparedChange.operations.map((operation, index) => (
@@ -375,11 +389,17 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
                                 </li>
                             ))}
                         </ul>
+                        <LiveDatabaseOption live={live} />
                         {preparedChange.warnings.length > 0 && (
-                            <p className="flex items-start gap-1.5 text-amber-600">
-                                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-                                The SQL parser reported {preparedChange.warnings.length} warning(s). Review the diagram after applying.
-                            </p>
+                            <div className="space-y-1 text-amber-600">
+                                <p className="flex items-start gap-1.5">
+                                    <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                                    {preparedChange.warnings.length} thing(s) could not be carried over. Review the diagram after applying.
+                                </p>
+                                <ul className="max-h-24 list-disc space-y-0.5 overflow-auto pl-8">
+                                    {preparedChange.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                                </ul>
+                            </div>
                         )}
                         {preparedChange.destructiveOperations.length > 0 && (
                             <label className="flex cursor-pointer items-start gap-2 rounded-md border border-destructive/40 bg-destructive/5 p-2">

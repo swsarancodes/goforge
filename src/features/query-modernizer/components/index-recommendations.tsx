@@ -1,138 +1,87 @@
-import React, { useState } from "react";
-import { IndexRecommendation } from "../types";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Zap, Check, Plus, Database, Sparkles } from "lucide-react";
-import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
+import React from "react";
+import { Copy, Terminal } from "lucide-react";
 import { toast } from "sonner";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useOpenInSqlEditor } from "@/features/sql-editor/use-open-in-sql-editor";
+import type { IndexAdvice } from "../engine/index-advice";
 
 interface IndexRecommendationsProps {
-    recommendations: IndexRecommendation[];
+    advice: IndexAdvice | undefined;
+    /** Suggestions need the project's tables to compare against. */
+    hasTables: boolean;
 }
 
-export const IndexRecommendations: React.FC<IndexRecommendationsProps> = ({ recommendations }) => {
-    const { database } = useDatabase();
-    const { addIndex } = useDatabaseOperations();
-    const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
+export const IndexRecommendations: React.FC<IndexRecommendationsProps> = ({ advice, hasTables }) => {
+    const openInSqlEditor = useOpenInSqlEditor();
 
-    if (!recommendations || recommendations.length === 0) {
+    const copy = async (ddl: string) => {
+        try {
+            await navigator.clipboard.writeText(ddl);
+            toast.success("SQL copied");
+        } catch {
+            toast.error("Couldn't copy. The browser blocked clipboard access.");
+        }
+    };
+
+    if (!hasTables) {
         return (
             <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
-                <Database className="h-8 w-8 text-muted-foreground/50 mb-2" />
-                <h4 className="text-sm font-semibold text-foreground">No Missing Indexes Flagged</h4>
-                <p className="text-xs text-muted-foreground mt-1 max-w-sm">
-                    The optimizer verified that all joins and filter predicates in this query are either already covered or structurally optimal.
-                </p>
+                <h4 className="text-sm font-medium text-foreground">No tables to compare with</h4>
+                <p className="text-xs text-muted-foreground mt-1 max-w-sm">Index suggestions come from what the query filters and joins on, checked against the tables and indexes in your project. Import or draw your tables first.</p>
             </div>
         );
     }
 
-    const handleApplyIndex = (idx: IndexRecommendation) => {
-        if (!database) {
-            toast.error("No database project currently open on canvas.");
-            return;
-        }
-
-        // Find matching table in database
-        const targetTable = database.tables.find(
-            t => t.name.toLowerCase() === idx.tableName.toLowerCase()
+    const recommendations = advice?.recommendations ?? [];
+    const notes = advice?.notes ?? [];
+    if (recommendations.length === 0 && notes.length === 0) {
+        return (
+            <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
+                <h4 className="text-sm font-medium text-foreground">No index suggestions</h4>
+                <p className="text-xs text-muted-foreground mt-1 max-w-sm">Every column this query filters or joins on is already the start of an index in your project, is a key, or the query doesn't filter on a plain column.</p>
+            </div>
         );
-
-        if (!targetTable) {
-            toast.warning(`Table "${idx.tableName}" not found in current canvas. You can still run the DDL manually.`);
-            return;
-        }
-
-        try {
-            // Apply index to table using GoForge database operations
-            addIndex(targetTable.id, {
-                name: idx.name,
-                fields: idx.columns,
-                is_unique: idx.unique,
-            });
-
-            setAppliedIds(prev => new Set(prev).add(idx.id));
-            toast.success(`Applied index "${idx.name}" to table "${targetTable.name}" on canvas!`);
-        } catch (error) {
-            toast.error(`Failed to apply index: ${error instanceof Error ? error.message : String(error)}`);
-        }
-    };
+    }
 
     return (
         <div className="flex flex-col gap-3 p-1">
-            <div className="flex items-center justify-between px-1">
-                <div className="flex items-center gap-2">
-                    <Zap className="h-4 w-4 text-amber-500 animate-pulse" />
-                    <span className="text-xs font-semibold tracking-wider uppercase text-muted-foreground">
-                        Optimizer Index Advisory ({recommendations.length})
-                    </span>
-                </div>
-                <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-500 border-amber-500/30">
-                    Canvas Live Sync
-                </Badge>
-            </div>
+            {recommendations.length > 0 && <p className="px-1 text-xs font-medium text-muted-foreground">Index suggestions ({recommendations.length})</p>}
 
-            <div className="flex flex-col gap-3">
-                {recommendations.map(idx => {
-                    const isApplied = appliedIds.has(idx.id);
-
-                    return (
-                        <div
-                            key={idx.id}
-                            className="rounded-lg border border-border/60 bg-card/60 p-3 shadow-xs hover:border-amber-500/40 transition-all duration-200"
-                        >
-                            <div className="flex items-start justify-between gap-3">
-                                <div className="space-y-1">
-                                    <div className="flex items-center gap-2">
-                                        <span className="font-mono text-xs font-semibold text-foreground">
-                                            {idx.name}
-                                        </span>
-                                        <Badge variant="secondary" className="text-[10px] bg-muted py-0 px-1.5 font-mono">
-                                            on {idx.tableName} ({idx.columns.join(", ")})
-                                        </Badge>
-                                    </div>
-                                    <p className="text-xs text-muted-foreground leading-relaxed">
-                                        {idx.reason}
-                                    </p>
-                                </div>
-
-                                <div className="flex flex-col items-end gap-1.5 shrink-0">
-                                    <Badge className="bg-emerald-500/10 text-emerald-500 border-emerald-500/20 text-[10px] font-semibold">
-                                        <Sparkles className="h-3 w-3 mr-1" />
-                                        {idx.estimatedImpact}
-                                    </Badge>
-
-                                    <Button
-                                        size="sm"
-                                        variant={isApplied ? "secondary" : "default"}
-                                        disabled={isApplied}
-                                        onClick={() => handleApplyIndex(idx)}
-                                        className="h-7 text-xs gap-1.5 font-medium"
-                                    >
-                                        {isApplied ? (
-                                            <>
-                                                <Check className="h-3 w-3 text-emerald-500" />
-                                                Applied to Canvas
-                                            </>
-                                        ) : (
-                                            <>
-                                                <Plus className="h-3 w-3" />
-                                                Apply to Canvas
-                                            </>
-                                        )}
-                                    </Button>
-                                </div>
+            {recommendations.map((index) => (
+                <div key={index.id} className="rounded-lg border bg-card p-3">
+                    <div className="flex items-start justify-between gap-3">
+                        <div className="space-y-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-mono text-xs font-medium text-foreground break-all">{index.name}</span>
+                                <Badge variant="secondary" className="text-[10px] py-0 px-1.5 font-mono">
+                                    on {index.tableName} ({index.columns.join(", ")})
+                                </Badge>
                             </div>
-
-                            <div className="mt-2 pt-2 border-t border-border/40">
-                                <pre className="font-mono text-[11px] text-muted-foreground bg-muted/40 p-2 rounded-md overflow-x-auto select-all">
-                                    {idx.ddl}
-                                </pre>
-                            </div>
+                            <p className="text-xs text-muted-foreground leading-relaxed">{index.reason}</p>
                         </div>
-                    );
-                })}
-            </div>
+
+                        <div className="flex shrink-0 items-center gap-1.5">
+                            <Button size="sm" variant="outline" className="h-7 gap-1.5 text-xs" onClick={() => copy(index.ddl)}>
+                                <Copy className="size-3" /> Copy
+                            </Button>
+                            <Button size="sm" className="h-7 gap-1.5 text-xs" onClick={() => openInSqlEditor(index.ddl, "Modernizer")} title="Run this against a live PostgreSQL connection">
+                                <Terminal className="size-3" /> Open in SQL Editor
+                            </Button>
+                        </div>
+                    </div>
+
+                    <pre className="mt-2 pt-2 border-t font-mono text-[11px] text-muted-foreground bg-muted/40 p-2 rounded-md overflow-x-auto select-all">{index.ddl}</pre>
+                </div>
+            ))}
+
+            {notes.map((note, index) => (
+                <p key={index} className="rounded-lg border border-l-2 border-l-amber-500 bg-card p-3 text-xs text-muted-foreground leading-relaxed">
+                    {note}
+                </p>
+            ))}
+
+            {recommendations.length > 0 && <p className="px-1 text-[11px] text-muted-foreground">These come from the query's conditions, not from measuring it. On a large table, create an index with CREATE INDEX CONCURRENTLY outside a transaction, and check the plan afterwards.</p>}
         </div>
     );
 };

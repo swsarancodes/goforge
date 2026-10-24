@@ -4,7 +4,7 @@ import { useVersionHistoryActions } from "@/hooks/use-version-history";
 import { SchemaLinter } from "@/utils/linter/linter";
 import { LintIssue, LintResult, LintSeverity, LinterOptions } from "@/utils/linter/types";
 import { getRenderer } from "@/utils/render/render-uttils";
-import { useToast } from "@/components/ui/use-toast";
+import useToast from "@/hooks/use-toast";
 
 export const useSchemaLinter = (initialOptions?: LinterOptions) => {
     const { database } = useDatabase();
@@ -59,7 +59,7 @@ export const useSchemaLinter = (initialOptions?: LinterOptions) => {
         try {
             const targetIssue = result.issues.find(i => i.id === issueId);
             if (!targetIssue || !targetIssue.fix) {
-                raise("Cannot fix", "This issue cannot be automatically fixed.", "DESTRUCTIVE");
+                raise("Cannot fix", "This issue cannot be automatically fixed.", "ERROR");
                 return;
             }
 
@@ -69,7 +69,7 @@ export const useSchemaLinter = (initialOptions?: LinterOptions) => {
 
             const ops = renderer.prepareDiff(updatedDatabase, database);
             if (ops.length === 0) {
-                raise("No changes", "No schema diff was generated.", "WARNING");
+                raise("No changes", "No schema diff was generated.", "INFO");
                 return;
             }
 
@@ -80,7 +80,7 @@ export const useSchemaLinter = (initialOptions?: LinterOptions) => {
 
             raise("Issue Fixed", targetIssue.fixDescription ?? targetIssue.ruleName, "SUCCESS");
         } catch (error) {
-            raise("Auto-fix Failed", error instanceof Error ? error.message : String(error), "DESTRUCTIVE");
+            raise("Auto-fix Failed", error instanceof Error ? error.message : String(error), "ERROR");
         } finally {
             setIsFixing(false);
         }
@@ -92,7 +92,7 @@ export const useSchemaLinter = (initialOptions?: LinterOptions) => {
         try {
             const { database: fixedDb, appliedCount } = linter.applyAllFixes(database);
             if (appliedCount === 0) {
-                raise("Nothing to fix", "No automated fixes are currently available.", "DEFAULT");
+                raise("Nothing to fix", "No automated fixes are currently available.", "INFO");
                 return;
             }
 
@@ -101,7 +101,7 @@ export const useSchemaLinter = (initialOptions?: LinterOptions) => {
 
             const ops = renderer.prepareDiff(fixedDb, database);
             if (ops.length === 0) {
-                raise("No changes", "No schema diff was generated.", "WARNING");
+                raise("No changes", "No schema diff was generated.", "INFO");
                 return;
             }
 
@@ -112,7 +112,7 @@ export const useSchemaLinter = (initialOptions?: LinterOptions) => {
 
             raise("Bulk Fix Complete", `Successfully resolved ${appliedCount} issue(s) across the schema.`, "SUCCESS");
         } catch (error) {
-            raise("Bulk Fix Failed", error instanceof Error ? error.message : String(error), "DESTRUCTIVE");
+            raise("Bulk Fix Failed", error instanceof Error ? error.message : String(error), "ERROR");
         } finally {
             setIsFixing(false);
         }

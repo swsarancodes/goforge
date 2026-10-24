@@ -28,10 +28,22 @@ services:
     restart: unless-stopped
     environment:
       - PORT=4000
+      # Reachable only from the nginx container on the compose network; the port is not published.
+      - HOST=0.0.0.0
       # Generate with: node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
       - MASTER_KEY=${GOFORGE_MASTER_KEY}
       - CORS_ORIGIN=http://localhost:8080
       - SQLITE_PATH=/app/data/connections.db
+      # Optional: keep accounts, connections and diagrams in Postgres (see server/.env.example). Empty keeps the local SQLite file.
+      - DATABASE_URL=${DATABASE_URL:-}
+      - DATABASE_URL_POOLED=${DATABASE_URL_POOLED:-}
+      - ALLOW_SIGNUP=${ALLOW_SIGNUP:-false}
+      - MAX_CLOUD_DATABASES_PER_USER=${MAX_CLOUD_DATABASES_PER_USER:-10}
+      # Optional: Oracle databases for accounts (a schema each) on the Oracle service below. Empty turns the feature off.
+      - ORACLE_ADMIN_URL=${ORACLE_ADMIN_URL:-}
+      - MAX_ORACLE_DATABASES_PER_USER=${MAX_ORACLE_DATABASES_PER_USER:-5}
+      - COOKIE_SECURE=${COOKIE_SECURE:-false}
+      - TRUST_PROXY=true
     volumes:
       - ./server/data:/app/data
     healthcheck:
@@ -40,3 +52,28 @@ services:
       timeout: 10s
       retries: 3
       start_period: 20s
+
+  # Optional Oracle server for "create an Oracle database": docker compose --profile oracle up -d oracle
+  # Then set ORACLE_ADMIN_URL=oracle://system:<ORACLE_PASSWORD>@oracle:1521/FREEPDB1 for goforge-api. Oracle Database Free (the community
+  # gvenzl image; the image is large, about 6 GB on disk). GoForge creates one schema per Oracle database, with a quota and a profile.
+  oracle:
+    profiles: ["oracle"]
+    image: gvenzl/oracle-free:23-slim-faststart
+    container_name: goforge-oracle
+    restart: unless-stopped
+    environment:
+      ORACLE_PASSWORD: ${ORACLE_PASSWORD:?set ORACLE_PASSWORD to start the Oracle service}
+    ports:
+      # Only this machine; the API reaches it over the compose network.
+      - "127.0.0.1:1521:1521"
+    volumes:
+      - oracle-data:/opt/oracle/oradata
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+volumes:
+  oracle-data:

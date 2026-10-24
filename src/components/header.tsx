@@ -15,7 +15,8 @@ import { ThemeSwitch } from './theme-switch'
 import RenameDb from '@/features/database/components/rename-db'
 import LanguagesDropdown from './languages-dropdown'
 import { useIsMobile } from '@/hooks/use-mobile'
-import { Bot, ShieldCheck } from 'lucide-react'
+import { ShieldCheck } from 'lucide-react'
+import { AccountMenu } from './account-menu'
 
 interface HeaderProps extends React.HTMLAttributes<HTMLElement> {
   fixed?: boolean
@@ -91,22 +92,9 @@ export const Header = ({
             <span className="hidden xl:inline">Linter</span>
           </Button>
 
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => open(Modals.QUERY_MODERNIZER)}
-            className="h-8 gap-1.5 text-xs font-semibold border-primary/30 bg-primary/5 hover:bg-primary/10 text-primary transition-all shadow-2xs"
-            title="Open Enterprise Query Modernizer (Multi-Agent Swarm)"
-          >
-            <Bot className="h-4 w-4 text-primary animate-pulse" />
-            <span className="hidden xl:inline">Modernizer</span>
-            <span className="text-[10px] bg-primary/20 px-1 py-0.5 rounded font-bold uppercase hidden md:inline">
-              Swarm
-            </span>
-          </Button>
-
           <ThemeSwitch />
           <LanguagesDropdown />
+          <AccountMenu />
 
         </div>
       </div>

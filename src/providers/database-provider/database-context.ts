@@ -70,7 +70,8 @@ interface DatabaseOperationsContextType {
     
     // insert databse tables , relationships , indices in one operation 
     // create a new database from a validated project bundle, resolves to its id
-    importProject : (bundle: ProjectBundle) => Promise<string> ;
+    // `options.id` keeps a chosen id (a diagram brought down from the cloud keeps the id it has there)
+    importProject : (bundle: ProjectBundle, options?: { id?: string }) => Promise<string> ;
     importDatabase : (tables  : TableInsertType[] , relationships : RelationshipInsertType[] , indices : IndexInsertType[], views?: ViewInsertType[], sequences?: SequenceInsertType[]) => Promise<any> ;
      
 }

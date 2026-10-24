@@ -8,6 +8,7 @@ import DatabaseProvider from "./providers/database-provider/database-provider";
 import DiagramProvider from "./providers/diagram-provider/diagram-provider";
 import { ModalProvider } from "./providers/modal-provider/modal-provider";
 import DatabaseHotkeysProvider from "./providers/database-hotkeys/database-hotkeys-provider";
+import { CloudSyncProvider } from "./features/cloud-sync/cloud-sync-provider";
 
 function App() {
 
@@ -17,13 +18,15 @@ function App() {
       <SyncProvider>
         <ReactFlowProvider>
           <DatabaseProvider>
-            <DiagramProvider>
-                <ModalProvider>
-                  <DatabaseHotkeysProvider>
-                    {appRoutes}
-                  </DatabaseHotkeysProvider>
-                </ModalProvider>
-            </DiagramProvider>
+            <CloudSyncProvider>
+              <DiagramProvider>
+                  <ModalProvider>
+                    <DatabaseHotkeysProvider>
+                      {appRoutes}
+                    </DatabaseHotkeysProvider>
+                  </ModalProvider>
+              </DiagramProvider>
+            </CloudSyncProvider>
           </DatabaseProvider>
         </ReactFlowProvider>
       </SyncProvider>

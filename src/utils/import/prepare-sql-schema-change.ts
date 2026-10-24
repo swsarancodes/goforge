@@ -19,8 +19,20 @@ const DESTRUCTIVE_SQL_OPERATION_TYPES = new Set<DBDiffOperation["type"]>(["DELET
 
 export const isDestructiveSqlOperation = (operation: DBDiffOperation) => DESTRUCTIVE_SQL_OPERATION_TYPES.has(operation.type);
 
+// DBML declares objects as `Table name {`, `Enum name {`, `Project name {` or `Ref: a.b > c.d`; DDL never has a brace there.
+const DBML_BLOCK = /^[ \t]*(?:table|enum|project|tablegroup|tablepartial)[ \t]+[^\s{]+(?:[ \t]+as[ \t]+\S+)?(?:[ \t]*\[[^\]\n]*\])?[ \t]*\{/im;
+const DBML_REF = /^[ \t]*ref(?:[ \t]+\w+)?[ \t]*(?::|\{)/im;
+
+const stripComments = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^[ \t]*(?:\/\/|--).*$/gm, "");
+
+/** True when pasted text is DBML rather than SQL, so the editor can accept both. */
+export const looksLikeDbml = (text: string): boolean => {
+    const code = stripComments(text);
+    return DBML_BLOCK.test(code) || DBML_REF.test(code);
+};
+
 /**
- * Compile pasted or edited DDL into the same typed operations used by undo,
+ * Compile pasted or edited DDL (or DBML) into the same typed operations used by undo,
  * redo, and AI schema changes. This function is intentionally pure so parsing,
  * reconciliation, placement, and diff behavior stay consistent across every UI.
  */
@@ -28,6 +40,7 @@ let sqlParserReady: Promise<unknown> | undefined;
 
 export async function prepareSqlSchemaChange(draftSql: string, currentDatabase: DatabaseType, dataTypes: DataType[]): Promise<PreparedSqlSchemaChange> {
     if (!draftSql.trim()) throw new Error("Paste or enter SQL before applying changes.");
+    if (looksLikeDbml(draftSql)) return prepareDbmlSchemaChange(draftSql, currentDatabase, dataTypes);
 
     sqlParserReady ??= Promise.resolve(init());
     await sqlParserReady;
@@ -41,6 +54,54 @@ export async function prepareSqlSchemaChange(draftSql: string, currentDatabase: 
     }
 
     return prepareParsedSchemaChange(parsed, currentDatabase, dataTypes, Array.isArray((parsed as any).errors) ? (parsed as any).errors.map(String) : []);
+}
+
+/**
+ * Reads pasted DBML against the open project's dialect and diffs it like DDL: what the
+ * text does not mention is reported as a removal, so the caller's review step applies.
+ * DBML has no layout, so new tables are laid out and placed beside any existing diagram.
+ */
+async function prepareDbmlSchemaChange(text: string, currentDatabase: DatabaseType, dataTypes: DataType[]): Promise<PreparedSqlSchemaChange> {
+    const [{ DbmlParseError, parseDbml }, { layoutProjectFile }, { projectToBundle }, { dialectFromDatabaseType }, { v4 }] = await Promise.all([
+        import("@/utils/dbml/from-dbml"),
+        import("@/utils/dbml/layout-project"),
+        import("@/utils/project-file"),
+        import("@/utils/dbml/dbml-shared"),
+        import("uuid"),
+    ]);
+
+    let imported;
+    try {
+        imported = await parseDbml(text, { dialect: currentDatabase.dialect, dataTypes, fallbackName: currentDatabase.name });
+    } catch (error) {
+        if (error instanceof DbmlParseError) throw new Error([error.message, ...error.details.slice(0, 3)].join(" "));
+        throw error;
+    }
+    if (imported.file.project.tables.length === 0) throw new Error("Could not find any tables in this DBML.");
+
+    const warnings = imported.warnings.map((warning) => warning.message);
+    const declared = dialectFromDatabaseType(imported.databaseType);
+    if (imported.databaseType && declared !== currentDatabase.dialect) {
+        warnings.unshift(`This DBML is for ${imported.databaseType}; its types were read as ${currentDatabase.dialect}.`);
+    }
+
+    const laidOut = await layoutProjectFile(imported.file);
+    const bundle = projectToBundle(laidOut, v4);
+    const maxX = currentDatabase.tables.reduce((max, table) => Math.max(max, (table.posX ?? 0) + (table.width ?? 260)), 0);
+    const offsetX = currentDatabase.tables.length === 0 ? 0 : maxX + 80;
+
+    return prepareParsedSchemaChange(
+        {
+            tables: bundle.tables.map((table) => ({ ...table, posX: (table.posX ?? 0) + offsetX })) as any,
+            relationships: bundle.relationships,
+            indexes: bundle.indexes,
+            views: bundle.views,
+            sequences: bundle.sequences,
+        },
+        currentDatabase,
+        dataTypes,
+        warnings,
+    );
 }
 
 /**

@@ -190,6 +190,16 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
 
     const deleteDatabase = useCallback(async (id: string): Promise<void> => {
         await db.transaction(async (tx) => {
+            // PowerSync has no ON DELETE CASCADE, so everything inside the project goes by hand. Left behind, it would reappear inside any
+            // project later created with the same id (a diagram brought back from the cloud keeps its id).
+            const tableRows = await tx.select({ id: tables.id }).from(tables).where(eq(tables.databaseId, id));
+            if (tableRows.length > 0) await deleteTablesWithCascade(tableRows.map((row) => row.id), tx);
+            const relationshipRows = await tx.select({ id: relationships.id }).from(relationships).where(eq(relationships.databaseId, id));
+            if (relationshipRows.length > 0) {
+                await tx.delete(relationship_fields).where(inArray(relationship_fields.relationshipId, relationshipRows.map((row) => row.id)));
+                await tx.delete(relationships).where(eq(relationships.databaseId, id));
+            }
+            await tx.delete(sequencesModel).where(eq(sequencesModel.databaseId, id));
             await tx.delete(viewsModel).where(eq(viewsModel.databaseId, id));
             // Version history belongs to the project; migrations first, they point at snapshots.
             await tx.delete(schema_migrations).where(eq(schema_migrations.databaseId, id));
@@ -666,8 +676,8 @@ const DatabaseProvider: React.FC<Props> = ({ children }) => {
 
     // Creates a brand new database together with all of its contents in one
     // transaction, so a failed import never leaves an empty project behind.
-    const importProject = useCallback(async (bundle: ProjectBundle): Promise<string> => {
-        const databaseId = v4();
+    const importProject = useCallback(async (bundle: ProjectBundle, options?: { id?: string }): Promise<string> => {
+        const databaseId = options?.id ?? v4();
         await db.transaction(async (tx) => {
             await tx.insert(databaseModel).values({
                 id: databaseId,

@@ -2,7 +2,7 @@ import Modal, { ModalProps } from "@/components/modal";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
 
 
-import {  useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     Table,
@@ -14,6 +14,8 @@ import {
 } from "@/components/ui/table"
 import { DatabaseType } from "@/lib/schemas/database-schema";
 import { getDatabaseByDialect } from "@/lib/database";
+import { Modals } from "@/providers/modal-provider/modal-contxet";
+import { useModal } from "@/providers/modal-provider/modal-provider";
 
 const OpenDatabaseModal: React.FC<ModalProps> = (props) => {
 
@@ -22,6 +24,11 @@ const OpenDatabaseModal: React.FC<ModalProps> = (props) => {
     const { databases, currentDatabaseId } = useDatabase();
 
     const { switchDatabase } = useDatabaseOperations();
+    const { open } = useModal();
+    // A picker with nothing to pick (the last project was just deleted) is a dead end; the way forward is to connect.
+    useEffect(() => {
+        if (isOpen && databases.length === 0) open(Modals.CONNECT_DATABASE, { closable: false });
+    }, [isOpen, databases.length, open]);
     const [selectedDatabase, setSelectedDatabase] = useState<string | undefined>(
         (() => currentDatabaseId ? currentDatabaseId : undefined)
     );

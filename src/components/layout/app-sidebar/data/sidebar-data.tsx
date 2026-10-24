@@ -1,7 +1,10 @@
 import {
     IconTableAlias,
     IconVectorSpline,
-    IconSparkles,
+    IconGitCompare,
+    IconDatabase,
+    IconTransform,
+    IconTerminal2,
 } from '@tabler/icons-react'
 
 import type { SidebarData } from '../../types';
@@ -28,11 +31,26 @@ export const useSidebarData = () => {
                         icon: IconVectorSpline,
                     },
                     {
-                        title: t("sidebar.ai_schema", { defaultValue: "AI Schema" }),
-                        url: '/database/ai-schema',
-                        icon: IconSparkles,
+                        title: t("sidebar.schema_change", { defaultValue: "Schema Change" }),
+                        url: '/database/schema-change',
+                        icon: IconGitCompare,
                     },
-           
+                    {
+                        title: t("sidebar.data", { defaultValue: "Data" }),
+                        url: '/database/data',
+                        icon: IconDatabase,
+                    },
+                    {
+                        title: t("sidebar.modernizer", { defaultValue: "Modernizer" }),
+                        url: '/database/modernizer',
+                        icon: IconTransform,
+                    },
+                    {
+                        title: t("sidebar.sql_editor", { defaultValue: "SQL Editor" }),
+                        url: '/database/sql',
+                        icon: IconTerminal2,
+                    },
+
                 ],
             },
             

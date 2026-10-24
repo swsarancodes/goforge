@@ -19,6 +19,9 @@ import { BaseSqlImporter } from "@/utils/import/base-sql-importer";
 import { getImporter } from "@/utils/import/import-utils";
 import CodeEditor from "@/components/code-editor";
 import { MAX_IMPORT_FILE_BYTES, readTextFile } from "@/utils/file";
+import useToast from "@/hooks/use-toast";
+import { LiveDatabaseOption, useLiveDatabase } from "../components/live-database-option";
+import { liveDatabaseCreatedText, liveTargetFromImport } from "../live-database";
 
 
 const options: ImportDatabaseOption[] = [{
@@ -203,6 +206,9 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
     const [error, setError] = useState<boolean>(false);
     const [parseError, setParseError] = useState<string | undefined>(undefined);
     const { fitView } = useReactFlow();
+    const raise = useToast();
+    const live = useLiveDatabase(database?.name, database?.dialect);
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     const [importer, setImporter] = useState<BaseSqlImporter | undefined>(undefined);
 
@@ -266,7 +272,22 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
     const onImport = useCallback(async () => {
 
         let nextTableSequence: number = getTableNextSequence(database ? database.tables : []);
-        if (parsedDatabase)
+        if (!parsedDatabase) return;
+
+        // The live database goes first: if the server refuses, nothing in the diagram has changed yet.
+        setLiveError(undefined);
+        let createdDatabase: string | undefined;
+        if (live.active && database) {
+            try {
+                const created = await live.create(liveTargetFromImport(parsedDatabase, database, data_types), data_types);
+                createdDatabase = liveDatabaseCreatedText(created.connection);
+            } catch (caught) {
+                setLiveError(caught instanceof Error ? caught.message : String(caught));
+                return;
+            }
+        }
+
+        {
             return new Promise(async (res, rej) => {
                 try {
                     const nodes: Node[] = parsedDatabase.tables.map((table: TableInsertType) => ({
@@ -286,6 +307,7 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                     await importDatabase(adjustedTables, parsedDatabase.relationships, parsedDatabase.indexes, parsedDatabase.views, parsedDatabase.sequences);
 
                     onOpenChange && onOpenChange(false);
+                    if (createdDatabase) raise("Database created", createdDatabase, "SUCCESS");
 
                     setTimeout(() => {
                         fitView({
@@ -296,10 +318,12 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                 } catch (error) {
 
                     setError(true);
+                    if (createdDatabase) setLiveError(`The live database "${createdDatabase}" was created, but the diagram could not be updated.`);
                     rej()
                 }
             })
-    }, [parsedDatabase, database]);
+        }
+    }, [parsedDatabase, database, live, data_types]);
 
     const fileInputRef = useRef<HTMLInputElement>(null);
     const [isDragging, setIsDragging] = useState(false);
@@ -343,10 +367,10 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
             isOpen={isOpen}
             onOpenChange={onOpenChange}
             title={t("modals.import_database.title")}
-            actionName={t("modals.import_database.import")}
+            actionName={live.active ? "Import and create database" : t("modals.import_database.import")}
             className="lg:min-w-[860px] md:min-w-[560px] w-full max-h-screen overflow-auto "
             actionHandler={onImport}
-            isDisabled={!parsedDatabase}
+            isDisabled={!parsedDatabase || Boolean(live.enabled && live.problem)}
         >
             <div className="flex flex-col gap-4 !min-w-0  ">
                 <div className="w-full space-y-2 min-w-0 ">
@@ -521,7 +545,17 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
                         autoFocus
                     />
 
-                    <div className="mt-4">
+                    <div className="mt-4 space-y-3">
+                        {parsedDatabase && <LiveDatabaseOption live={live} />}
+                        {liveError && (
+                            <Alert variant={"destructive"}>
+                                <AlertCircleIcon />
+                                <AlertTitle>Could not create the live database</AlertTitle>
+                                <AlertDescription>
+                                    <pre className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap font-mono text-xs">{liveError}</pre>
+                                </AlertDescription>
+                            </Alert>
+                        )}
                         {rawQueryDetected && (
                             <Alert className="mb-4 border-blue-500/40 text-blue-700 dark:text-blue-300">
                                 <InfoIcon />

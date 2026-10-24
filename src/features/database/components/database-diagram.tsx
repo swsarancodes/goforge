@@ -99,9 +99,9 @@ const DatabaseDiagram: React.FC = () => {
             })
         }
         else if (databases.length == 0) {
-            // there is no databases in the first place to select from , 
-            // we have to create a new one . 
-            open(Modals.CREATE_DATABASE, {
+            // Nothing to open yet. The way in is to connect to a database; an empty
+            // diagram is offered from that dialog as the second choice.
+            open(Modals.CONNECT_DATABASE, {
                 closable: false
             });
         } else {

@@ -1,0 +1,7 @@
+cust_id,contact_label,clm_cnt,tot_claimed,avg_paid,open_ratio
+21,Ines Alvarez <ines@example.com>,0,0,0.00,
+22,Jonas Weber <>,4,4850.00,630.00,0.5
+25,Mara Quinn <mara@example.com>,2,5200.00,900.00,0.5
+26,Nikhil Das <nikhil@example.com>,4,5990.00,197.50,0.5
+27,Olga Petrov <>,0,0,0.00,
+28,Priya Nair <priya@example.com>,0,0,0.00,

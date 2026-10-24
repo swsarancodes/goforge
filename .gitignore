@@ -36,3 +36,6 @@ server/.env
 
 # graphify output (generated knowledge graph)
 graphify-out/
+
+# local dev passwords (scripts/dev-local.sh)
+.local-dev/

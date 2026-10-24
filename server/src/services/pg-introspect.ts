@@ -106,17 +106,27 @@ const CHECK_CONSTRAINTS_QUERY = `
   ORDER BY n.nspname, t.relname, c.conname;
 `;
 
+// Postgres' information_schema.key_column_usage has no referenced_* columns (that's MySQL),
+// so read the FK column pairs straight from pg_constraint. conkey/confkey are parallel arrays
+// of attnums, which keeps composite FKs correctly paired (constraint_column_usage would not).
 const FOREIGN_KEYS_QUERY = `
-  SELECT tc.constraint_name, tc.table_schema AS src_schema, tc.table_name AS src_table, kcu.column_name AS src_col,
-         kcu.referenced_table_schema AS tgt_schema, kcu.referenced_table_name AS tgt_table, kcu.referenced_column_name AS tgt_col,
-         rc.update_rule, rc.delete_rule
-  FROM information_schema.table_constraints tc
-  JOIN information_schema.key_column_usage kcu
-    ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema AND tc.table_name = kcu.table_name
-  JOIN information_schema.referential_constraints rc
-    ON tc.constraint_name = rc.constraint_name AND tc.table_schema = rc.constraint_schema
-  WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
-  ORDER BY tc.table_schema, tc.table_name, tc.constraint_name, kcu.ordinal_position;
+  SELECT c.conname AS constraint_name,
+         sn.nspname AS src_schema, st.relname AS src_table, sa.attname AS src_col,
+         tn.nspname AS tgt_schema, tt.relname AS tgt_table, ta.attname AS tgt_col,
+         CASE c.confupdtype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                            WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS update_rule,
+         CASE c.confdeltype WHEN 'a' THEN 'NO ACTION' WHEN 'r' THEN 'RESTRICT' WHEN 'c' THEN 'CASCADE'
+                            WHEN 'n' THEN 'SET NULL' WHEN 'd' THEN 'SET DEFAULT' END AS delete_rule
+  FROM pg_constraint c
+  JOIN pg_class st ON st.oid = c.conrelid
+  JOIN pg_namespace sn ON sn.oid = st.relnamespace
+  JOIN pg_class tt ON tt.oid = c.confrelid
+  JOIN pg_namespace tn ON tn.oid = tt.relnamespace
+  CROSS JOIN LATERAL unnest(c.conkey, c.confkey) WITH ORDINALITY AS k(src_attnum, tgt_attnum, ord)
+  JOIN pg_attribute sa ON sa.attrelid = c.conrelid AND sa.attnum = k.src_attnum
+  JOIN pg_attribute ta ON ta.attrelid = c.confrelid AND ta.attnum = k.tgt_attnum
+  WHERE c.contype = 'f' AND sn.nspname NOT IN ('pg_catalog', 'information_schema')
+  ORDER BY sn.nspname, st.relname, c.conname, k.ord;
 `;
 
 const INDEXES_QUERY = `

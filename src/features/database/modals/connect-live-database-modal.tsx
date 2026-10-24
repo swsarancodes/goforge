@@ -14,12 +14,12 @@ import {
     CreateConnectionInput,
     SavedConnection,
     createSavedConnection,
-    deleteSavedConnection,
     introspectSavedConnection,
     listSavedConnections,
     testSavedConnection,
 } from "@/lib/live-connection-api";
 import { TableInsertType } from "@/lib/schemas/table-schema";
+import { forgetConnection } from "../forget-connection";
 
 type View = "list" | "new";
 
@@ -98,8 +98,12 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
         }
     }, []);
 
-    const onDelete = useCallback(async (id: string) => {
-        await deleteSavedConnection(id);
+    const onDelete = useCallback(async (connection: SavedConnection) => {
+        try {
+            await forgetConnection(connection);
+        } catch (caught) {
+            setConnectError(caught instanceof Error ? caught.message : String(caught));
+        }
         await refreshConnections();
     }, [refreshConnections]);
 
@@ -138,20 +142,20 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
             onOpenChange={onOpenChange}
             title={view === "list" ? t("modals.connect_live_database.title") : t("modals.connect_live_database.new_title")}
             description={t("modals.connect_live_database.description")}
-            className="lg:min-w-[560px] w-full max-h-screen overflow-auto"
+            className="lg:min-w-[560px] w-full max-h-screen overflow-y-auto overflow-x-hidden grid-cols-[minmax(0,1fr)]"
             actionName={view === "new" ? t("modals.save") : undefined}
             actionHandler={view === "new" ? onSaveConnection : undefined}
         >
             {view === "list" && (
                 <div className="flex flex-col gap-3">
                     {connectError && (
-                        <p className="text-destructive text-sm flex items-center gap-1">
-                            <AlertCircleIcon className="size-4" /> {connectError}
+                        <p className="text-destructive text-sm flex items-start gap-1 break-words">
+                            <AlertCircleIcon className="size-4 shrink-0 mt-0.5" /> <span className="min-w-0">{connectError}</span>
                         </p>
                     )}
                     {listError && (
-                        <p className="text-destructive text-sm flex items-center gap-1">
-                            <AlertCircleIcon className="size-4" /> {listError}
+                        <p className="text-destructive text-sm flex items-start gap-1 break-words">
+                            <AlertCircleIcon className="size-4 shrink-0 mt-0.5" /> <span className="min-w-0">{listError}</span>
                         </p>
                     )}
 
@@ -161,12 +165,15 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
                         <p className="text-sm text-muted-foreground">{t("modals.connect_live_database.no_connections")}</p>
                     )}
 
-                    <div className="flex flex-col gap-2 max-h-[320px] overflow-auto">
+                    <div className="flex flex-col gap-2 max-h-[320px] overflow-y-auto overflow-x-hidden min-w-0">
                         {connections.map((conn) => (
-                            <div key={conn.id} className="flex items-center justify-between gap-2 rounded-md border p-3">
-                                <div className="min-w-0">
-                                    <p className="font-medium truncate">{conn.name}</p>
-                                    <p className="text-xs text-muted-foreground truncate">
+                            <div key={conn.id} className="flex items-center justify-between gap-2 rounded-md border p-3 min-w-0">
+                                <div className="min-w-0 flex-1">
+                                    <p className="font-medium truncate">{conn.name}{conn.kind === "cloud" && <span className="ml-2 rounded border px-1 py-0.5 text-[10px] font-normal text-muted-foreground">cloud</span>}</p>
+                                    <p
+                                        className="text-xs text-muted-foreground truncate"
+                                        title={`${conn.username}@${conn.host}:${conn.port}/${conn.database}`}
+                                    >
                                         {conn.username}@{conn.host}:{conn.port}/{conn.database}
                                     </p>
                                 </div>
@@ -179,7 +186,7 @@ const ConnectLiveDatabaseModal: React.FC<ModalProps> = (props) => {
                                     <Button size="sm" onClick={() => onConnect(conn.id)} disabled={connectingId === conn.id}>
                                         {connectingId === conn.id ? <Loader2 className="size-4 animate-spin" /> : <Plug className="size-4" />}
                                     </Button>
-                                    <Button variant="ghost" size="sm" onClick={() => onDelete(conn.id)}>
+                                    <Button variant="ghost" size="sm" onClick={() => void onDelete(conn)}>
                                         <Trash2 className="size-4 text-destructive" />
                                     </Button>
                                 </div>

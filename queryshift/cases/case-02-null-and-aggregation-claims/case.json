@@ -1,0 +1,88 @@
+{
+  "id": "case-02",
+  "title": "Claims summary per customer (NULL, type and aggregation semantics)",
+  "businessPurpose": "Claims management wants one line per insured customer with a contact label, how many claims, the amount claimed, the average amount paid (unpaid counts as 0) and the share still open.",
+  "difficulty": "hard",
+  "risks": [
+    "null_type_or_aggregation_semantics",
+    "silent_executable_failure"
+  ],
+  "legacyDialect": "oracle",
+  "legacyQuery": "legacy_query.sql",
+  "expected": "expected_result.csv",
+  "orderSensitive": false,
+  "invariants": [
+    {
+      "name": "one row per customer that has a policy",
+      "kind": "row_count_equals",
+      "sql": "SELECT count(DISTINCT customer_id) FROM policies"
+    },
+    {
+      "name": "claim count is conserved",
+      "kind": "column_sum_equals",
+      "column": "clm_cnt",
+      "sql": "SELECT count(*) FROM claims"
+    },
+    {
+      "name": "claimed amount is conserved",
+      "kind": "column_sum_equals",
+      "column": "tot_claimed",
+      "sql": "SELECT COALESCE(sum(claim_amount), 0) FROM claims"
+    }
+  ],
+  "candidates": [
+    {
+      "file": "candidates/correct.sql",
+      "expect": "pass",
+      "why": "COALESCE in the label and the average, a numeric cast for the ratio.",
+      "flags": []
+    },
+    {
+      "file": "candidates/silent_concat_null.sql",
+      "expect": "fail",
+      "why": "|| with a NULL email returns NULL in PostgreSQL but an empty piece in Oracle. Executable, plausible, wrong for customer 2.",
+      "catchBy": "primary",
+      "flags": [
+        "null_in_concatenation"
+      ]
+    },
+    {
+      "file": "candidates/integer_division.sql",
+      "expect": "fail",
+      "why": "bigint / bigint truncates: the open ratio is 0 wherever it should be a fraction.",
+      "catchBy": "primary",
+      "flags": [
+        "integer_division"
+      ]
+    },
+    {
+      "file": "candidates/avg_without_nvl.sql",
+      "expect": "fail",
+      "why": "AVG ignores NULL paid amounts, so averages are higher than Oracle's AVG(NVL(x,0)).",
+      "catchBy": "primary",
+      "flags": [
+        "average_ignores_nulls"
+      ]
+    },
+    {
+      "file": "candidates/count_star_claims.sql",
+      "expect": "fail",
+      "why": "COUNT(*) counts the null-extended row for a customer without claims.",
+      "catchBy": "primary",
+      "flags": [
+        "count_star_over_outer_join"
+      ]
+    },
+    {
+      "file": "candidates/overfit_customer_2_label.sql",
+      "expect": "fail",
+      "catchBy": "heldout",
+      "why": "The NULL-email label is special-cased for customer 2. Right on the primary data, wrong for any other customer without an email.",
+      "flags": [
+        "fitted_to_a_literal",
+        "null_in_concatenation"
+      ]
+    }
+  ],
+  "heldOutExpected": "expected_heldout.csv"
+}

@@ -139,25 +139,21 @@ describe("GoForge MCP Server (Model Context Protocol)", () => {
         expect(xml).toContain("value=\"posts\"");
     });
 
-    it("executes goforge_modernize_query with query swarm", async () => {
-        const legacyQuery = "SELECT NVL(amount, 0) FROM dual";
-        const response = await server.handleMessage({
-            jsonrpc: "2.0",
-            id: 6,
-            method: "tools/call",
-            params: {
-                name: "goforge_modernize_query",
-                arguments: {
-                    query: legacyQuery,
-                    sourceDialect: "oracle",
-                    targetDialect: "postgres",
-                },
-            },
-        });
+    it("executes goforge_modernize_query and reports what it did and what it could not do", async () => {
+        const call = async (args: Record<string, unknown>) =>
+            server.handleMessage({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "goforge_modernize_query", arguments: args } });
 
-        const data = JSON.parse(response?.result.content[0].text);
-        expect(data.optimizedSql).toBeDefined();
-        expect(data.confidenceScore).toBeGreaterThan(0);
+        const converted = JSON.parse((await call({ query: "SELECT NVL(amount, 0) FROM dual", sourceDialect: "oracle" }))?.result.content[0].text);
+        expect(converted.convertedSql).toBe("SELECT COALESCE(amount, 0)");
+        expect(converted.rulesApplied.map((rule: { id: string }) => rule.id)).toEqual(["nvl", "dual"]);
+        expect(converted.notConverted).toEqual([]);
+        expect(converted).not.toHaveProperty("confidenceScore");
+
+        const partial = JSON.parse((await call({ query: "SELECT ROWNUM, name FROM emp" }))?.result.content[0].text);
+        expect(partial.notConverted.length).toBeGreaterThan(0);
+
+        const unsupported = await call({ query: "SELECT 1", sourceDialect: "postgres" });
+        expect(unsupported?.result.isError).toBe(true);
     });
 
     it("executes goforge_inspect_schema", async () => {

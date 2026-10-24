@@ -135,6 +135,16 @@ export const CreateDatabaseModal: React.FC<ModalProps> = (props) => {
                                 {t("modals.create_and_import")}
                             </span>
                         </Button>
+                        <Button
+                            variant="ghost"
+                            size="sm"
+                            className="w-full"
+                            onClick={() => open(Modals.CONNECT_DATABASE, { closable: props.closable })}
+                        >
+                            <span className="underline">
+                                {t("modals.connect_database.instead", { defaultValue: "Connect to a database instead" })}
+                            </span>
+                        </Button>
                     </div>
 
                 </div>
