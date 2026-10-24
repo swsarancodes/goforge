@@ -146,7 +146,7 @@ export function splitQualified(text: string): { schema?: string; name: string } 
     return dot === -1 ? { name: text } : { schema: text.slice(0, dot), name: text.slice(dot + 1) };
 }
 
-const wanted = (qualified: string[]): string => {
+export const wanted = (qualified: string[]): string => {
     const rows = qualified.map((entry) => {
         const { schema, name } = splitQualified(entry);
         return `(${quoteLiteral(schema ?? "public")}, ${quoteLiteral(name)})`;

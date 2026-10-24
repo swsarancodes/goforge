@@ -7,6 +7,7 @@ import { AiNotConfiguredError, ModelPolicyError, callModelJson, getAuditStore, g
 import { loadCatalog, type Catalog } from "../schema-change/catalog.js";
 import { loadFacts, probe } from "../schema-change/facts.js";
 import { healthReport } from "../schema-change/health.js";
+import { preflight } from "../schema-change/preflight.js";
 import { summarizeHealth } from "../schema-change/health-summary.js";
 import { PlannerError, planSchemaChange } from "../schema-change/planner.js";
 import { buildSearchIndex, selectScope, type SearchIndex } from "../schema-change/retrieval.js";
@@ -140,6 +141,19 @@ schemaChangeRouter.get("/:id/schema-change/health", async (req, res) => {
     if (!row) return res.status(404).json({ error: "Connection not found" });
     try {
         res.json(await withReadClient(row, (client) => healthReport(client)));
+    } catch (error) {
+        fail(res, error);
+    }
+});
+
+/** What to check on the live database before running a runbook: other sessions on the tables, long transactions, replicas, slots, timeouts. Read-only. */
+schemaChangeRouter.get("/:id/schema-change/preflight", async (req, res) => {
+    const row = await findConnection(req);
+    if (!row) return res.status(404).json({ error: "Connection not found" });
+    const tables = (typeof req.query.tables === "string" ? req.query.tables.split(",") : []).map((name) => name.trim()).filter(Boolean).slice(0, 100);
+    if (tables.some((name) => name.length > 300)) return res.status(400).json({ error: "A table name is too long." });
+    try {
+        res.json(await withReadClient(row, (client) => preflight(client, tables)));
     } catch (error) {
         fail(res, error);
     }
