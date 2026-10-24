@@ -115,7 +115,7 @@ export interface Runbook {
     script: string;
     uncompiled: number[];
     server: { version: string; collectedAt: string };
-    settings: { lockTimeoutSeconds: number; backfillBatchRows: number; backfillPauseMs: number; defaultSchema: string };
+    settings: { lockTimeoutSeconds: number; lockAttempts: number; backfillBatchRows: number; backfillPauseMs: number; defaultSchema: string };
 }
 
 export interface LintViolation {

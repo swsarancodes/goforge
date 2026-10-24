@@ -30,6 +30,7 @@ import {
     type Work,
 } from "./runbook.js";
 import { checkDefaultExpression, formatBytes, formatCount, functionsIn, ident, isIntegerType, limitName, literal, qualifiedIdent, renderType } from "./sql-render.js";
+import { canRetry, withLockRetry } from "./lock-retry.js";
 import { classifyTypeChange, parseType, sameType } from "./type-change.js";
 
 type Operation = AiSchemaPlan["operations"][number];
@@ -231,6 +232,18 @@ class Compiler {
         return mode === "short" ? `SET lock_timeout = ${lock};` : `SET lock_timeout = ${lock};\nSET statement_timeout = 0;`;
     }
 
+    /** A step that takes a strong lock on an existing table retries when the lock is not free, instead of failing on the first wait. */
+    private withRetry(spec: StepSpec): string {
+        const strong: LockMode[] = ["ACCESS EXCLUSIVE", "SHARE ROW EXCLUSIVE", "SHARE"];
+        if (spec.mode === "concurrent" || spec.optional || spec.work === "backfill" || !spec.table || spec.table.isNew) return spec.sql;
+        if (!strong.includes(spec.lock) || this.settings.lockAttempts < 2 || !canRetry(spec.sql)) return spec.sql;
+        const tables = [spec.table.qualified, ...(spec.also ?? [])].map((name) => {
+            const { schema, name: table } = splitQualified(name);
+            return schema ? qualifiedIdent(schema, table) : ident(table);
+        });
+        return withLockRetry(spec.sql, { lockTimeoutSeconds: this.settings.lockTimeoutSeconds, attempts: this.settings.lockAttempts, tables });
+    }
+
     private add(spec: StepSpec): void {
         const size = sizeClass(spec.table);
         let { risk, reason } = riskOf({ lock: spec.lock, work: spec.work, size });
@@ -243,7 +256,7 @@ class Compiler {
             id: 0,
             operation: this.current,
             title: spec.title,
-            sql: `${this.prelude(spec.mode)}\n${spec.sql}`,
+            sql: `${this.prelude(spec.mode)}\n${this.withRetry(spec)}`,
             lock: spec.lock,
             alsoLocks: spec.also ?? [],
             work: spec.work,
@@ -913,7 +926,10 @@ class Compiler {
 
         this.add({
             title: `Swap: ${fresh} becomes ${column.name}`,
-            sql: `DO $swap$\nBEGIN\n  SET LOCAL lock_timeout = '${this.settings.lockTimeoutSeconds}s';\n  DROP TRIGGER ${ident(fn)} ON ${target};\n  ALTER TABLE ${target} RENAME COLUMN ${ref} TO ${ident(old)};\n  ALTER TABLE ${target} RENAME COLUMN ${freshRef} TO ${ref};${renames.map((line) => `\n  ${line}`).join("")}\nEND\n$swap$;`,
+            // one transaction either way: inside the lock-retry block when there is one, otherwise as a DO block of its own
+            sql: this.settings.lockAttempts >= 2
+                ? `DROP TRIGGER ${ident(fn)} ON ${target};\nALTER TABLE ${target} RENAME COLUMN ${ref} TO ${ident(old)};\nALTER TABLE ${target} RENAME COLUMN ${freshRef} TO ${ref};${renames.map((line) => `\n${line}`).join("")}`
+                : `DO $swap$\nBEGIN\n  SET LOCAL lock_timeout = '${this.settings.lockTimeoutSeconds}s';\n  DROP TRIGGER ${ident(fn)} ON ${target};\n  ALTER TABLE ${target} RENAME COLUMN ${ref} TO ${ident(old)};\n  ALTER TABLE ${target} RENAME COLUMN ${freshRef} TO ${ref};${renames.map((line) => `\n  ${line}`).join("")}\nEND\n$swap$;`,
             mode: "short",
             lock: "ACCESS EXCLUSIVE",
             work: "metadata",

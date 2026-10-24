@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { compile, facts, GIB, MIB, plan, table } from "./test-fixtures.js";
 import { lintSteps } from "./lint.js";
 import { discoverProbes } from "./compile.js";
+import { unwrapLockRetry } from "./lock-retry.js";
 import type { Runbook, RunbookStep } from "./runbook.js";
 
 const orders = (overrides: Partial<Parameters<typeof table>[0]> = {}) =>
@@ -135,7 +136,7 @@ describe("NOT NULL", () => {
     it("goes through a validated CHECK on a table of this size", () => {
         const runbook = compile(plan(op), facts(orders()));
         expect(errors(runbook)).toEqual([]);
-        expect(runbook.steps.map((s) => s.sql.split("\n").at(-1))).toEqual([
+        expect(runbook.steps.map((s) => unwrapLockRetry(s.sql).sql.split("\n").at(-1))).toEqual([
             "ALTER TABLE public.orders ADD CONSTRAINT orders_ref_not_null CHECK (ref IS NOT NULL) NOT VALID;",
             "ALTER TABLE public.orders VALIDATE CONSTRAINT orders_ref_not_null;",
             "ALTER TABLE public.orders ALTER COLUMN ref SET NOT NULL;",
@@ -204,8 +205,9 @@ describe("type changes", () => {
         expect(text).toContain("CREATE INDEX CONCURRENTLY orders_qty_idx__new ON public.orders (qty__new);");
         expect(text).toContain("ALTER INDEX public.orders_qty_idx__new RENAME TO orders_qty_idx;");
         const swap = runbook.steps.find((s) => s.title.startsWith("Swap"));
-        expect(swap?.sql).toContain("DO $swap$");
-        expect(swap?.sql).toContain("SET LOCAL lock_timeout = '5s';");
+        // atomic inside the lock-retry block: both renames in one transaction, retried as a whole
+        expect(swap?.sql).toContain("DO $retry$");
+        expect(swap?.sql).toContain("SET LOCAL lock_timeout = '2s';");
         expect(swap?.sql).toContain("RENAME COLUMN qty TO qty__old;");
         const contract = runbook.steps.at(-1);
         expect(contract).toMatchObject({ optional: true, destructive: true });

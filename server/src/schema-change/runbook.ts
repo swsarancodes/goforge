@@ -128,13 +128,16 @@ export interface Runbook {
 }
 
 export interface CompileSettings {
+    /** How long one attempt may wait for a lock. */
     lockTimeoutSeconds: number;
+    /** Attempts a step that takes a strong lock makes before it gives up (1 means it does not retry). */
+    lockAttempts: number;
     backfillBatchRows: number;
     backfillPauseMs: number;
     defaultSchema: string;
 }
 
-export const DEFAULT_COMPILE_SETTINGS: CompileSettings = { lockTimeoutSeconds: 5, backfillBatchRows: 10_000, backfillPauseMs: 50, defaultSchema: "public" };
+export const DEFAULT_COMPILE_SETTINGS: CompileSettings = { lockTimeoutSeconds: 2, lockAttempts: 8, backfillBatchRows: 10_000, backfillPauseMs: 50, defaultSchema: "public" };
 
 const statementLines = (sql: string): string[] => sql.replace(/\s+$/, "").split("\n");
 
@@ -157,8 +160,9 @@ export function renderScript(steps: RunbookStep[], server: { version: string; co
         `-- GoForge runbook: ${steps.length} step${steps.length === 1 ? "" : "s"} (${active} to run now) for PostgreSQL ${server.version}.`,
         `-- Built from the catalog as it was at ${server.collectedAt}. If the schema changed since then, build it again.`,
         "-- Run it in the SQL Editor with each statement run on its own (no transaction): CREATE INDEX CONCURRENTLY and the batched backfills need that.",
-        "-- Select one step to run only that step. A step that stops with 'canceling statement due to lock timeout' changed nothing: run it again.",
-        `-- Lock waits are limited to ${settings.lockTimeoutSeconds}s per step so a busy table can't pile up a queue behind a schema change.`,
+        "-- Select one step to run only that step.",
+        `-- A step that takes a strong lock waits at most ${settings.lockTimeoutSeconds}s per attempt, so a busy table can't pile up a queue behind it, and ${settings.lockAttempts > 1 ? `tries up to ${settings.lockAttempts} times, backing off between tries` : "does not try again"}.`,
+        "-- One that gives up changed nothing and says what is holding the table: run it again when that is gone.",
         "",
     ];
     const tail = ["", "-- ── Clean up the session settings used above", "RESET lock_timeout;", "RESET statement_timeout;", ""];

@@ -1,3 +1,4 @@
+import { unwrapLockRetry } from "./lock-retry.js";
 import { maskSql, splitSqlStatements } from "../services/sql-tokens.js";
 import type { RunbookStep } from "./runbook.js";
 
@@ -39,10 +40,12 @@ export function lintSteps(steps: RunbookStep[]): LintResult {
     for (const step of steps) {
         if (step.optional) continue;
         const big = BIG.has(step.sizeClass);
-        const lockTimeoutSet = /SET\s+lock_timeout\s*=\s*'[1-9]/i.test(step.sql);
+        // a step wrapped in the lock-retry block is checked on the statements inside it, and has its own per-attempt lock timeout
+        const { sql: stepSql, wrapped } = unwrapLockRetry(step.sql);
+        const lockTimeoutSet = wrapped || /SET\s+lock_timeout\s*=\s*'[1-9]/i.test(step.sql);
         const flag = (rule: string, message: string, statement: string) => violations.push({ rule, step: step.id, message, statement: firstLine(statement) });
 
-        for (const statement of splitSqlStatements(step.sql)) {
+        for (const statement of splitSqlStatements(stepSql)) {
             statements++;
             const code = maskSql(statement.text).replace(/\s+/g, " ").trim();
             const upper = code.toUpperCase();
