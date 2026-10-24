@@ -1,3 +1,4 @@
+import { unknownRows } from "./row-estimate.js";
 import { runReadOnly, type Queryable } from "../services/pg-read.js";
 import { USER_SCHEMAS } from "../services/pg-relations.js";
 
@@ -161,7 +162,7 @@ const TABLES_SQL = `
   SELECT n.nspname AS schema, c.relname AS name, c.relkind = 'p' AS partitioned,
          (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)::int AS columns,
          EXISTS (SELECT 1 FROM pg_index ix WHERE ix.indrelid = c.oid AND ix.indisprimary) AS has_pk,
-         CASE WHEN c.relkind = 'p' THEN NULL WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::int8::text END AS estimated_rows,
+         CASE WHEN c.relkind = 'p' THEN NULL WHEN ${unknownRows("c")} THEN NULL ELSE c.reltuples::int8::text END AS estimated_rows,
          CASE WHEN c.relkind = 'p' THEN (SELECT COALESCE(sum(pg_total_relation_size(p.relid)), 0) FROM pg_partition_tree(c.oid) p WHERE p.isleaf)::text ELSE pg_total_relation_size(c.oid)::text END AS total_bytes,
          s.n_live_tup::text AS live, s.n_dead_tup::text AS dead, s.n_mod_since_analyze::text AS mods,
          GREATEST(s.last_analyze, s.last_autoanalyze) AS last_analyze, (s.relid IS NOT NULL) AS has_stats_row

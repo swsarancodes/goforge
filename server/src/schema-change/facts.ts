@@ -1,3 +1,4 @@
+import { unknownRows } from "./row-estimate.js";
 import { runReadOnly, type Queryable } from "../services/pg-read.js";
 import { quoteLiteral } from "../services/pg-sql.js";
 
@@ -182,8 +183,8 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
         `${cte}
          SELECT t.oid::int8::text AS oid, t.schema, t.name, t.relkind = 'p' AS partitioned,
                 CASE WHEN t.relkind = 'p'
-                     THEN (SELECT CASE WHEN bool_or(l.reltuples < 0) THEN NULL ELSE sum(l.reltuples)::int8::text END FROM pg_partition_tree(t.oid) p JOIN pg_class l ON l.oid = p.relid WHERE p.isleaf)
-                     ELSE (SELECT CASE WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::int8::text END FROM pg_class c WHERE c.oid = t.oid) END AS estimated_rows,
+                     THEN (SELECT CASE WHEN bool_or(${unknownRows("l")}) THEN NULL ELSE sum(l.reltuples)::int8::text END FROM pg_partition_tree(t.oid) p JOIN pg_class l ON l.oid = p.relid WHERE p.isleaf)
+                     ELSE (SELECT CASE WHEN ${unknownRows("c")} THEN NULL ELSE c.reltuples::int8::text END FROM pg_class c WHERE c.oid = t.oid) END AS estimated_rows,
                 CASE WHEN t.relkind = 'p' THEN (SELECT COALESCE(sum(pg_relation_size(p.relid)), 0) FROM pg_partition_tree(t.oid) p WHERE p.isleaf)::text ELSE pg_relation_size(t.oid)::text END AS heap_bytes,
                 CASE WHEN t.relkind = 'p' THEN (SELECT COALESCE(sum(pg_indexes_size(p.relid)), 0) FROM pg_partition_tree(t.oid) p WHERE p.isleaf)::text ELSE pg_indexes_size(t.oid)::text END AS index_bytes,
                 CASE WHEN t.relkind = 'p' THEN (SELECT COALESCE(sum(pg_total_relation_size(p.relid)), 0) FROM pg_partition_tree(t.oid) p WHERE p.isleaf)::text ELSE pg_total_relation_size(t.oid)::text END AS total_bytes,
