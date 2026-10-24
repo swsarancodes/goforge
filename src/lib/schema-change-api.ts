@@ -265,3 +265,26 @@ export const fetchAuditEntry = (id: number, signal?: AbortSignal) => request<Aud
 export const auditExportUrl = (format: "json" | "csv") => `/api/ai/audit?limit=5000&format=${format}${format === "json" ? "&payload=1&download=1" : ""}`;
 export const recordHandoff = (body: { parentId: number | null; connectionId: string; connectionName: string; steps: number; tables: string[] }) =>
     request<{ id: number }>("/api/ai/audit/handoff", { method: "POST", body: JSON.stringify(body) });
+
+// ---- pre-flight -----------------------------------------------------------------------------------------------------------------
+
+export type PreflightStatus = "ok" | "warn" | "block" | "unknown";
+
+export interface PreflightCheck {
+    id: string;
+    title: string;
+    status: PreflightStatus;
+    detail: string;
+    items: string[];
+}
+
+export interface PreflightReport {
+    generatedAt: string;
+    serverVersion: string;
+    tables: string[];
+    checks: PreflightCheck[];
+}
+
+/** What to look at on the live database before a runbook starts: other sessions on the tables, long transactions, replicas, slots, timeouts. Read-only. */
+export const fetchPreflight = (connectionId: string, tables: string[], signal?: AbortSignal) =>
+    request<PreflightReport>(`/api/connections/${connectionId}/schema-change/preflight?tables=${encodeURIComponent(tables.join(","))}`, { signal });
