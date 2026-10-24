@@ -1,3 +1,4 @@
+import { unknownRows } from "./row-estimate.js";
 import { runReadOnly, type Queryable } from "../services/pg-read.js";
 import { USER_SCHEMAS } from "../services/pg-relations.js";
 
@@ -55,9 +56,9 @@ const TABLES_SQL = `
   SELECT n.nspname AS schema, c.relname AS name, c.relkind = 'p' AS partitioned,
          CASE WHEN c.relkind = 'p' THEN (SELECT count(*) FROM pg_partition_tree(c.oid) t WHERE t.level > 0) ELSE 0 END AS partition_count,
          CASE WHEN c.relkind = 'p'
-              THEN (SELECT CASE WHEN bool_or(l.reltuples < 0) THEN NULL ELSE sum(l.reltuples)::int8::text END
+              THEN (SELECT CASE WHEN bool_or(${unknownRows("l")}) THEN NULL ELSE sum(l.reltuples)::int8::text END
                       FROM pg_partition_tree(c.oid) t JOIN pg_class l ON l.oid = t.relid WHERE t.isleaf)
-              WHEN c.reltuples < 0 THEN NULL ELSE c.reltuples::int8::text END AS estimated_rows,
+              WHEN ${unknownRows("c")} THEN NULL ELSE c.reltuples::int8::text END AS estimated_rows,
          CASE WHEN c.relkind = 'p'
               THEN (SELECT COALESCE(sum(pg_total_relation_size(t.relid)), 0) FROM pg_partition_tree(c.oid) t WHERE t.isleaf)::text
               ELSE pg_total_relation_size(c.oid)::text END AS total_bytes,
