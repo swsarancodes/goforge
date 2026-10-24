@@ -157,7 +157,7 @@ const fakeClient = (rows: Record<string, unknown>[][], seen: string[] = []): Que
 describe("facts", () => {
     it("never asks for column values: no most_common_vals, histogram or row data", async () => {
         const seen: string[] = [];
-        await loadFacts(fakeClient([[{ num: "160000", text: "16.0", stats_reset: null }], [], [], [], [], [], []], seen), ["public.orders"]);
+        await loadFacts(fakeClient([[{ num: "160000", text: "16.0", stats_reset: null }], [], [], [], [], [], [], []], seen), ["public.orders"]);
         const sql = seen.join("\n");
         expect(sql).not.toMatch(/most_common|histogram|most_common_freqs|correlation/i);
         expect(sql).toMatch(/null_frac/);
@@ -174,6 +174,11 @@ describe("facts", () => {
                 [{ schema: "public", table: "orders", name: "orders_fk", kind: "f", definition: "", validated: false, columns: ["customer_id"], ref_schema: "public", ref_table: "customers", ref_columns: ["id"], on_delete: "c", on_update: "a" }],
                 [{ ref_schema: "public", ref_table: "orders", schema: "public", table: "items", name: "items_fk", columns: ["order_id"], ref_columns: ["id"] }],
                 [{ schema: "public", table: "orders", name: "orders_pkey", definition: "CREATE UNIQUE INDEX ...", method: "btree", columns: ["id"], unique: true, primary: true, valid: true, partial: false, constraint: "orders_pkey", bytes: "16384", scans: "9" }],
+                [
+                    { schema: "public", table: "orders", column: "id", kind: "view", description: "view public.open_orders", blocks: true, external: true },
+                    { schema: "public", table: "orders", column: "id", kind: "sequence", description: "sequence orders_id_seq", blocks: false, external: false },
+                    { schema: "public", table: "orders", column: "status", kind: "view", description: "view public.open_orders", blocks: true, external: true },
+                ],
                 [{ schema: "public", table: "orders", view: "public.open_orders" }],
             ]),
             ["public.orders"],
@@ -187,11 +192,17 @@ describe("facts", () => {
         expect(orders?.referencedBy[0]).toMatchObject({ table: "items", columns: ["order_id"] });
         expect(orders?.indexes[0]).toMatchObject({ constraint: "orders_pkey", scans: 9, bytes: 16384 });
         expect(orders?.columns[0]).toMatchObject({ generated: "always-identity", nullFraction: 0, distinct: -1 });
+        expect(orders?.columns[0].dependents).toEqual([
+            { kind: "view", description: "view public.open_orders", blocks: true, external: true },
+            { kind: "sequence", description: "sequence orders_id_seq", blocks: false, external: false },
+        ]);
+        // the view uses two columns but blocks a table drop once
+        expect(orders?.dependents).toEqual([{ kind: "view", description: "view public.open_orders", blocks: true, external: true }]);
     });
 
     it("quotes the names it was asked about", async () => {
         const seen: string[] = [];
-        await loadFacts(fakeClient([[{ num: "1", text: "x", stats_reset: null }], [], [], [], [], [], []], seen), ["public.o'rders", "we ird.t"]);
+        await loadFacts(fakeClient([[{ num: "1", text: "x", stats_reset: null }], [], [], [], [], [], [], []], seen), ["public.o'rders", "we ird.t"]);
         expect(seen[0]).toContain("('public', 'o''rders')");
         expect(seen[0]).toContain("('we ird', 't')");
     });

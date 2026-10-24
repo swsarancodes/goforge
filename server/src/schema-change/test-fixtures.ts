@@ -1,6 +1,6 @@
 import { aiSchemaPlanSchema, type AiSchemaPlan } from "../ai/schema-plan.js";
 import { compilePlan, discoverProbes } from "./compile.js";
-import { castKey, defaultKey, emptyProbes, relationKey, type ColumnFacts, type Facts, type IndexFacts, type ProbeRequest, type Probes, type TableFacts } from "./facts.js";
+import { castKey, defaultKey, emptyProbes, relationKey, type ColumnFacts, type Dependent, type Facts, type IndexFacts, type ProbeRequest, type Probes, type TableFacts } from "./facts.js";
 import type { CompileSettings, Runbook } from "./runbook.js";
 
 /** Hand-made facts for tests: a table is as big as the test says, with the columns and indexes it lists. */
@@ -23,11 +23,13 @@ export interface TableSpec {
     checks?: { name: string; definition: string; columns: string[] }[];
     partitions?: string[];
     views?: string[];
+    /** Objects that depend on a column (`column` is its name) or, with no column, on the table. */
+    dependents?: { column?: string; kind: Dependent["kind"]; description: string; blocks?: boolean; external?: boolean }[];
 }
 
 export function column(spec: string): ColumnFacts {
     const [name, type, flag] = spec.split(":");
-    return { name, type: type ?? "integer", typeSchema: "pg_catalog", notNull: flag === "notnull", default: null, generated: null, nullFraction: null, distinct: null };
+    return { name, type: type ?? "integer", typeSchema: "pg_catalog", notNull: flag === "notnull", default: null, generated: null, dependents: [], nullFraction: null, distinct: null };
 }
 
 export function table(spec: TableSpec): TableFacts {
@@ -40,7 +42,7 @@ export function table(spec: TableSpec): TableFacts {
         const columns = index.columns ?? [];
         indexes.push({ name: "idx", definition: "", columns, uses: columns.filter((name): name is string => name !== null), method: "btree", unique: false, primary: false, valid: true, partial: false, constraint: null, bytes: Math.round(bytes / 10), scans: 0, ...index });
     }
-    return {
+    const built: TableFacts = {
         schema,
         name: spec.name,
         qualified: `${schema}.${spec.name}`,
@@ -63,9 +65,16 @@ export function table(spec: TableSpec): TableFacts {
         referencedBy: [],
         indexes,
         dependentViews: spec.views ?? [],
+        dependents: [],
         userTriggers: 0,
         stats: null,
     };
+    for (const dependent of spec.dependents ?? []) {
+        const entry: Dependent = { kind: dependent.kind, description: dependent.description, blocks: dependent.blocks ?? true, external: dependent.external ?? false };
+        if (dependent.column) built.columns.find((c) => c.name === dependent.column)?.dependents.push(entry);
+        if (entry.external) built.dependents.push(entry);
+    }
+    return built;
 }
 
 export function facts(...tables: TableFacts[]): Facts {

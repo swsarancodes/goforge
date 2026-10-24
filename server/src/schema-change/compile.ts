@@ -8,6 +8,7 @@ import {
     relationKey,
     splitQualified,
     type ColumnFacts,
+    type Dependent,
     type Facts,
     type ProbeRequest,
     type Probes,
@@ -164,6 +165,11 @@ class Compiler {
     }
 
     /** A table counts as having rows when the planner thinks so or when it holds any data pages: an estimate made while the table was empty says 0 long after it was filled. */
+    /** `trigger t_note on table t, view public.v`: what PostgreSQL would list, for a message. */
+    private describeDependents(dependents: Dependent[]): string {
+        return dependents.map((dependent) => dependent.description).join(", ");
+    }
+
     private hasRows(table: TableFacts): boolean {
         return !table.isNew && (table.heapBytes > 0 || (table.estimatedRows ?? 0) > 0);
     }
@@ -282,7 +288,7 @@ class Compiler {
         return {
             schema, name, qualified: qualifiedName(schema, name), partitioned: false, partitionCount: 0, partitions: [], nestedPartitions: false,
             estimatedRows: 0, heapBytes: 0, indexBytes: 0, totalBytes: 0, columns: [], primaryKey: [], uniques: [], checks: [], foreignKeys: [], referencedBy: [],
-            indexes: [], dependentViews: [], userTriggers: 0, stats: null, isNew: true,
+            indexes: [], dependentViews: [], dependents: [], userTriggers: 0, stats: null, isNew: true,
         };
     }
 
@@ -321,7 +327,7 @@ class Compiler {
             }
             if (field.primaryKey) primary.push(field.name);
             lines.push(line);
-            table.columns.push({ name: field.name, type, typeSchema: "pg_catalog", notNull, default: defaultText, generated, nullFraction: null, distinct: null });
+            table.columns.push({ name: field.name, type, typeSchema: "pg_catalog", notNull, default: defaultText, generated, dependents: [], nullFraction: null, distinct: null });
         }
         if (primary.length > 0) {
             const pk = limitName(`${name}_pkey`, taken);
@@ -402,6 +408,8 @@ class Compiler {
             this.fail("referenced", `${table.qualified} is referenced by ${blockers.map((fk) => `${fk.schema}.${fk.table} (${fk.name})`).join(", ")}. Drop those foreign keys first; the compiler never uses CASCADE.`, table.qualified);
         }
         if (table.dependentViews.length > 0) this.fail("dependent-views", `Views depend on ${table.qualified}: ${table.dependentViews.join(", ")}. Drop or change them first.`, table.qualified);
+        const elsewhere = table.dependents.filter((dependent) => dependent.blocks && dependent.kind !== "view");
+        if (elsewhere.length > 0) this.fail("dependents", `${table.qualified} is used by ${this.describeDependents(elsewhere)}. PostgreSQL refuses to drop it while they exist, and the compiler never uses CASCADE. Drop or change them first.`, table.qualified);
 
         const holdsData = this.hasRows(table) || table.heapBytes > 0;
         this.add({
@@ -459,7 +467,7 @@ class Compiler {
         const target = qualifiedIdent(table.schema, table.name);
         const undo = `ALTER TABLE ${target} DROP COLUMN ${column};`;
         const volatile = def?.volatile === true;
-        const newColumn: ColumnFacts = { name: spec.name, type, typeSchema: "pg_catalog", notNull: !nullable, default: def?.expression ?? null, generated: identity ? "default-identity" : null, nullFraction: rows ? null : 0, distinct: null };
+        const newColumn: ColumnFacts = { name: spec.name, type, typeSchema: "pg_catalog", notNull: !nullable, default: def?.expression ?? null, generated: identity ? "default-identity" : null, dependents: [], nullFraction: rows ? null : 0, distinct: null };
 
         if (identity && rows) {
             this.add({
@@ -796,6 +804,10 @@ class Compiler {
         const target = qualifiedIdent(table.schema, table.name);
         const ref = ident(column.name);
         const label = `${table.qualified}.${column.name}`;
+        const blockers = column.dependents.filter((dependent) => dependent.blocks);
+        if (blockers.length > 0) {
+            this.fail("dependents", `${label} is used by ${this.describeDependents(blockers)}. PostgreSQL refuses to change the type of a column they use, and the expand/contract swap would leave them on the old column. Drop or re-create them around the change by hand.`, table.qualified);
+        }
         const castMethod = this.discovery ? undefined : this.probes.casts.get(castKey(column.type, to));
         if (this.discovery) this.needed.typeChanges.push({ from: column.type, to });
         const verdict = classifyTypeChange(column.type, to, castMethod);
@@ -929,7 +941,9 @@ class Compiler {
         if (table.primaryKey.includes(column.name)) this.fail("primary-key-column", `${label} is part of the primary key.`, table.qualified);
         const inbound = table.referencedBy.filter((fk) => fk.refColumns.includes(column.name));
         if (inbound.length > 0) this.fail("referenced", `${label} is referenced by ${inbound.map((fk) => `${fk.schema}.${fk.table} (${fk.name})`).join(", ")}. Drop those foreign keys first.`, table.qualified);
-        if (table.dependentViews.length > 0) this.note("warning", "dependent-views", `Views depend on ${table.qualified} (${table.dependentViews.join(", ")}); PostgreSQL refuses to drop a column one of them uses.`, table.qualified);
+        const blockers = column.dependents.filter((dependent) => dependent.blocks);
+        if (blockers.length > 0) this.fail("dependents", `${label} is used by ${this.describeDependents(blockers)}. PostgreSQL refuses to drop the column while they exist, and the compiler never uses CASCADE. Drop or change them first.`, table.qualified);
+        const removedWith = column.dependents.filter((dependent) => !dependent.blocks);
 
         const indexes = table.indexes.filter((index) => index.uses.includes(column.name));
         const foreign = table.foreignKeys.filter((fk) => fk.columns.includes(column.name));
@@ -951,6 +965,7 @@ class Compiler {
                 ...(indexes.length ? [`Indexes dropped with it: ${indexes.map((index) => `${index.name}${(index.scans ?? 0) > 0 ? ` (used ${formatCount(index.scans ?? 0)} times)` : ""}`).join(", ")}.`] : []),
                 ...(foreign.length ? [`Foreign keys dropped with it: ${foreign.map((fk) => fk.name).join(", ")}.`] : []),
                 ...(checks.length ? [`${checks.length === 1 ? "CHECK constraint" : "CHECK constraints"} dropped with it: ${checks.map((check) => check.name).join(", ")}.`] : []),
+                ...(removedWith.length ? [`Also removed with it: ${this.describeDependents(removedWith)}.`] : []),
             ],
         });
         if (used.length > 0) this.note("warning", "used-index", `Dropping ${label} also drops index ${used.map((index) => index.name).join(", ")}, which has been used since the statistics were reset.`, table.qualified);

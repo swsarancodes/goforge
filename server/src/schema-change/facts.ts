@@ -8,6 +8,17 @@ import { quoteLiteral } from "../services/pg-sql.js";
  * distinct-value estimate, and the "most common values" and histogram columns of pg_stats are never selected.
  */
 
+/** Something in the database that depends on a column or a table, from pg_depend. */
+export interface Dependent {
+    kind: "view" | "trigger" | "policy" | "function" | "statistics" | "publication" | "generated-column" | "sequence";
+    /** What PostgreSQL would call it in an error message: `view public.v`, `trigger t_note on table t`, `generated column total`. */
+    description: string;
+    /** True when PostgreSQL refuses to drop the column or change its type without CASCADE (a normal dependency); false when it is removed with the column. */
+    blocks: boolean;
+    /** The object belongs to another table (a view, a policy or trigger on a table that is not this one), so dropping this table would be blocked by it too. */
+    external: boolean;
+}
+
 export interface ColumnFacts {
     name: string;
     /** format_type(): `character varying(255)`, `integer`, `public.mood`. */
@@ -18,6 +29,8 @@ export interface ColumnFacts {
     /** The default expression as PostgreSQL stores it; null when there is none. Never sent to a model. */
     default: string | null;
     generated: "stored" | "always-identity" | "default-identity" | null;
+    /** Objects that depend on this column: views, triggers, policies, generated columns, publications, statistics, owned sequences. */
+    dependents: Dependent[];
     /** From pg_stats: an estimate, null until the table is analyzed. */
     nullFraction: number | null;
     distinct: number | null;
@@ -104,6 +117,8 @@ export interface TableFacts {
     referencedBy: InboundForeignKey[];
     indexes: IndexFacts[];
     dependentViews: string[];
+    /** Objects on other tables, and functions, that depend on this table or any of its columns: what would block `DROP TABLE`. */
+    dependents: Dependent[];
     userTriggers: number;
     stats: TableStats | null;
     /** True for a table the plan itself creates: empty, with no history. */
@@ -229,6 +244,28 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
          ORDER BY t.schema, t.name, i.relname`,
 
         `${cte}
+         SELECT t.schema, t.name AS table, a.attname AS "column",
+                CASE d.classid WHEN 'pg_rewrite'::regclass THEN 'view' WHEN 'pg_trigger'::regclass THEN 'trigger' WHEN 'pg_policy'::regclass THEN 'policy'
+                               WHEN 'pg_proc'::regclass THEN 'function' WHEN 'pg_statistic_ext'::regclass THEN 'statistics' WHEN 'pg_publication_rel'::regclass THEN 'publication'
+                               WHEN 'pg_attrdef'::regclass THEN 'generated-column' WHEN 'pg_class'::regclass THEN 'sequence' END AS kind,
+                CASE d.classid WHEN 'pg_rewrite'::regclass THEN 'view ' || (SELECT r.ev_class::regclass::text FROM pg_rewrite r WHERE r.oid = d.objid)
+                               WHEN 'pg_attrdef'::regclass THEN 'generated column ' || (SELECT x.attname FROM pg_attrdef ad JOIN pg_attribute x ON x.attrelid = ad.adrelid AND x.attnum = ad.adnum WHERE ad.oid = d.objid)
+                               ELSE pg_describe_object(d.classid, d.objid, d.objsubid) END AS description,
+                d.deptype = 'n' AS blocks,
+                COALESCE(CASE d.classid WHEN 'pg_rewrite'::regclass THEN (SELECT r.ev_class FROM pg_rewrite r WHERE r.oid = d.objid)
+                                        WHEN 'pg_trigger'::regclass THEN (SELECT g.tgrelid FROM pg_trigger g WHERE g.oid = d.objid)
+                                        WHEN 'pg_policy'::regclass THEN (SELECT p.polrelid FROM pg_policy p WHERE p.oid = d.objid)
+                                        WHEN 'pg_attrdef'::regclass THEN (SELECT ad.adrelid FROM pg_attrdef ad WHERE ad.oid = d.objid) END, 0) <> t.oid
+                  AND d.classid IN ('pg_rewrite'::regclass, 'pg_trigger'::regclass, 'pg_policy'::regclass, 'pg_proc'::regclass) AS external
+         FROM t JOIN pg_depend d ON d.refclassid = 'pg_class'::regclass AND d.refobjid = t.oid AND d.deptype IN ('n', 'a', 'i')
+         LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = d.refobjsubid AND d.refobjsubid > 0
+         WHERE d.classid IN ('pg_rewrite'::regclass, 'pg_trigger'::regclass, 'pg_policy'::regclass, 'pg_proc'::regclass, 'pg_statistic_ext'::regclass, 'pg_publication_rel'::regclass, 'pg_attrdef'::regclass, 'pg_class'::regclass)
+           AND (d.classid <> 'pg_class'::regclass OR (SELECT c.relkind FROM pg_class c WHERE c.oid = d.objid) = 'S')
+           AND (d.classid <> 'pg_rewrite'::regclass OR (SELECT r.ev_class FROM pg_rewrite r WHERE r.oid = d.objid) <> t.oid)
+           AND (d.classid <> 'pg_attrdef'::regclass OR (SELECT ad.adnum FROM pg_attrdef ad WHERE ad.oid = d.objid) <> d.refobjsubid OR (SELECT ad.adrelid FROM pg_attrdef ad WHERE ad.oid = d.objid) <> t.oid)
+         ORDER BY t.schema, t.name, 3, 4, 5`,
+
+        `${cte}
          SELECT DISTINCT t.schema, t.name AS table, vn.nspname || '.' || v.relname AS view
          FROM t JOIN pg_depend d ON d.refobjid = t.oid AND d.classid = 'pg_rewrite'::regclass
          JOIN pg_rewrite r ON r.oid = d.objid JOIN pg_class v ON v.oid = r.ev_class AND v.oid <> t.oid AND v.relkind IN ('v', 'm')
@@ -236,7 +273,7 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
          ORDER BY 1, 2, 3`,
     ]);
 
-    const [version, tableRows, columnRows, constraintRows, inboundRows, indexRows, viewRows] = results.map((result) => result.rows as Row[]);
+    const [version, tableRows, columnRows, constraintRows, inboundRows, indexRows, dependentRows, viewRows] = results.map((result) => result.rows as Row[]);
     const versionRow = version[0];
     const tables = new Map<string, TableFacts>();
 
@@ -263,6 +300,7 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
             referencedBy: [],
             indexes: [],
             dependentViews: [],
+            dependents: [],
             userTriggers: Number(row.user_triggers),
             stats: hasStats
                 ? {
@@ -288,6 +326,7 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
             notNull: row.not_null as boolean,
             default: (row.default as string | null) ?? null,
             generated: (row.generated as ColumnFacts["generated"]) ?? null,
+            dependents: [],
             nullFraction: row.null_frac === null || row.null_frac === undefined ? null : Number(row.null_frac),
             distinct: row.n_distinct === null || row.n_distinct === undefined ? null : Number(row.n_distinct),
         });
@@ -351,6 +390,15 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
         };
         table.indexes.push(index);
         if (index.primary) table.primaryKey = index.columns.filter((column): column is string => column !== null);
+    }
+
+    for (const row of dependentRows) {
+        const table = at(row);
+        if (!table) continue;
+        const dependent: Dependent = { kind: row.kind as Dependent["kind"], description: row.description as string, blocks: row.blocks as boolean, external: row.external as boolean };
+        if (row.column) table.columns.find((column) => column.name === row.column)?.dependents.push(dependent);
+        // what would block DROP TABLE: objects that belong elsewhere, and functions; each once, however many columns they use
+        if (dependent.external && !table.dependents.some((known) => known.description === dependent.description)) table.dependents.push(dependent);
     }
 
     for (const row of viewRows) at(row)?.dependentViews.push(row.view as string);

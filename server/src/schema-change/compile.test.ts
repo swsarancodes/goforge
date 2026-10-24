@@ -429,6 +429,70 @@ describe("tables, renames and drops", () => {
         expect(sql(runbook)).not.toContain("events_big_idx__new");
     });
 
+    describe("objects that depend on a column", () => {
+        const sales = () =>
+            table({
+                name: "sales", rows: 5_000_000, bytes: 400 * MIB,
+                columns: ["id:bigint:notnull", "price:numeric", "qty:integer", "total:numeric", "note:text", "region:text"],
+                dependents: [
+                    { column: "price", kind: "view", description: "view public.priced", external: true },
+                    { column: "price", kind: "generated-column", description: "generated column total" },
+                    { column: "qty", kind: "generated-column", description: "generated column total" },
+                    { column: "note", kind: "trigger", description: "trigger sales_note on table sales" },
+                    { column: "region", kind: "policy", description: "policy eu_only on table sales" },
+                    { column: "qty", kind: "statistics", description: "statistics object sales_stats", blocks: false },
+                    { column: "id", kind: "sequence", description: "sequence sales_id_seq", blocks: false },
+                ],
+            });
+        const drop = (columnName: string) => compile(plan({ type: "drop_column", tableName: "sales", columnName }), facts(sales()));
+        const change = (columnName: string, dataType: string) => compile(plan({ type: "alter_column", tableName: "sales", columnName, changes: { dataType } }), facts(sales()));
+
+        it("refuses to drop a column that a view, generated column, trigger or policy uses, and names them", () => {
+            for (const [column, named] of [["price", "view public.priced, generated column total"], ["qty", "generated column total"], ["note", "trigger sales_note on table sales"], ["region", "policy eu_only on table sales"]] as const) {
+                const runbook = drop(column);
+                expect(errors(runbook), column).toEqual(["dependents"]);
+                expect(runbook.findings.find((finding) => finding.code === "dependents")?.message, column).toContain(named);
+                expect(runbook.steps, column).toHaveLength(0);
+            }
+        });
+
+        it("drops a column whose dependents go with it, and says what else is removed", () => {
+            const runbook = drop("id");
+            // id is the primary key here, so use a column that is not
+            expect(errors(runbook)).toEqual(["primary-key-column"]);
+            const plain = compile(plan({ type: "drop_column", tableName: "sales", columnName: "total" }), facts(sales()));
+            expect(errors(plain)).toEqual([]);
+            const withStats = table({ name: "s2", columns: ["id:bigint:notnull", "qty:integer"], dependents: [{ column: "qty", kind: "statistics", description: "statistics object s2_stats", blocks: false }] });
+            const dropped = compile(plan({ type: "drop_column", tableName: "s2", columnName: "qty" }), facts(withStats));
+            expect(errors(dropped)).toEqual([]);
+            expect(dropped.steps[0].notes.join(" ")).toContain("Also removed with it: statistics object s2_stats.");
+        });
+
+        it("refuses a type change on a column they use, instead of swapping the column from under them", () => {
+            for (const [column, to] of [["price", "numeric(12,2)"], ["qty", "bigint"], ["note", "varchar(50)"], ["region", "varchar(50)"]] as const) {
+                const runbook = change(column, to);
+                expect(errors(runbook), column).toEqual(["dependents"]);
+                expect(runbook.steps, column).toHaveLength(0);
+            }
+            // a column nothing uses is unaffected
+            expect(errors(compile(plan({ type: "alter_column", tableName: "sales", columnName: "total", changes: { dataType: "numeric(12,2)" } }), facts(sales())))).toEqual([]);
+        });
+
+        it("refuses to drop a table that a function or another table's policy needs, without CASCADE", () => {
+            const parent = table({
+                name: "parent", columns: ["id:bigint:notnull"],
+                dependents: [
+                    { kind: "function", description: "function count_parent()", external: true },
+                    { kind: "policy", description: "policy child_visible on table child", external: true },
+                    { kind: "publication", description: "publication of table parent in publication pub", blocks: false },
+                ],
+            });
+            const runbook = compile(plan({ type: "drop_table", tableName: "parent" }), facts(parent));
+            expect(errors(runbook)).toEqual(["dependents"]);
+            expect(runbook.findings.find((finding) => finding.code === "dependents")?.message).toContain("function count_parent(), policy child_visible on table child");
+        });
+    });
+
     it("applies a drop of the key and then of the table in the order given", () => {
         const child = table({ name: "order_items", rows: 5, columns: ["id:bigint:notnull", "order_id:bigint"], foreignKeys: [{ name: "oi_fk", columns: ["order_id"], ref: "orders", refColumns: ["id"] }] });
         const runbook = compile(
