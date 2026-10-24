@@ -11,18 +11,10 @@ import { cn } from "@/lib/utils";
 import { fetchAuditEntry, type AuditEntry, type PlanResponse, type Risk, type RunbookStep } from "@/lib/schema-change-api";
 import { formatBytes, formatCount } from "../format";
 import type { SchemaChange } from "../use-schema-change";
+import { RiskBadge } from "./risk-badge";
+import { RunPanel } from "./run-panel";
 
-const RISK_STYLE: Record<Risk, string> = {
-    low: "border-border text-muted-foreground",
-    medium: "border-foreground/40 text-foreground",
-    high: "border-destructive bg-destructive/10 text-destructive",
-};
-
-export const RiskBadge: React.FC<{ risk: Risk }> = ({ risk }) => (
-    <Badge variant="outline" className={cn("shrink-0 text-[10px] uppercase", RISK_STYLE[risk])}>
-        {risk}
-    </Badge>
-);
+export { RiskBadge };
 
 const PlanSkeleton: React.FC<{ stage: string }> = ({ stage }) => (
     <div role="status" aria-busy="true" className="space-y-3">
@@ -277,6 +269,8 @@ const PlanResult: React.FC<{ state: SchemaChange; response: PlanResponse }> = ({
                     <p className="text-[11px] text-muted-foreground">Nothing is run for you. The SQL Editor opens with each statement set to run on its own, and you run it there, one step at a time if you prefer.</p>
                 </div>
             )}
+
+            {runbook && runnable && state.connectionId && <RunPanel connectionId={state.connectionId} response={response} allowed={canOpen} />}
 
             <SentToModel auditIds={response.auditIds} redacted={response.redacted} />
         </div>

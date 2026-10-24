@@ -123,6 +123,33 @@ export function fromModelPlan(value: unknown): unknown {
     return { ...asRecord(stripNulls({ ...plan, operations: undefined })), operations };
 }
 
+/**
+ * A strict structured answer has to put something in every key, and a model that has no default to give often writes "" (an empty
+ * string is not a default: a text default is written '' with quotes). A blank default means none was given, so it is removed rather
+ * than refused as "the default is empty".
+ */
+const withoutBlankDefault = (value: unknown): Record<string, unknown> => {
+    const record = { ...asRecord(value) };
+    if (typeof record.defaultValue === "string" && record.defaultValue.trim() === "") delete record.defaultValue;
+    return record;
+};
+
+export function dropBlankDefaults(operation: unknown): unknown {
+    const record = asRecord(operation);
+    switch (record.type) {
+        case "add_column":
+            return { ...record, field: withoutBlankDefault(record.field) };
+        case "alter_column":
+            return { ...record, changes: withoutBlankDefault(record.changes) };
+        case "create_table": {
+            const table = asRecord(record.table);
+            return { ...record, table: { ...table, ...(Array.isArray(table.fields) ? { fields: table.fields.map(withoutBlankDefault) } : {}) } };
+        }
+        default:
+            return operation;
+    }
+}
+
 export function normalizePlanOutput(raw: unknown): unknown {
     const plan = asRecord(fromModelPlan(raw));
     return {
@@ -130,7 +157,7 @@ export function normalizePlanOutput(raw: unknown): unknown {
         assumptions: plan.assumptions ?? [],
         warnings: plan.warnings ?? [],
         clarifyingQuestions: plan.clarifyingQuestions ?? plan.clarifying_questions ?? plan.questions ?? [],
-        operations: Array.isArray(plan.operations) ? plan.operations.map(normalizeOperation) : [],
+        operations: Array.isArray(plan.operations) ? plan.operations.map(normalizeOperation).map(dropBlankDefaults) : [],
     };
 }
 
