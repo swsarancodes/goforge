@@ -7,6 +7,7 @@ import { AiNotConfiguredError, ModelPolicyError, callModelJson, getAuditStore, g
 import { loadCatalog, type Catalog } from "../schema-change/catalog.js";
 import { loadFacts, probe } from "../schema-change/facts.js";
 import { healthReport } from "../schema-change/health.js";
+import { diffExpected } from "../schema-change/expected-state.js";
 import { preflight } from "../schema-change/preflight.js";
 import { summarizeHealth } from "../schema-change/health-summary.js";
 import { PlannerError, planSchemaChange } from "../schema-change/planner.js";
@@ -154,6 +155,36 @@ schemaChangeRouter.get("/:id/schema-change/preflight", async (req, res) => {
     if (tables.some((name) => name.length > 300)) return res.status(400).json({ error: "A table name is too long." });
     try {
         res.json(await withReadClient(row, (client) => preflight(client, tables)));
+    } catch (error) {
+        fail(res, error);
+    }
+});
+
+const name = z.string().min(1).max(300);
+const expectedSchema = z.object({
+    tables: z.array(z.object({
+        qualified: name,
+        columns: z.array(z.object({ name, type: z.string().max(300), notNull: z.boolean() })).max(2_000),
+        primaryKey: z.array(name).max(100),
+        uniques: z.array(z.object({ name, columns: z.array(name).max(100) })).max(500),
+        checks: z.array(z.object({ name, validated: z.boolean() })).max(500),
+        foreignKeys: z.array(z.object({ name, columns: z.array(name).max(100), refTable: name, refColumns: z.array(name).max(100), validated: z.boolean() })).max(500),
+        indexes: z.array(z.object({ name, columns: z.array(name.nullable()).max(100), unique: z.boolean() })).max(1_000),
+    })).max(100),
+    absent: z.array(name).max(100),
+});
+
+/** After a runbook has run: read the catalog again and compare it with the state the compiler said it would leave. Read-only. */
+schemaChangeRouter.post("/:id/schema-change/verify", async (req, res) => {
+    const row = await findConnection(req);
+    if (!row) return res.status(404).json({ error: "Connection not found" });
+    const parsed = z.object({ expected: expectedSchema }).safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Invalid request", details: parsed.error.flatten() });
+    const { expected } = parsed.data;
+    try {
+        const names = [...expected.tables.map((table) => table.qualified), ...expected.absent];
+        const actual = await withReadClient(row, (client) => loadFacts(client, names));
+        res.json({ checkedAt: new Date().toISOString(), tables: expected.tables.length + expected.absent.length, mismatches: diffExpected(expected, actual) });
     } catch (error) {
         fail(res, error);
     }

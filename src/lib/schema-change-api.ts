@@ -116,6 +116,23 @@ export interface Runbook {
     uncompiled: number[];
     server: { version: string; collectedAt: string };
     settings: { lockTimeoutSeconds: number; lockAttempts: number; backfillBatchRows: number; backfillPauseMs: number; defaultSchema: string };
+    /** What the tables should look like once the steps that run by default have run, for checking the database afterwards. */
+    expected: ExpectedState;
+}
+
+export interface ExpectedTable {
+    qualified: string;
+    columns: { name: string; type: string; notNull: boolean }[];
+    primaryKey: string[];
+    uniques: { name: string; columns: string[] }[];
+    checks: { name: string; validated: boolean }[];
+    foreignKeys: { name: string; columns: string[]; refTable: string; refColumns: string[]; validated: boolean }[];
+    indexes: { name: string; columns: (string | null)[]; unique: boolean }[];
+}
+
+export interface ExpectedState {
+    tables: ExpectedTable[];
+    absent: string[];
 }
 
 export interface LintViolation {
@@ -288,3 +305,21 @@ export interface PreflightReport {
 /** What to look at on the live database before a runbook starts: other sessions on the tables, long transactions, replicas, slots, timeouts. Read-only. */
 export const fetchPreflight = (connectionId: string, tables: string[], signal?: AbortSignal) =>
     request<PreflightReport>(`/api/connections/${connectionId}/schema-change/preflight?tables=${encodeURIComponent(tables.join(","))}`, { signal });
+
+// ---- verify ---------------------------------------------------------------------------------------------------------------------
+
+export interface VerifyMismatch {
+    table: string;
+    kind: "table" | "column" | "primary-key" | "unique" | "check" | "foreign-key" | "index";
+    message: string;
+}
+
+export interface VerifyResult {
+    checkedAt: string;
+    tables: number;
+    mismatches: VerifyMismatch[];
+}
+
+/** After a runbook has run: read the catalog again and compare it with the state the compiler said it would leave. Read-only. */
+export const verifyRun = (connectionId: string, expected: ExpectedState, signal?: AbortSignal) =>
+    request<VerifyResult>(`/api/connections/${connectionId}/schema-change/verify`, { method: "POST", body: JSON.stringify({ expected }), signal });

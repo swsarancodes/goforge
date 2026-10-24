@@ -1,3 +1,4 @@
+import type { ExpectedState } from "./expected-state.js";
 import type { TableFacts } from "./facts.js";
 import { formatBytes, formatCount } from "./sql-render.js";
 
@@ -125,6 +126,8 @@ export interface Runbook {
     uncompiled: number[];
     server: { version: string; collectedAt: string };
     settings: CompileSettings;
+    /** What the tables should look like once the steps that run by default have run, for checking the database afterwards. */
+    expected: ExpectedState;
 }
 
 export interface CompileSettings {
