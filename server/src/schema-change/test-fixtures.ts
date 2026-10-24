@@ -19,6 +19,8 @@ export interface TableSpec {
     indexes?: Partial<IndexFacts>[];
     foreignKeys?: { name?: string; columns: string[]; ref: string; refColumns: string[] }[];
     uniques?: { name: string; columns: string[] }[];
+    /** A CHECK constraint: `columns` are the columns it uses, as pg_constraint.conkey lists them. */
+    checks?: { name: string; definition: string; columns: string[] }[];
     partitions?: string[];
     views?: string[];
 }
@@ -33,9 +35,10 @@ export function table(spec: TableSpec): TableFacts {
     const bytes = spec.bytes ?? 8192;
     const pk = spec.primaryKey ?? (spec.columns?.some((c) => c.startsWith("id:")) ? ["id"] : []);
     const indexes: IndexFacts[] = [];
-    if (pk.length > 0) indexes.push({ name: `${spec.name}_pkey`, definition: `CREATE UNIQUE INDEX ${spec.name}_pkey ON ${schema}.${spec.name} USING btree (${pk.join(", ")})`, columns: pk, method: "btree", unique: true, primary: true, valid: true, partial: false, constraint: `${spec.name}_pkey`, bytes: Math.round(bytes / 10), scans: 100 });
+    if (pk.length > 0) indexes.push({ name: `${spec.name}_pkey`, definition: `CREATE UNIQUE INDEX ${spec.name}_pkey ON ${schema}.${spec.name} USING btree (${pk.join(", ")})`, columns: pk, uses: pk, method: "btree", unique: true, primary: true, valid: true, partial: false, constraint: `${spec.name}_pkey`, bytes: Math.round(bytes / 10), scans: 100 });
     for (const index of spec.indexes ?? []) {
-        indexes.push({ name: "idx", definition: "", columns: [], method: "btree", unique: false, primary: false, valid: true, partial: false, constraint: null, bytes: Math.round(bytes / 10), scans: 0, ...index });
+        const columns = index.columns ?? [];
+        indexes.push({ name: "idx", definition: "", columns, uses: columns.filter((name): name is string => name !== null), method: "btree", unique: false, primary: false, valid: true, partial: false, constraint: null, bytes: Math.round(bytes / 10), scans: 0, ...index });
     }
     return {
         schema,
@@ -52,7 +55,7 @@ export function table(spec: TableSpec): TableFacts {
         columns: (spec.columns ?? ["id:bigint:notnull"]).map(column),
         primaryKey: pk,
         uniques: (spec.uniques ?? []).map((unique) => ({ name: unique.name, kind: "unique" as const, definition: `UNIQUE (${unique.columns.join(", ")})`, columns: unique.columns, validated: true })),
-        checks: [],
+        checks: (spec.checks ?? []).map((check) => ({ name: check.name, kind: "check" as const, definition: check.definition, columns: check.columns, validated: true })),
         foreignKeys: (spec.foreignKeys ?? []).map((fk, i) => {
             const [refSchema, refTable] = fk.ref.includes(".") ? fk.ref.split(".") : ["public", fk.ref];
             return { name: fk.name ?? `${spec.name}_fk${i}`, columns: fk.columns, refSchema, refTable, refColumns: fk.refColumns, onDelete: "NO ACTION", onUpdate: "NO ACTION", validated: true };

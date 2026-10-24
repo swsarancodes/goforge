@@ -382,6 +382,53 @@ describe("tables, renames and drops", () => {
         expect(errors(compile(plan({ type: "drop_column", tableName: "orders", columnName: "id" }), facts(orders({ primaryKey: [] }), child)))).toEqual(["referenced"]);
     });
 
+    it("drops only the CHECK constraints that use the dropped column, not ones whose text merely contains its name", () => {
+        // `a` is a prefix of `aa` and of the text of aa's check; the later type change must still see that check
+        const wide = table({
+            name: "wide", rows: 5_000_000, bytes: 400 * MIB,
+            columns: ["id:bigint:notnull", "a:integer", "aa:integer", "b:integer"],
+            checks: [
+                { name: "wide_aa_positive", definition: "CHECK ((aa > 0))", columns: ["aa"] },
+                { name: "wide_a_b_order", definition: "CHECK ((a < b))", columns: ["a", "b"] },
+            ],
+        });
+        const runbook = compile(plan({ type: "drop_column", tableName: "wide", columnName: "a" }, { type: "alter_column", tableName: "wide", columnName: "aa", changes: { dataType: "bigint" } }), facts(wide));
+        expect(runbook.steps[0].title).toBe("Drop column public.wide.a");
+        expect(runbook.steps[0].notes.join(" ")).toMatch(/CHECK constraints? dropped with it: wide_a_b_order\b/);
+        expect(runbook.steps[0].notes.join(" ")).not.toMatch(/wide_aa_positive/);
+        // aa's check survived the drop, so the online type change that cannot carry it is refused
+        expect(errors(runbook)).toEqual(["unsupported"]);
+        expect(runbook.findings.find((finding) => finding.code === "unsupported")?.message).toContain("wide_aa_positive");
+    });
+
+    it("lists the indexes a dropped column takes with it, including partial, expression and INCLUDE ones", () => {
+        const events = table({
+            name: "events", rows: 2_000_000, bytes: 200 * MIB,
+            columns: ["id:bigint:notnull", "status:text", "deleted_at:timestamp with time zone", "payload:text"],
+            indexes: [
+                { name: "events_live_idx", columns: ["status"], uses: ["status", "deleted_at"], partial: true, scans: 5 },
+                { name: "events_lower_status_idx", columns: [null], uses: ["status"], scans: 0 },
+                { name: "events_status_cover_idx", columns: ["id"], uses: ["id", "payload"], scans: 0 },
+            ],
+        });
+        const dropped = (name: string) => compile(plan({ type: "drop_column", tableName: "events", columnName: name }), facts(events)).steps[0].notes.join(" ");
+        expect(dropped("deleted_at")).toMatch(/Indexes dropped with it: events_live_idx \(used 5 times\)/);
+        expect(dropped("status")).toMatch(/events_live_idx.*events_lower_status_idx|events_lower_status_idx.*events_live_idx/);
+        expect(dropped("payload")).toMatch(/events_status_cover_idx/);
+    });
+
+    it("does not copy an index that only mentions the column in a predicate or expression when a type change swaps the column", () => {
+        const events = table({
+            name: "events", rows: 5_000_000, bytes: 400 * MIB,
+            columns: ["id:bigint:notnull", "amount:integer", "kind:text"],
+            indexes: [{ name: "events_big_idx", columns: ["kind"], uses: ["kind", "amount"], partial: true, scans: 3 }],
+        });
+        const runbook = compile(plan({ type: "alter_column", tableName: "events", columnName: "amount", changes: { dataType: "bigint" } }), facts(events));
+        expect(errors(runbook)).toEqual([]);
+        expect(runbook.findings.map((finding) => finding.code)).toContain("index-not-copied");
+        expect(sql(runbook)).not.toContain("events_big_idx__new");
+    });
+
     it("applies a drop of the key and then of the table in the order given", () => {
         const child = table({ name: "order_items", rows: 5, columns: ["id:bigint:notnull", "order_id:bigint"], foreignKeys: [{ name: "oi_fk", columns: ["order_id"], ref: "orders", refColumns: ["id"] }] });
         const runbook = compile(

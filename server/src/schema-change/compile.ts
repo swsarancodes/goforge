@@ -328,7 +328,7 @@ class Compiler {
             taken.add(pk);
             lines.push(`CONSTRAINT ${ident(pk)} PRIMARY KEY (${primary.map(ident).join(", ")})`);
             table.primaryKey = primary;
-            table.indexes.push({ name: pk, definition: "", columns: primary, method: "btree", unique: true, primary: true, valid: true, partial: false, constraint: pk, bytes: 0, scans: null });
+            table.indexes.push({ name: pk, definition: "", columns: primary, uses: primary, method: "btree", unique: true, primary: true, valid: true, partial: false, constraint: pk, bytes: 0, scans: null });
         }
         for (const field of operation.table.fields) {
             if (field.unique && !field.primaryKey) {
@@ -336,7 +336,7 @@ class Compiler {
                 taken.add(unique);
                 lines.push(`CONSTRAINT ${ident(unique)} UNIQUE (${ident(field.name)})`);
                 table.uniques.push({ name: unique, kind: "unique", definition: `UNIQUE (${ident(field.name)})`, columns: [field.name], validated: true });
-                table.indexes.push({ name: unique, definition: "", columns: [field.name], method: "btree", unique: true, primary: false, valid: true, partial: false, constraint: unique, bytes: 0, scans: null });
+                table.indexes.push({ name: unique, definition: "", columns: [field.name], uses: [field.name], method: "btree", unique: true, primary: false, valid: true, partial: false, constraint: unique, bytes: 0, scans: null });
             }
             if (field.values && field.values.length > 0) this.note("warning", "values-ignored", `"values" for ${qualified}.${field.name} was ignored: create an enum type or a CHECK constraint separately.`, qualified);
             if (field.unsigned) this.note("warning", "unsigned-ignored", `PostgreSQL has no unsigned types; "unsigned" for ${qualified}.${field.name} was ignored.`, qualified);
@@ -347,7 +347,7 @@ class Compiler {
             for (const column of spec.columns) if (!seen.has(lower(column))) this.fail("unknown-column", `Index ${spec.name} uses column "${column}", which ${qualified} does not have.`, qualified);
             this.claimRelation(schema, spec.name, "Index");
             statements.push(`CREATE INDEX ${ident(spec.name)} ON ${qualifiedIdent(schema, name)} (${spec.columns.map(ident).join(", ")});`.replace("CREATE INDEX", spec.unique ? "CREATE UNIQUE INDEX" : "CREATE INDEX"));
-            table.indexes.push({ name: spec.name, definition: "", columns: spec.columns, method: "btree", unique: spec.unique ?? false, primary: false, valid: true, partial: false, constraint: null, bytes: 0, scans: null });
+            table.indexes.push({ name: spec.name, definition: "", columns: spec.columns, uses: spec.columns, method: "btree", unique: spec.unique ?? false, primary: false, valid: true, partial: false, constraint: null, bytes: 0, scans: null });
         }
 
         this.add({
@@ -620,7 +620,7 @@ class Compiler {
             });
         }
         table.uniques.push({ name, kind: "unique", definition: `UNIQUE (${list})`, columns, validated: true });
-        table.indexes.push({ name, definition: "", columns, method: "btree", unique: true, primary: false, valid: true, partial: false, constraint: name, bytes: 0, scans: null });
+        table.indexes.push({ name, definition: "", columns, uses: columns, method: "btree", unique: true, primary: false, valid: true, partial: false, constraint: name, bytes: 0, scans: null });
     }
 
     /** CREATE INDEX CONCURRENTLY, with the check for the invalid index a failed build leaves behind. */
@@ -777,7 +777,10 @@ class Compiler {
                 notes: ["The old name stops working immediately. Queries, functions and application code that use it will fail until they are changed.", "Indexes, constraints and views follow the column."],
                 undo: `ALTER TABLE ${target} RENAME COLUMN ${ident(changes.newName)} TO ${ref};`,
             });
-            for (const index of table.indexes) index.columns = index.columns.map((name) => (name === column.name ? changes.newName ?? name : name));
+            for (const index of table.indexes) {
+                index.columns = index.columns.map((name) => (name === column.name ? changes.newName ?? name : name));
+                index.uses = index.uses.map((name) => (name === column.name ? changes.newName ?? name : name));
+            }
             table.primaryKey = table.primaryKey.map((name) => (name === column.name ? changes.newName ?? name : name));
             column.name = changes.newName;
             changed = true;
@@ -830,7 +833,7 @@ class Compiler {
         // Expand / contract: nothing is rewritten under a lock. A trigger keeps the new column in step while the old one is copied across.
         const inKey = table.primaryKey.includes(column.name) || table.uniques.some((u) => u.columns.includes(column.name));
         if (inKey) this.fail("unsupported", `${label} is part of a key. Changing its type on a table this size means changing the key, and every foreign key that points at it; that needs a hand-written plan. ${verdict.reason}`, table.qualified);
-        const checks = table.checks.filter((check) => check.definition.includes(column.name));
+        const checks = table.checks.filter((check) => check.columns.includes(column.name));
         const foreign = [...table.foreignKeys.filter((fk) => fk.columns.includes(column.name)), ...table.referencedBy.filter((fk) => fk.refColumns.includes(column.name))];
         if (foreign.length > 0 || checks.length > 0) {
             this.fail("unsupported", `${label} appears in ${foreign.length ? `foreign key ${[...table.foreignKeys.filter((fk) => fk.columns.includes(column.name)).map((fk) => fk.name), ...table.referencedBy.filter((fk) => fk.refColumns.includes(column.name)).map((fk) => fk.name)].join(", ")}` : `check ${checks.map((c) => c.name).join(", ")}`}. Changing its type online needs those re-created by hand. ${verdict.reason}`, table.qualified);
@@ -877,10 +880,10 @@ class Compiler {
             notes: ["Reads the whole table without blocking anything. Expect 0 before you continue."],
         });
 
-        const plainIndexes = table.indexes.filter((index) => index.columns.includes(column.name) && !index.constraint);
+        const plainIndexes = table.indexes.filter((index) => index.uses.includes(column.name) && !index.constraint);
         const renames: string[] = [];
         for (const index of plainIndexes) {
-            if (index.partial || index.columns.some((c) => c === null) || index.method !== "btree") {
+            if (index.partial || index.columns.some((c) => c === null) || index.method !== "btree" || !index.columns.includes(column.name)) {
                 this.note("warning", "index-not-copied", `Index ${index.name} on ${label} is partial, an expression index or not a btree index, so it was not copied to ${fresh}. Recreate it after the swap.`, table.qualified);
                 continue;
             }
@@ -928,8 +931,9 @@ class Compiler {
         if (inbound.length > 0) this.fail("referenced", `${label} is referenced by ${inbound.map((fk) => `${fk.schema}.${fk.table} (${fk.name})`).join(", ")}. Drop those foreign keys first.`, table.qualified);
         if (table.dependentViews.length > 0) this.note("warning", "dependent-views", `Views depend on ${table.qualified} (${table.dependentViews.join(", ")}); PostgreSQL refuses to drop a column one of them uses.`, table.qualified);
 
-        const indexes = table.indexes.filter((index) => index.columns.includes(column.name));
+        const indexes = table.indexes.filter((index) => index.uses.includes(column.name));
         const foreign = table.foreignKeys.filter((fk) => fk.columns.includes(column.name));
+        const checks = table.checks.filter((check) => check.columns.includes(column.name));
         const used = indexes.filter((index) => (index.scans ?? 0) > 0);
         this.add({
             title: `Drop column ${label}`,
@@ -946,6 +950,7 @@ class Compiler {
                 "Stop the application writing to this column first, or its inserts will start to fail.",
                 ...(indexes.length ? [`Indexes dropped with it: ${indexes.map((index) => `${index.name}${(index.scans ?? 0) > 0 ? ` (used ${formatCount(index.scans ?? 0)} times)` : ""}`).join(", ")}.`] : []),
                 ...(foreign.length ? [`Foreign keys dropped with it: ${foreign.map((fk) => fk.name).join(", ")}.`] : []),
+                ...(checks.length ? [`${checks.length === 1 ? "CHECK constraint" : "CHECK constraints"} dropped with it: ${checks.map((check) => check.name).join(", ")}.`] : []),
             ],
         });
         if (used.length > 0) this.note("warning", "used-index", `Dropping ${label} also drops index ${used.map((index) => index.name).join(", ")}, which has been used since the statistics were reset.`, table.qualified);
@@ -954,7 +959,7 @@ class Compiler {
         table.indexes = table.indexes.filter((index) => !indexes.includes(index));
         table.foreignKeys = table.foreignKeys.filter((fk) => !foreign.includes(fk));
         table.uniques = table.uniques.filter((unique) => !unique.columns.includes(column.name));
-        table.checks = table.checks.filter((check) => !check.definition.includes(column.name));
+        table.checks = table.checks.filter((check) => !checks.includes(check));
     }
 
     // ---- relationships and indexes ----------------------------------------------------------------------------------------
@@ -1031,7 +1036,7 @@ class Compiler {
             this.claimRelation(child.schema, indexName, "Index");
             this.concurrentIndexStep(child, indexName, [childColumn.name], false, `Index the foreign key column ${child.qualified}.${childColumn.name}`);
             this.steps[this.steps.length - 1].notes.unshift(`Recommended, not required: without an index on ${childColumn.name}, every delete or key change in ${parent.qualified} has to scan ${child.qualified}.`);
-            child.indexes.push({ name: indexName, definition: "", columns: [childColumn.name], method: "btree", unique: false, primary: false, valid: true, partial: false, constraint: null, bytes: 0, scans: null });
+            child.indexes.push({ name: indexName, definition: "", columns: [childColumn.name], uses: [childColumn.name], method: "btree", unique: false, primary: false, valid: true, partial: false, constraint: null, bytes: 0, scans: null });
         }
     }
 
@@ -1075,7 +1080,7 @@ class Compiler {
         }
 
         this.concurrentIndexStep(table, spec.name, columns, spec.unique === true, `Build index ${spec.name} on ${table.qualified}(${columns.join(", ")})`);
-        table.indexes.push({ name: spec.name, definition: "", columns, method: "btree", unique: spec.unique === true, primary: false, valid: true, partial: false, constraint: null, bytes: 0, scans: null });
+        table.indexes.push({ name: spec.name, definition: "", columns, uses: columns, method: "btree", unique: spec.unique === true, primary: false, valid: true, partial: false, constraint: null, bytes: 0, scans: null });
     }
 
     private dropIndex(operation: Extract<Operation, { type: "drop_index" }>): void {

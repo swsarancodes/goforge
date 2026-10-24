@@ -28,6 +28,8 @@ export interface IndexFacts {
     definition: string;
     /** Key columns in order; null where the key is an expression. */
     columns: (string | null)[];
+    /** Every column the index depends on: its keys, INCLUDE columns, columns inside an expression and columns in a WHERE predicate. Dropping any of them drops the index. */
+    uses: string[];
     method: string;
     unique: boolean;
     primary: boolean;
@@ -214,6 +216,11 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
                 COALESCE((SELECT json_agg(CASE WHEN k.attnum = 0 THEN NULL ELSE a.attname END ORDER BY k.ord)
                           FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS k(attnum, ord) LEFT JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = k.attnum
                           WHERE k.ord <= ix.indnkeyatts), '[]'::json) AS columns,
+                COALESCE((SELECT json_agg(DISTINCT a.attname)
+                          FROM (SELECT k.attnum FROM unnest(ix.indkey::int2[]) AS k(attnum)
+                                UNION SELECT d.refobjsubid FROM pg_depend d
+                                WHERE d.classid = 'pg_class'::regclass AND d.objid = ix.indexrelid AND d.refclassid = 'pg_class'::regclass AND d.refobjid = ix.indrelid) AS u(attnum)
+                          JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = u.attnum AND a.attnum > 0 AND NOT a.attisdropped), '[]'::json) AS uses,
                 ix.indisunique AS "unique", ix.indisprimary AS "primary", ix.indisvalid AS valid, ix.indpred IS NOT NULL AS partial,
                 (SELECT c.conname FROM pg_constraint c WHERE c.conindid = ix.indexrelid AND c.contype IN ('p', 'u', 'x') LIMIT 1) AS "constraint",
                 pg_relation_size(ix.indexrelid)::text AS bytes, u.idx_scan::text AS scans
@@ -332,6 +339,7 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
             name: row.name as string,
             definition: row.definition as string,
             columns: row.columns as (string | null)[],
+            uses: row.uses as string[],
             method: row.method as string,
             unique: row.unique as boolean,
             primary: row.primary as boolean,
