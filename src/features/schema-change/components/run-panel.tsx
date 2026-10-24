@@ -4,7 +4,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { fetchPreflight, type PlanResponse, type PreflightReport, type PreflightStatus } from "@/lib/schema-change-api";
+import { fetchPreflight, verifyRun, type PlanResponse, type PreflightReport, type PreflightStatus, type VerifyResult } from "@/lib/schema-change-api";
 import { useRunbookRun, type StepRun } from "../use-runbook-run";
 import { RiskBadge } from "./risk-badge";
 
@@ -60,6 +60,49 @@ const Preflight: React.FC<{ connectionId: string; tables: string[]; report: Pref
                     ))}
                     <li className="px-1 text-[11px] text-muted-foreground">Checked {new Date(report.generatedAt).toLocaleTimeString()} on PostgreSQL {report.serverVersion}. It is a snapshot: look again right before you start.</li>
                 </ul>
+            )}
+        </div>
+    );
+};
+
+/** After the last step: read the catalog again and compare it with the state the compiler said it would leave. */
+const Verification: React.FC<{ connectionId: string; response: PlanResponse }> = ({ connectionId, response }) => {
+    const [result, setResult] = useState<VerifyResult | undefined>(undefined);
+    const [error, setError] = useState<string | undefined>(undefined);
+    const [loading, setLoading] = useState(false);
+    const check = async () => {
+        setLoading(true);
+        setError(undefined);
+        try {
+            setResult(await verifyRun(connectionId, response.runbook!.expected));
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : String(caught));
+        } finally {
+            setLoading(false);
+        }
+    };
+    useEffect(() => {
+        void check();
+        // once, when the last step has run
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+    return (
+        <div className="space-y-1.5 rounded-md border bg-background p-2.5 text-xs" role="status">
+            <div className="flex flex-wrap items-center gap-2">
+                <p className="font-medium">Does the database match the plan?</p>
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void check()} disabled={loading}>
+                    {loading ? <Loader2 className="size-3 animate-spin" /> : null} Check again
+                </Button>
+            </div>
+            {error && <p role="alert" className="text-destructive">{error}</p>}
+            {result && result.mismatches.length === 0 && <p className="text-muted-foreground">Yes. The catalog was read again after the run: {result.tables} table{result.tables === 1 ? "" : "s"} checked for columns, types, NOT NULL, keys, constraints and indexes, and every one is as the plan said.</p>}
+            {result && result.mismatches.length > 0 && (
+                <>
+                    <p className="text-destructive">{result.mismatches.length} difference{result.mismatches.length === 1 ? "" : "s"} between what the plan expected and what the database has. Either a step did not do what it said, or something was not known when the plan was made.</p>
+                    <ul className="list-disc space-y-0.5 pl-4 text-muted-foreground">
+                        {result.mismatches.map((mismatch, index) => <li key={index} className="break-words"><span className="font-mono text-foreground">{mismatch.table}</span>: {mismatch.message}</li>)}
+                    </ul>
+                </>
             )}
         </div>
     );
@@ -128,7 +171,12 @@ export const RunPanel: React.FC<{ connectionId: string; response: PlanResponse; 
                 })}
             </ol>
             {why && runner.next && <p className="text-[11px] text-muted-foreground">Run is off: {why}</p>}
-            {runner.allDone && <p className="text-xs font-medium">Every step has run.{runbook.steps.some((step) => step.optional) ? " The optional clean-up steps were not run: do them once applications have switched." : ""}</p>}
+            {runner.allDone && (
+                <>
+                    <p className="text-xs font-medium">Every step has run.{runbook.steps.some((step) => step.optional) ? " The optional clean-up steps were not run: do them once applications have switched." : ""}</p>
+                    <Verification connectionId={connectionId} response={response} />
+                </>
+            )}
         </div>
     );
 };
