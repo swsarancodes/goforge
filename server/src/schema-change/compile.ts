@@ -10,6 +10,7 @@ import {
     type ColumnFacts,
     type Dependent,
     type Facts,
+    type IndexFacts,
     type ProbeRequest,
     type Probes,
     type TableFacts,
@@ -30,6 +31,7 @@ import {
     type Work,
 } from "./runbook.js";
 import { checkDefaultExpression, formatBytes, formatCount, functionsIn, ident, isIntegerType, limitName, literal, qualifiedIdent, renderType } from "./sql-render.js";
+import { expectedState } from "./expected-state.js";
 import { canRetry, withLockRetry } from "./lock-retry.js";
 import { classifyTypeChange, parseType, sameType } from "./type-change.js";
 
@@ -121,6 +123,7 @@ class Compiler {
             uncompiled: this.uncompiled,
             server,
             settings: this.settings,
+            expected: expectedState(this.facts.tables, this.tables),
         };
         return { runbook, needed: this.needed };
     }
@@ -907,16 +910,22 @@ class Compiler {
 
         const plainIndexes = table.indexes.filter((index) => index.uses.includes(column.name) && !index.constraint);
         const renames: string[] = [];
+        // After the swap the old column is still there, named `old`, with whatever was not copied; the copies carry the original names.
+        const staysOnOld: IndexFacts[] = [];
+        const leftOnOld: IndexFacts[] = [];
         for (const index of plainIndexes) {
             if (index.partial || index.columns.some((c) => c === null) || index.method !== "btree" || !index.columns.includes(column.name)) {
                 this.note("warning", "index-not-copied", `Index ${index.name} on ${label} is partial, an expression index or not a btree index, so it was not copied to ${fresh}. Recreate it after the swap.`, table.qualified);
+                staysOnOld.push(index);
                 continue;
             }
             const copy = limitName(`${index.name}__new`, this.names(table));
             this.claimRelation(table.schema, copy, "Index");
             const columns = index.columns.map((c) => (c === column.name ? fresh : (c as string)));
             this.concurrentIndexStep(table, copy, columns, index.unique, `Expand: build the copy of index ${index.name} on ${fresh}`);
-            renames.push(`ALTER INDEX ${qualifiedIdent(table.schema, index.name)} RENAME TO ${ident(limitName(`${index.name}__old`, this.names(table)))};`, `ALTER INDEX ${qualifiedIdent(table.schema, copy)} RENAME TO ${ident(index.name)};`);
+            const oldName = limitName(`${index.name}__old`, this.names(table));
+            renames.push(`ALTER INDEX ${qualifiedIdent(table.schema, index.name)} RENAME TO ${ident(oldName)};`, `ALTER INDEX ${qualifiedIdent(table.schema, copy)} RENAME TO ${ident(index.name)};`);
+            leftOnOld.push({ ...index, name: oldName, definition: "", columns: index.columns.map((c) => (c === column.name ? old : c)), uses: index.uses.map((name) => (name === column.name ? old : name)), constraint: null });
         }
 
         if (column.notNull) {
@@ -947,6 +956,13 @@ class Compiler {
             destructive: true,
             notes: ["Run this later, once nothing needs the old column and you are sure about the result. Until then the old data is still there to go back to."],
         });
+        // The model after the steps that run by default: the old column and its indexes are still there until the contract step.
+        table.columns.push({ ...column, name: old, dependents: [] });
+        for (const index of staysOnOld) {
+            index.columns = index.columns.map((c) => (c === column.name ? old : c));
+            index.uses = index.uses.map((name) => (name === column.name ? old : name));
+        }
+        table.indexes.push(...leftOnOld);
         column.type = to;
     }
 
