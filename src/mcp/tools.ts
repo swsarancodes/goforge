@@ -5,6 +5,9 @@ import { toDrawio } from "@/utils/drawio/to-drawio";
 import { parseDrawio } from "@/utils/drawio/from-drawio";
 import { toDbml } from "@/utils/dbml/to-dbml";
 import { convertQuery } from "@/features/query-modernizer/engine/convert";
+import { checkPostgresSyntax } from "@/features/query-modernizer/engine/checks";
+import { runBatch, STATUS_LABELS, type BatchItem } from "@/features/query-modernizer/batch";
+import { convertedScript, readinessMarkdown } from "@/features/query-modernizer/batch-report";
 import { LEGACY_DIALECTS, type LegacyDialect } from "@/features/query-modernizer/types";
 import { McpToolDefinition, McpToolCallResult } from "./types";
 
@@ -51,20 +54,40 @@ export const MCP_TOOLS: McpToolDefinition[] = [
     },
     {
         name: "goforge_modernize_query",
-        description: "Convert a query written for Oracle, SQL Server, MySQL or DB2 to PostgreSQL with named, tested rules. Returns the converted SQL, the rules applied, anything it could NOT convert, and the known behaviour differences. It is not checked against a database and does not prove the result returns the same rows.",
+        description:
+            "Convert legacy SQL written for Oracle, SQL Server, MySQL or DB2 to PostgreSQL with named, tested rules. Pass `query` for one statement, or `script` for a whole file: the file is split into statements (`;`, a lone `/`, GO, DELIMITER), every query is converted, and each statement gets one status (converted, unchanged, review, failed, out-of-scope) with the facts behind it. Procedures, packages, schema statements and client commands are listed as out-of-scope, never converted. Statements are checked with a PostgreSQL grammar only (no database): nothing here proves the converted SQL returns the same rows.",
         inputSchema: {
             type: "object",
             properties: {
                 query: {
                     type: "string",
-                    description: "The legacy SQL query string to modernize.",
+                    description: "One legacy SQL statement to modernize. Use this or `script`.",
+                },
+                script: {
+                    type: "string",
+                    description: "The text of a whole legacy SQL file to convert statement by statement. Use this or `query`.",
                 },
                 sourceDialect: {
                     type: "string",
                     description: "Source dialect: oracle, mssql, mysql or db2. Defaults to oracle.",
                 },
+                statements: {
+                    type: "string",
+                    description: "For `script`: which statements to list in the answer: 'attention' (failed, review and out-of-scope, the default), 'all', or 'none' (summary only).",
+                },
+                maxStatements: {
+                    type: "number",
+                    description: "For `script`: the most statements to list (default 100). The summary always covers the whole file.",
+                },
+                includeConvertedScript: {
+                    type: "boolean",
+                    description: "For `script`: also return the whole converted file (what did not convert is kept as comments).",
+                },
+                includeReport: {
+                    type: "boolean",
+                    description: "For `script`: also return the migration report as Markdown.",
+                },
             },
-            required: ["query"],
         },
     },
     {
@@ -190,12 +213,63 @@ export async function executeMcpTool(name: string, args: Record<string, any>): P
             }
 
             case "goforge_modernize_query": {
-                const query = String(args.query ?? "");
                 const sourceDialect = String(args.sourceDialect ?? "oracle").toLowerCase();
                 if (!LEGACY_DIALECTS.some((option) => option.value === sourceDialect)) {
                     return { isError: true, content: [{ type: "text", text: `Unsupported source dialect '${sourceDialect}'. Use one of: ${LEGACY_DIALECTS.map((option) => option.value).join(", ")}. The target is always PostgreSQL.` }] };
                 }
+                const hasQuery = typeof args.query === "string" && args.query.length > 0;
+                const hasScript = typeof args.script === "string" && args.script.length > 0;
+                if (hasQuery === hasScript) {
+                    return { isError: true, content: [{ type: "text", text: "Pass exactly one of `query` (one statement) or `script` (a whole file)." }] };
+                }
 
+                if (hasScript) {
+                    const script = String(args.script);
+                    if (script.length > 5_000_000) return { isError: true, content: [{ type: "text", text: "The script is larger than 5 MB; split it and convert it in parts." }] };
+                    const result = await runBatch({ script, dialect: sourceDialect as LegacyDialect }, { syntax: checkPostgresSyntax });
+                    const which = String(args.statements ?? "attention");
+                    const limit = Math.max(0, Math.min(Number(args.maxStatements ?? 100) || 100, 2000));
+                    const listed = (which === "none" ? [] : which === "all" ? result.items : result.items.filter((item) => item.status === "failed" || item.status === "review" || item.status === "out-of-scope")).slice(0, limit);
+                    const describe = (item: BatchItem) => ({
+                        statement: item.unit.index + 1,
+                        lines: [item.unit.startLine, item.unit.endLine],
+                        kind: item.unit.kind,
+                        status: item.status,
+                        statusMeaning: STATUS_LABELS[item.status],
+                        reasons: item.reasons,
+                        notes: item.notes,
+                        originalSql: item.unit.text,
+                        ...(item.outcome && item.status !== "failed"
+                            ? { convertedSql: item.outcome.sql, rulesApplied: item.outcome.engine.applied.map((rule) => ({ id: rule.id, title: rule.title, count: rule.count })), behaviourDifferences: item.outcome.engine.traps.map((trap) => ({ id: trap.id, severity: trap.severity, title: trap.title })) }
+                            : {}),
+                        ...(item.outcome && item.status === "failed" ? { notConverted: item.outcome.engine.unconverted } : {}),
+                    });
+                    return {
+                        content: [
+                            {
+                                type: "text",
+                                text: JSON.stringify(
+                                    {
+                                        sourceDialect,
+                                        target: "postgresql",
+                                        summary: { statements: result.summary.units, lines: result.lineCount, byStatus: result.summary.byStatus, byKind: result.summary.byKind, checkedBy: "a PostgreSQL grammar only; no database was asked", topRules: result.summary.rules.slice(0, 10), topUnconverted: result.summary.unconverted, behaviourDifferences: result.summary.traps },
+                                        warnings: result.warnings,
+                                        statementsListed: listed.length,
+                                        statementsNotListed: Math.max(0, (which === "all" ? result.items.length : result.items.filter((item) => item.status === "failed" || item.status === "review" || item.status === "out-of-scope").length) - listed.length),
+                                        statements: listed.map(describe),
+                                        ...(args.includeConvertedScript === true ? { convertedScript: convertedScript(result) } : {}),
+                                        ...(args.includeReport === true ? { reportMarkdown: readinessMarkdown(result, { generatedAt: new Date().toISOString() }) } : {}),
+                                        note: "Statuses are facts about checks, not a probability. 'converted' means the rules finished and a grammar accepts the result; it does not mean the new statement returns the same rows. Run it against PostgreSQL (EXPLAIN) and compare results on real data.",
+                                    },
+                                    null,
+                                    2
+                                ),
+                            },
+                        ],
+                    };
+                }
+
+                const query = String(args.query);
                 const result = convertQuery({ sql: query, dialect: sourceDialect as LegacyDialect });
 
                 return {
