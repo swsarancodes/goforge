@@ -325,6 +325,16 @@ const SCENARIOS: Scenario[] = [
         },
     },
     {
+        name: "rename a column and keep the old one in step (add the new column, trigger, copy, index, NOT NULL)",
+        setup: "CREATE TABLE accounts (id bigserial PRIMARY KEY, email text NOT NULL DEFAULT 'none', age int, note text, pad text); INSERT INTO accounts (email, age, note, pad) SELECT 'u' || g || '@example.test', g % 90, 'n' || g, repeat('x', 40) FROM generate_series(1, 300000) g; CREATE INDEX accounts_email_idx ON accounts (email); ANALYZE accounts;",
+        tables: ["public.accounts"],
+        operations: [{ type: "alter_column", tableName: "accounts", columnName: "email", changes: { newName: "contact" } }],
+        async verify(client, checks) {
+            checks.equal((await client.query("SELECT attname AS n FROM pg_attribute WHERE attrelid = 'accounts'::regclass AND attname IN ('email', 'contact') AND NOT attisdropped ORDER BY attname")).rows.map((row) => row.n), ["contact", "email"], "both columns exist");
+            checks.equal(Number((await one(client, "SELECT count(*)::int AS n FROM accounts WHERE contact IS DISTINCT FROM email"))?.n), 0, "every row has the same value in both");
+        },
+    },
+    {
         name: "refuses NOT NULL without a default on a table with rows",
         tables: ["public.orders"],
         operations: [{ type: "add_column", tableName: "orders", field: { name: "must_have", dataType: "text", nullable: false } }],
@@ -1150,6 +1160,44 @@ async function renameSection(checks: Checks) {
     }
 }
 
+async function columnRenameSection(checks: Checks) {
+    // A renamed column with the old one kept in step: both names work, in both directions, until the last step drops the old column.
+    await withDatabase(async (client) => {
+        await client.query("CREATE TABLE accounts (id bigserial PRIMARY KEY, email text NOT NULL DEFAULT 'none', age int, note text, pad text); INSERT INTO accounts (email, age, note, pad) SELECT 'u' || g || '@example.test', g % 90, 'n' || g, repeat('x', 40) FROM generate_series(1, 300000) g; CREATE INDEX accounts_email_idx ON accounts (email); ANALYZE accounts;");
+        const { runbook } = await compileOn(client, parsePlan([{ type: "alter_column", tableName: "accounts", columnName: "email", changes: { newName: "contact" } }]), ["public.accounts"]);
+        checks.equal(runbook.findings.filter((finding) => finding.severity === "error"), [], "the rename compiles");
+        const ran = await runRunbook(client, runbook);
+        checks.ok(ran.ok, "the steps that run by default run", ran.failure);
+        const value = async (sql: string) => (await client.query(sql)).rows[0] as Record<string, unknown>;
+
+        checks.equal(await value("SELECT count(*)::int AS n FROM accounts WHERE contact IS DISTINCT FROM email"), { n: 0 }, "existing rows were copied");
+        checks.equal(await value("SELECT attnotnull AS n FROM pg_attribute WHERE attrelid = 'accounts'::regclass AND attname = 'contact'"), { n: true }, "the new column is NOT NULL, like the old one");
+        checks.equal(await value("SELECT indisvalid AS v FROM pg_index WHERE indexrelid = 'accounts_contact_idx'::regclass"), { v: true }, "the index was copied and is valid");
+
+        checks.equal(await value("INSERT INTO accounts (email) VALUES ('old@example.test') RETURNING contact"), { contact: "old@example.test" }, "an insert through the old name reaches the new column");
+        checks.equal(await value("INSERT INTO accounts (contact) VALUES ('new@example.test') RETURNING email"), { email: "new@example.test" }, "an insert through the new name reaches the old column");
+        checks.equal(await value("INSERT INTO accounts (note) VALUES ('neither') RETURNING email, contact"), { email: "none", contact: "none" }, "an insert that gives neither gets the old default in both");
+        checks.equal(await value("UPDATE accounts SET email = 'changed-old@example.test' WHERE id = 1 RETURNING contact"), { contact: "changed-old@example.test" }, "an update through the old name reaches the new column");
+        checks.equal(await value("UPDATE accounts SET contact = 'changed-new@example.test' WHERE id = 2 RETURNING email"), { email: "changed-new@example.test" }, "an update through the new name reaches the old column");
+        checks.equal(await value("UPDATE accounts SET age = 7 WHERE id = 3 RETURNING (email = contact) AS same"), { same: true }, "an update of another column leaves them equal");
+        await client.query("INSERT INTO accounts (email, contact) VALUES ('a@example.test', 'b@example.test')").then(() => undefined, () => undefined);
+        checks.equal(await value("SELECT contact AS c FROM accounts WHERE email = 'b@example.test' OR contact = 'b@example.test' LIMIT 1"), { c: "b@example.test" }, "an insert that gives both keeps the new name's value");
+
+        const actual = await loadFacts(asRunner(client), runbook.expected.tables.map((table) => table.qualified));
+        const mismatches = diffExpected(runbook.expected, actual);
+        checks.ok(mismatches.length === 0, "the catalog is as the compiler said", mismatches.map((mismatch) => mismatch.message));
+
+        const contract = runbook.steps.find((step) => step.optional)!;
+        const done = await runRunbook(client, { ...runbook, steps: [contract] }, { includeOptional: true });
+        checks.ok(done.ok, "the last step runs", done.failure);
+        checks.equal(await value("SELECT count(*)::int AS n FROM pg_attribute WHERE attrelid = 'accounts'::regclass AND attname = 'email' AND NOT attisdropped"), { n: 0 }, "the old column is gone");
+        checks.equal(await value("SELECT count(*)::int AS n FROM pg_trigger WHERE tgrelid = 'accounts'::regclass AND NOT tgisinternal"), { n: 0 }, "and so is the trigger");
+        checks.equal(await value("SELECT count(*)::int AS n FROM pg_proc WHERE proname LIKE 'accounts_email_contact__sync'"), { n: 0 }, "and its function");
+        checks.equal(await value("INSERT INTO accounts (note) VALUES ('after') RETURNING contact"), { contact: "none" }, "the new column has the old default");
+        checks.equal(await value("SELECT indisvalid AS v FROM pg_index WHERE indexrelid = 'accounts_contact_idx'::regclass"), { v: true }, "and the copied index stays");
+    });
+}
+
 const sections: Record<string, Section> = {
     async drops(checks) {
         await dropsSection(checks);
@@ -1173,6 +1221,10 @@ const sections: Record<string, Section> = {
 
     async rename(checks) {
         await renameSection(checks);
+    },
+
+    async columnrename(checks) {
+        await columnRenameSection(checks);
     },
 
 
