@@ -283,6 +283,18 @@ const PlanResult: React.FC<{ state: SchemaChange; response: PlanResponse }> = ({
     );
 };
 
+const WhatWasChecked: React.FC = () => (
+    <details className="rounded-lg border bg-card text-xs">
+        <summary className="cursor-pointer list-none px-3 py-2 font-medium">What these checks cover, and what they do not</summary>
+        <div className="space-y-2 border-t p-3 text-muted-foreground">
+            <p><span className="font-medium text-foreground">Checked on real servers (PostgreSQL 12 to 18):</span> the lock each step takes, which type changes rewrite a table, every compiled scenario run and read back against the plan, what PostgreSQL refuses to drop or change, the database check and the lock retry with real sessions, and the table rename with real grants and row-level security.</p>
+            <p><span className="font-medium text-foreground">Only on small data:</span> the test tables hold up to a few hundred thousand rows. How long a validation or index build takes on a table of many gigabytes, and replica lag during a large backfill, were not measured. Size and risk classes are fixed rules, not timings.</p>
+            <p><span className="font-medium text-foreground">Not run against a real server:</span> index builds on a partitioned table, replicas and logical replication (the database check reads them; the rules are unit-tested only), and prepared transactions beyond the empty case. A PL/pgSQL function body that uses a column cannot be seen by the dependency tracking of PostgreSQL, so it cannot be warned about.</p>
+            <p><span className="font-medium text-foreground">The model:</span> every operation it proposes is checked against your catalog, but a plausible wrong one that PostgreSQL accepts is not caught. Read the plan.</p>
+        </div>
+    </details>
+);
+
 export const PlanPanel: React.FC<{ state: SchemaChange }> = ({ state }) => {
     const running = state.plan.status === "running";
     const ai = state.aiStatus;
@@ -361,10 +373,11 @@ export const PlanPanel: React.FC<{ state: SchemaChange }> = ({ state }) => {
                         <li>The tables your request is about, if any, are read: columns, keys, indexes and how often each index was used, row estimates and sizes. No rows. The model is also told the names of the other tables, so a new table can point at one.</li>
                         <li>A model proposes the changes, including new tables. It never writes SQL.</li>
                         <li>Fixed rules check every change against the real catalog and write the SQL with its locks, size and risk stated: <code>CONCURRENTLY</code>, <code>NOT VALID</code> then validate, batched updates, a lock timeout.</li>
-                        <li>You open the runbook in the SQL Editor. <Link to="/database/ai-schema" className="underline underline-offset-2">Designing tables on the diagram instead?</Link></li>
+                        <li>You check the database, then run the steps one at a time here (or open the runbook in the SQL Editor). After the last step the database is compared with the plan. <Link to="/database/ai-schema" className="underline underline-offset-2">Designing tables on the diagram instead?</Link></li>
                     </ol>
                 </div>
             )}
+            <WhatWasChecked />
         </div>
     );
 };
