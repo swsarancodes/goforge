@@ -13,6 +13,8 @@
     "mcp": "bun run src/mcp/cli.ts",
     "test:corpus": "server/node_modules/.bin/tsx scripts/modernizer-corpus.ts",
     "corpus:golden": "server/node_modules/.bin/tsx scripts/modernizer-golden.ts",
+    "test:schema-pg": "server/node_modules/.bin/tsx scripts/schema-change-pg.ts",
+    "test:schema-pg:versions": "bash scripts/schema-change-versions.sh",
     "queryshift": "server/node_modules/.bin/tsx queryshift/run.ts",
     "queryshift:check-model": "server/node_modules/.bin/tsx queryshift/check-model.ts"
   },
