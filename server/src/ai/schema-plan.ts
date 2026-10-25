@@ -97,6 +97,7 @@ function makeOperationSchema<Changes extends z.ZodTypeAny>(changes: Changes) {
         z.object({ type: z.literal("add_unique"), tableName: identifier, constraintName: identifier.nullable().optional(), columns: z.array(identifier).min(1).max(32) }).strict(),
         z.object({ type: z.literal("add_check"), tableName: identifier, constraintName: identifier.nullable().optional(), expression: z.string().trim().min(1).max(400) }).strict(),
         z.object({ type: z.literal("drop_constraint"), tableName: identifier, constraintName: identifier }).strict(),
+        z.object({ type: z.literal("add_primary_key"), tableName: identifier, constraintName: identifier.nullable().optional(), columns: z.array(identifier).min(1).max(32) }).strict(),
     ]);
 }
 

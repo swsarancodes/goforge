@@ -85,6 +85,8 @@ const normalizeOperation = (value: unknown): unknown => {
             return { type, tableName, constraintName: operation.constraintName ?? operation.name, expression: operation.expression ?? operation.condition ?? operation.check };
         case "drop_constraint":
             return { type, tableName, constraintName: operation.constraintName ?? operation.name };
+        case "add_primary_key":
+            return { type, tableName, constraintName: operation.constraintName ?? operation.name, columns: operation.columns ?? (operation.column !== undefined ? [operation.column] : undefined) };
         case "add_relationship":
             return {
                 type,
