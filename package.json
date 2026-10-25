@@ -18,7 +18,8 @@
     "test:schema-pg:versions": "bash scripts/schema-change-versions.sh",
     "eval:schema": "server/node_modules/.bin/tsx scripts/schema-change-eval.ts",
     "queryshift": "server/node_modules/.bin/tsx queryshift/run.ts",
-    "queryshift:check-model": "server/node_modules/.bin/tsx queryshift/check-model.ts"
+    "queryshift:check-model": "server/node_modules/.bin/tsx queryshift/check-model.ts",
+    "queryshift:oracle-check": "server/node_modules/.bin/tsx queryshift/oracle-check.ts"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.3",

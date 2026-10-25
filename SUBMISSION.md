@@ -26,7 +26,7 @@ npm install --prefix server
 
 npm run queryshift                  # every known candidate judged on both datasets (16 candidates, 3 cases)
 npm run queryshift -- --loop        # rule engine -> mapping -> correction loop, no model: verified or needs_human_review
-npx vitest run queryshift server/src/ai    # 219 tests in 13 files
+npx vitest run queryshift server/src/ai    # 222 tests in 14 files
 ```
 
 With a model (synthetic data only is sent; see Safety). Put the key in `server/.env`, which is gitignored:
@@ -51,7 +51,7 @@ Notes from the earlier fresh-copy run (22 Oct 2026, the same files before they w
 
 ![Architecture](docs/queryshift-architecture.svg)
 
-- **Data flow.** A case is a folder: legacy query, source and target schema, a column mapping, two seeded datasets (primary and held-out) with a hand-derived reference result each, invariants written as independent SQL, and a set of candidate translations. The loop starts from the rule engine's conversion, renames it to the target schema, and runs it.
+- **Data flow.** A case is a folder: legacy query, source and target schema, a column mapping, two seeded datasets (primary and held-out) with a hand-derived reference result each (checked against a real Oracle, see below), invariants written as independent SQL, and a set of candidate translations. The loop starts from the rule engine's conversion, renames it to the target schema, and runs it.
 - **Model-assisted decisions.** Only one: given a query that failed, the measured evidence and the static findings, propose a corrected query with an explanation and its own stated doubts. GPT-5.6-luna through GoForge's AI layer (workspace policy check, audit log with exactly what was sent, structured outputs).
 - **Deterministic tools and checks.**
   1. *Rule engine* (pre-existing, see Reused components): Oracle syntax conversion and behaviour traps.
@@ -119,7 +119,7 @@ Planted silent failures, kept as candidates and checked on every test run: case 
 
 ## Known limitations
 
-- The reference results were derived by hand from documented Oracle behaviour by one author. No Oracle instance was available. A shared misunderstanding of Oracle would pass both datasets. (The correct translations, written separately, reproduced all six references on the first run.)
+- The reference results were derived by hand from documented Oracle behaviour by one author, because the harness runs without Oracle (the contract says so). They were then **checked against a real Oracle**: `npm run queryshift:oracle-check` loads the same data into an Oracle schema, runs each legacy query there and compares the answer with the reference with the harness's own comparator. On 25 Oct 2026, against Oracle Database 23.26 Free (Docker image `gvenzl/oracle-free:23-slim-faststart`), all 6 references (3 cases, primary and held-out data) are exactly what Oracle returns: [queryshift/reports/oracle-check.json](queryshift/reports/oracle-check.json). That is Oracle 23ai, not an older release, on two small datasets, and it needs Docker (not part of the default run). (The correct translations, written separately, had reproduced all six references on the first run.)
 - `verified` means: matched the primary data, the held-out data and the invariants, with no blocking finding. Two small datasets can still miss a case.
 - The static checks are heuristics over a parsed query. A query with no findings has not been shown to be right, and one with findings may be right. Some only apply when the legacy query contained a specific construct.
 - The guard is deliberately strict: an unquoted column named `do`, `set`, `lock` or `call` is refused.

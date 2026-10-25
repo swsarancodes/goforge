@@ -1,0 +1,92 @@
+{
+  "oracleVersion": "23.26.3.0.0",
+  "checkedAt": "2026-10-25T13:28:13.451Z",
+  "outcomes": [
+    {
+      "case": "case-01",
+      "dataset": "primary",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 7,
+      "columns": [
+        "CUST_ID",
+        "CUST_NM",
+        "POLCY_CNT",
+        "TOT_PREM"
+      ]
+    },
+    {
+      "case": "case-02",
+      "dataset": "primary",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 6,
+      "columns": [
+        "CUST_ID",
+        "CONTACT_LABEL",
+        "CLM_CNT",
+        "TOT_CLAIMED",
+        "AVG_PAID",
+        "OPEN_RATIO"
+      ]
+    },
+    {
+      "case": "case-03",
+      "dataset": "primary",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 5,
+      "columns": [
+        "CLM_ID",
+        "POLCY_ID",
+        "CLM_DAY",
+        "DAYS_TO_CLAIM",
+        "REVIEW_DT",
+        "CLM_AMT"
+      ]
+    },
+    {
+      "case": "case-01",
+      "dataset": "heldout",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 8,
+      "columns": [
+        "CUST_ID",
+        "CUST_NM",
+        "POLCY_CNT",
+        "TOT_PREM"
+      ]
+    },
+    {
+      "case": "case-02",
+      "dataset": "heldout",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 6,
+      "columns": [
+        "CUST_ID",
+        "CONTACT_LABEL",
+        "CLM_CNT",
+        "TOT_CLAIMED",
+        "AVG_PAID",
+        "OPEN_RATIO"
+      ]
+    },
+    {
+      "case": "case-03",
+      "dataset": "heldout",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 5,
+      "columns": [
+        "CLM_ID",
+        "POLCY_ID",
+        "CLM_DAY",
+        "DAYS_TO_CLAIM",
+        "REVIEW_DT",
+        "CLM_AMT"
+      ]
+    }
+  ]
+}
