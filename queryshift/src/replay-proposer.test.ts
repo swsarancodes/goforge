@@ -20,7 +20,8 @@ describe("playing back a committed recording", () => {
     });
 
     it("has nothing to say about a correction the recording does not have", async () => {
-        await expect(replayProposer(reports, "case-02").propose(asked(2))).rejects.toThrow(/no correction 2 \(it ends after 1\)/);
+        const last = Math.max(...readTrace(traceFile(reports, "case-02")).attempts.map((attempt) => attempt.n));
+        await expect(replayProposer(reports, "case-02").propose(asked(last + 1))).rejects.toThrow(new RegExp(`no correction ${last + 1} \\(it ends after ${last}\\)`));
     });
 });
 

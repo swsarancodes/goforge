@@ -62,7 +62,9 @@ describe("the case report", () => {
     it("lists every attempt with who produced it and what was measured, and the accepted query last", () => {
         const report = renderCaseReport(case2, replayed);
         expect(report).toContain("### Attempt 0: GoForge rule engine, then the schema mapping");
-        expect(report).toContain("### Attempt 1: model `gpt-5.6-luna`, answer replayed from `queryshift/reports/case-02.loop.json` (no model was called in this run)");
+        const model = recorded("case-02").attempts[1].proposal?.model;
+        expect(model, "the recorded model attempt names its model").toBeTruthy();
+        expect(report).toContain(`### Attempt 1: model \`${model}\`, answer replayed from \`queryshift/reports/case-02.loop.json\` (no model was called in this run)`);
         expect(report).toContain("**Primary data: FAIL.**");
         expect(report).toContain("The rows differ in: open_ratio (4 rows), contact_label (1 row).");
         expect(report).toContain("**Held-out data: PASS.**");
