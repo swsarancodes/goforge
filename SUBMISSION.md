@@ -5,7 +5,7 @@
 - Team name: **TO FILL**
 - Members and roles: **TO FILL**
 - Repository: https://github.com/swsarancodes/goforge
-- Final commit/tag: **TO FILL** (nothing is committed yet)
+- Final commit/tag: **TO FILL** at the freeze (`main` was `d2be6ca` when the clone check below was run)
 - Approved use-case contract: [docs/queryshift-contract.md](docs/queryshift-contract.md). Organizer decision: **pending**.
 
 ## Business outcome
@@ -26,7 +26,7 @@ npm install --prefix server
 
 npm run queryshift                  # every known candidate judged on both datasets (16 candidates, 3 cases)
 npm run queryshift -- --loop        # rule engine -> mapping -> correction loop, no model: verified or needs_human_review
-npx vitest run queryshift server/src/ai    # 217 tests (157 harness, 60 for the AI layer)
+npx vitest run queryshift server/src/ai    # 219 tests in 13 files
 ```
 
 With a model (synthetic data only is sent; see Safety). Put the key in `server/.env`, which is gitignored:
@@ -39,9 +39,9 @@ npm run queryshift -- --loop --proposer model --out queryshift/reports
 
 Other commands: `npm run queryshift -- --engine --show-sql` (what GoForge's rule engine alone makes of each query), `--case <dir> --candidate <file.sql>` (judge one query), `--timeout-ms`, `--max-corrections`, `--json`. More in [queryshift/README.md](queryshift/README.md).
 
-**Checked from a fresh copy** of exactly the files git would commit (tracked and untracked, ignored files left out: no `node_modules`, no `server/.env`), on the author's machine, 22 Oct 2026: both `npm install` commands finish in about 70 s, `npm run queryshift` takes a few seconds, the 217 tests pass in about 15 s. **Not run from a real `git clone`** (nothing is committed yet) and not on another machine or Node version.
+**Checked from a real `git clone`** of `main` (commit `d2be6ca`) on the author's machine, 25 Oct 2026: `npm install` and `npm install --prefix server` finish, `npm run queryshift` exits 0 ("Every candidate was judged as its case says"), `npm run queryshift -- --loop` without a model runs all three cases and exits 1 on purpose because 2 of 3 need a human (case 1 verified; cases 2 and 3 `needs_human_review` with reason `no_proposer`), and the 219 tests pass in about 10 s. Not run on another machine, OS or Node version.
 
-Notes from that run:
+Notes from the earlier fresh-copy run (22 Oct 2026, the same files before they were committed):
 
 - npm 11 prints "install scripts not yet covered by allowScripts" (esbuild, fsevents, `better-sqlite3`, `@swc/core`, `wa-sqlite`) and skips them. The harness and its tests do not need them and pass. The GoForge web app and its SQLite local mode were not exercised in the fresh copy and may need `npm approve-scripts`.
 - Without a key, `queryshift:check-model` says "Not ready: No OpenAI API key is set", and `--loop --proposer model` ends in `needs_human_review` with reason `proposer_failed` and that message. With an invalid key both report OpenAI's 401 without printing the key. (The wording mentions restarting the API, which is the web app's wording.) The fresh-copy run used the app's `check:openai` script, which is not on the `feat/queryshift` branch; `queryshift:check-model` was checked with a real, a blank and an invalid key.
@@ -104,7 +104,7 @@ Planted silent failures, kept as candidates and checked on every test run: case 
 
 ## Tests and evidence
 
-- Automated test output: [queryshift/reports/test-output.txt](queryshift/reports/test-output.txt) (217 tests; the whole repository: 91 files, 1,631 tests, at the last full run).
+- Automated test output: [queryshift/reports/test-output.txt](queryshift/reports/test-output.txt) (written at 217 tests; run again on 25 Oct 2026 it is 219. The whole repository: 107 files, 1,765 tests passing and 26 skipped because they need a real Oracle or PostgreSQL server, at the last full run).
 - Per-case validation reports: `queryshift/reports/case-0{1,2,3}.loop.json` and [known-candidates.json](queryshift/reports/known-candidates.json).
 - Adversarial test cases: the adversarial rows in both seeds (boundary dates and times, month ends, NULL email, NULL premium, NULL paid amount, a customer with no policy, a lapsed policy, equal amounts); `sql-guard.test.ts`; the `overfit_*` candidates; runaway-query tests in `database.test.ts`.
 - Redacted agent/tool trace: the `*.loop.json` files (every attempt with its SQL, verdict, evidence, findings, held-out result, model usage and audit-log id). They hold synthetic values only. The audit-log payloads themselves are in the application's audit store and were not exported.
@@ -127,11 +127,12 @@ Planted silent failures, kept as candidates and checked on every test run: case 
 - The expected-result CSV cannot express an empty string (an empty cell is NULL), which matches Oracle's treatment of `''` and means the harness cannot test that distinction at query level.
 - The wall-clock limit does not limit memory.
 - The model path was run once, on three cases. Failure modes of the model on harder cases are unmeasured.
-- Everything was run on one machine (macOS, Node 24.19.0); the fresh-copy check was not a real clone and not another OS or Node version.
+- Everything was run on one machine (macOS, Node 24.19.0); the real-clone check was run on that one machine only, not on another OS or Node version.
 
 ## Reused components
 
 - **GoForge** (diagram studio, SQL editor, Query Modernizer and its rule engine with its corpus) existed before the event: first commit 20 Aug 2026, the Query Modernizer from 17 Oct 2026, its rule engine from 20 Oct 2026. Its AI layer was rewritten from AWS Bedrock to the OpenAI Responses API on 22 Oct 2026, during the event; the files the correction call needs (`server/src/ai/{openai,policy,provider,structured}.ts` and the small `auth/context` and `db/stores` modules they import) are the first commit of the `feat/queryshift` branch. `queryshift/`, `server/src/ai/correct-query.ts` and `docs/queryshift-*.md` are the event work. The harness calls the rule engine (`convertQuery`) and does not change it.
+- **Also added to this repository during the event, outside this entry:** GoForge can now create an Oracle database for an account, run Oracle SQL on it and migrate it into a new PostgreSQL database with every table checked against Oracle, and its Schema Change page was extended (pull requests #1 to #14 on GitHub: database check before a run, step-by-step run, lock retry, new operations, PostgreSQL 12 to 18 checks). The harness in `queryshift/` does not use any of it and is judged without it; it is listed here so the history of the repository is not mistaken for the entry's scope.
 - **Starter pack:** `challenge_requirements.json` (comparison defaults) and the idea of `validator.py` (reimplemented in TypeScript, stricter about time of day). Case 1 has the same shape as the optional retail example (an outer join with a date predicate on the outer table) with a different domain, data and query.
 - **Libraries:** PGlite (`@electric-sql/pglite`), `@guanmingchiu/sqlparser-ts`, the official `openai` SDK, `zod`, `vitest`, `tsx`.
 - **AI-generated code:** the harness, the cases and these documents were written in sessions with an AI coding assistant (Claude Code) and checked by the tests described above. **TO CONFIRM with the team that this is the wording to submit.**
@@ -139,7 +140,7 @@ Planted silent failures, kept as candidates and checked on every test run: case 
 ## Before submitting (delete this section)
 
 - [ ] Team name, members, final commit/tag, organizer decision.
-- [ ] Once committed, run the instructions once more from a real `git clone` (the fresh-copy check already passed).
+- [x] Run the instructions from a real `git clone` (done 25 Oct 2026 on `d2be6ca`; do it once more on the final commit).
 - [ ] Record the backup demo and link it.
 - [ ] Re-run `npm run queryshift -- --loop --proposer model --out queryshift/reports` with the organizers' model if it differs, and update the model section.
 - [ ] Rotate the Neon password that was pasted into a chat; make sure no `.env` is committed.
