@@ -16,6 +16,7 @@
     "test:batch": "server/node_modules/.bin/tsx scripts/modernizer-batch.ts",
     "test:schema-pg": "server/node_modules/.bin/tsx scripts/schema-change-pg.ts",
     "test:schema-pg:versions": "bash scripts/schema-change-versions.sh",
+    "eval:schema": "server/node_modules/.bin/tsx scripts/schema-change-eval.ts",
     "queryshift": "server/node_modules/.bin/tsx queryshift/run.ts",
     "queryshift:check-model": "server/node_modules/.bin/tsx queryshift/check-model.ts"
   },

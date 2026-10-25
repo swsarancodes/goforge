@@ -131,9 +131,10 @@ npm run test:schema-pg:versions                          # every section on Post
 docker run -d --name goforge-schema -e POSTGRES_PASSWORD=schema -p 54330:5432 postgres:16 -c max_locks_per_transaction=1024
 npm run test:schema-pg                                   # every section against that one server
 npm run test:schema-pg -- model                          # one section: drops, dependents, lockwait, preflight, model, rename, columnrename, planner, health, locks, rewrites, compile, catalog, retrieval, facts, probe
+npm run eval:schema -- --sizes 50 --per-size 14       # a quick run of the generated-database evaluation
 ```
 
-The generated-database evaluation below (`scripts/schema-change-eval.ts`, `npm run eval:schema`) is not in this repository yet.
+`npm run eval:schema` measures table selection, plan checks, lint and execution on generated databases of 50, 300 and 1,000 tables (it uses the server in `SCHEMA_CHANGE_DATABASE_URL`, default the container above; `-- --sizes 50 --per-size 14` is a quick run):
 
 `npm run eval:schema` builds the databases (real foreign keys, tables with 260,000 rows), writes change requests in the words a person would use (with typos, partial names, a column name only, the same name in two schemas), runs each through retrieval, the checks and the compiler, executes the runbook on a copy of the database and verifies the result. It also feeds in requests that must be refused. Without `--live` the plans are the reference plans, so the plan-validity numbers measure the checks and the compiler, not a model; the model's own latency and token use are reported as not measured. `scripts/fake-model-server.ts` is a stand-in OpenAI endpoint for trying the page without a key.
 
