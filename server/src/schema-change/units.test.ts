@@ -220,6 +220,7 @@ describe("facts", () => {
             typeChanges: [{ from: "integer", to: "bigint" }],
             functions: ["now", "x; y"],
             defaults: [],
+            checks: [],
             relations: [{ schema: "public", name: "ix" }],
             schemas: ["public"],
         };
@@ -244,8 +245,21 @@ describe("facts", () => {
                 throw Object.assign(new Error("column \"active\" does not exist"), { code: "42703" });
             },
         };
-        const rejected = await probe(rejecting, { types: [], typeChanges: [], functions: [], defaults: [{ expression: "active", type: "text" }], relations: [], schemas: [] });
+        const rejected = await probe(rejecting, { types: [], typeChanges: [], functions: [], defaults: [{ expression: "active", type: "text" }], checks: [], relations: [], schemas: [] });
         expect([...rejected.defaults.values()]).toEqual(['column "active" does not exist']);
+
+        // a CHECK is planned against its table the same way, and a rejection is recorded, not thrown
+        const seenChecks: string[] = [];
+        const checking = {
+            async query(text: string) {
+                seenChecks.push(text);
+                if (text.startsWith("ROLLBACK")) return [];
+                throw Object.assign(new Error('column "nope" does not exist'), { code: "42703" });
+            },
+        };
+        const checked = await probe(checking, { types: [], typeChanges: [], functions: [], defaults: [], checks: [{ table: "public.orders", expression: "nope > 0" }], relations: [], schemas: [] });
+        expect([...checked.checks.values()]).toEqual(['column "nope" does not exist']);
+        expect(seenChecks.join("\n")).toContain("EXPLAIN SELECT 1 FROM public.orders WHERE (nope > 0)");
     });
 });
 

@@ -1,6 +1,6 @@
 import { aiSchemaPlanSchema, type AiSchemaPlan } from "../ai/schema-plan.js";
 import { compilePlan, discoverProbes } from "./compile.js";
-import { castKey, defaultKey, emptyProbes, relationKey, type ColumnFacts, type Dependent, type Facts, type IndexFacts, type ProbeRequest, type Probes, type TableFacts } from "./facts.js";
+import { castKey, checkKey, defaultKey, emptyProbes, relationKey, type ColumnFacts, type Dependent, type Facts, type IndexFacts, type ProbeRequest, type Probes, type TableFacts } from "./facts.js";
 import type { CompileSettings, Runbook } from "./runbook.js";
 
 /** Hand-made facts for tests: a table is as big as the test says, with the columns and indexes it lists. */
@@ -102,12 +102,13 @@ const STABLE = new Set(["now", "current_timestamp", "current_date"]);
 const IMMUTABLE = new Set(["lower", "upper", "abs", "coalesce"]);
 
 /** What the database would say, for tests that don't have one: every type is known, defaults are accepted unless they name a function nobody has, and nothing exists under a new name. */
-export function answer(request: ProbeRequest, overrides: { unknownTypes?: string[]; existing?: string[]; missingSchemas?: string[]; rejectedDefaults?: Record<string, string> } = {}): Probes {
+export function answer(request: ProbeRequest, overrides: { unknownTypes?: string[]; existing?: string[]; missingSchemas?: string[]; rejectedDefaults?: Record<string, string>; rejectedChecks?: Record<string, string> } = {}): Probes {
     const probes = emptyProbes();
     for (const type of [...request.types, ...request.typeChanges.flatMap((c) => [c.from, c.to])]) probes.types.set(type, overrides.unknownTypes?.includes(type) ? undefined : type);
     for (const change of request.typeChanges) probes.casts.set(castKey(change.from, change.to), CASTS[castKey(change.from, change.to)]);
     for (const name of request.functions) probes.volatility.set(name, VOLATILE.has(name) ? "v" : STABLE.has(name) ? "s" : IMMUTABLE.has(name) ? "i" : undefined);
     for (const { expression, type } of request.defaults) probes.defaults.set(defaultKey(expression, type), overrides.rejectedDefaults?.[expression]);
+    for (const { table, expression } of request.checks) probes.checks.set(checkKey(table, expression), overrides.rejectedChecks?.[expression]);
     for (const relation of request.relations) probes.relationExists.set(relationKey(relation.schema, relation.name), overrides.existing?.includes(relationKey(relation.schema, relation.name)) ?? false);
     for (const schema of request.schemas) probes.schemaExists.set(schema, !overrides.missingSchemas?.includes(schema));
     return probes;

@@ -94,7 +94,7 @@ describe("the schemas the model is given", () => {
         expect(properties).toBeLessThan(500);
         expect(JSON.stringify(schema).length).toBeLessThan(60_000);
         const operations = schema.properties.operations.items.anyOf as Json[];
-        expect(operations.map((operation) => operation.properties.type.const).sort()).toEqual(["add_column", "add_index", "add_relationship", "alter_column", "create_table", "drop_column", "drop_index", "drop_relationship", "drop_table", "rename_table"]);
+        expect(operations.map((operation) => operation.properties.type.const).sort()).toEqual(["add_check", "add_column", "add_index", "add_relationship", "add_unique", "alter_column", "create_table", "drop_column", "drop_constraint", "drop_index", "drop_relationship", "drop_table", "rename_table"]);
     });
 
     it("the model's plan schema has the same top-level keys as the plan validator", () => {

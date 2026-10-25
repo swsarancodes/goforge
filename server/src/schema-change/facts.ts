@@ -429,6 +429,8 @@ export interface ProbeRequest {
     functions: string[];
     /** Default expressions with the type they are for: PostgreSQL is asked to plan `SELECT CAST(expression AS type)`. */
     defaults: { expression: string; type: string }[];
+    /** CHECK expressions with the (quoted, schema-qualified) table they are for: PostgreSQL is asked to plan `SELECT 1 FROM table WHERE (expression)`. */
+    checks: { table: string; expression: string }[];
     /** Quoted, schema-qualified names the plan wants to create: are they free? */
     relations: { schema: string; name: string }[];
     schemas: string[];
@@ -443,6 +445,8 @@ export interface Probes {
     volatility: Map<string, "i" | "s" | "v" | undefined>;
     /** PostgreSQL's message when it rejects a default expression for a type; undefined when it accepts it. */
     defaults: Map<string, string | undefined>;
+    /** PostgreSQL's message when it rejects a CHECK expression on a table; undefined when it accepts it. */
+    checks: Map<string, string | undefined>;
     /** Whether a table, index or sequence already has this schema-qualified name. */
     relationExists: Map<string, boolean>;
     schemaExists: Map<string, boolean>;
@@ -450,9 +454,10 @@ export interface Probes {
 
 export const castKey = (from: string, to: string): string => `${from}\u0000${to}`;
 export const defaultKey = (expression: string, type: string): string => `${type}\u0000${expression}`;
+export const checkKey = (table: string, expression: string): string => `${table}\u0000${expression}`;
 export const relationKey = (schema: string, name: string): string => `${schema}.${name}`;
 
-export const emptyProbes = (): Probes => ({ types: new Map(), casts: new Map(), volatility: new Map(), defaults: new Map(), relationExists: new Map(), schemaExists: new Map() });
+export const emptyProbes = (): Probes => ({ types: new Map(), casts: new Map(), volatility: new Map(), defaults: new Map(), checks: new Map(), relationExists: new Map(), schemaExists: new Map() });
 
 const quoteName = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 
@@ -520,6 +525,20 @@ export async function probe(client: Queryable, request: ProbeRequest): Promise<P
             if (typeof code !== "string") throw error;
             await client.query("ROLLBACK").catch(() => undefined);
             probes.defaults.set(key, error instanceof Error ? error.message : String(error));
+        }
+    }
+    // The same for CHECK expressions: planned (never run) against the table, so unknown columns, type mismatches and a result that is not boolean are PostgreSQL's to report.
+    for (const { table, expression } of request.checks) {
+        const key = checkKey(table, expression);
+        if (probes.checks.has(key)) continue;
+        try {
+            await runReadOnly(client, [`EXPLAIN SELECT 1 FROM ${table} WHERE (${expression})`]);
+            probes.checks.set(key, undefined);
+        } catch (error) {
+            const code = (error as { code?: unknown }).code;
+            if (typeof code !== "string") throw error;
+            await client.query("ROLLBACK").catch(() => undefined);
+            probes.checks.set(key, error instanceof Error ? error.message : String(error));
         }
     }
     return probes;

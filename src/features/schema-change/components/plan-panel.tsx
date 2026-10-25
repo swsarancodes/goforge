@@ -149,6 +149,12 @@ function describeOperation(operation: PlanResponse["plan"]["operations"][number]
             return `index ${(operation.index as { name: string }).name} on ${get("tableName")} (${((operation.index as { columns: string[] }).columns ?? []).join(", ")})`;
         case "drop_index":
             return `drop index ${get("indexName")} on ${get("tableName")}`;
+        case "add_unique":
+            return `unique${operation.constraintName ? ` ${get("constraintName")}` : ""} on ${get("tableName")} (${((operation.columns as string[]) ?? []).join(", ")})`;
+        case "add_check":
+            return `check${operation.constraintName ? ` ${get("constraintName")}` : ""} on ${get("tableName")}: ${get("expression")}`;
+        case "drop_constraint":
+            return `drop constraint ${get("constraintName")} on ${get("tableName")}`;
         default:
             return String(operation.type);
     }

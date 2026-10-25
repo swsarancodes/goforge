@@ -94,6 +94,9 @@ function makeOperationSchema<Changes extends z.ZodTypeAny>(changes: Changes) {
         }).strict(),
         z.object({ type: z.literal("add_index"), tableName: identifier, index: aiIndexSchema }).strict(),
         z.object({ type: z.literal("drop_index"), tableName: identifier, indexName: identifier }).strict(),
+        z.object({ type: z.literal("add_unique"), tableName: identifier, constraintName: identifier.nullable().optional(), columns: z.array(identifier).min(1).max(32) }).strict(),
+        z.object({ type: z.literal("add_check"), tableName: identifier, constraintName: identifier.nullable().optional(), expression: z.string().trim().min(1).max(400) }).strict(),
+        z.object({ type: z.literal("drop_constraint"), tableName: identifier, constraintName: identifier }).strict(),
     ]);
 }
 

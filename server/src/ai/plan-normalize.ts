@@ -79,6 +79,12 @@ const normalizeOperation = (value: unknown): unknown => {
         }
         case "drop_index":
             return { type, tableName, indexName: operation.indexName ?? operation.name };
+        case "add_unique":
+            return { type, tableName, constraintName: operation.constraintName ?? operation.name, columns: operation.columns ?? (operation.column !== undefined ? [operation.column] : undefined) };
+        case "add_check":
+            return { type, tableName, constraintName: operation.constraintName ?? operation.name, expression: operation.expression ?? operation.condition ?? operation.check };
+        case "drop_constraint":
+            return { type, tableName, constraintName: operation.constraintName ?? operation.name };
         case "add_relationship":
             return {
                 type,
