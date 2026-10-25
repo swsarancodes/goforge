@@ -123,3 +123,55 @@ describe("drop_constraint", () => {
         expect(errors(drop("nothing_here"))).toEqual(["unknown-constraint"]);
     });
 });
+
+describe("add_primary_key", () => {
+    const heap = (overrides: Partial<Parameters<typeof table>[0]> = {}) =>
+        table({ name: "events", rows: 5_000_000, bytes: 400 * MIB, columns: ["event_id:bigint", "kind:text", "at:timestamp with time zone:notnull"], primaryKey: [], ...overrides });
+    const add = (operation: Record<string, unknown>, ...tables: ReturnType<typeof table>[]) => compile(plan({ type: "add_primary_key", tableName: "events", ...operation }), facts(...(tables.length ? tables : [heap()])));
+
+    it("makes the columns NOT NULL first, builds a unique index without blocking writes, then attaches it", () => {
+        const runbook = add({ columns: ["event_id"] });
+        expect(errors(runbook)).toEqual([]);
+        expect(runbook.steps.map((step) => step.title)).toEqual([
+            "Add a NOT VALID check that public.events.event_id is not null",
+            "Validate that no row of public.events.event_id is null",
+            "Set public.events.event_id NOT NULL",
+            "Drop the helper check on public.events.event_id",
+            "Build a unique index for the primary key of public.events(event_id)",
+            "Make the index the primary key of public.events",
+        ]);
+        expect(sql(runbook)).toContain("CREATE UNIQUE INDEX CONCURRENTLY events_pkey ON public.events (event_id);");
+        expect(sql(runbook)).toContain("ADD CONSTRAINT events_pkey PRIMARY KEY USING INDEX events_pkey;");
+        const expected = runbook.expected.tables[0];
+        expect(expected.primaryKey).toEqual(["event_id"]);
+        expect(expected.columns.find((column) => column.name === "event_id")?.notNull).toBe(true);
+    });
+
+    it("skips the NOT NULL steps for columns that already are, and covers several columns", () => {
+        const runbook = add({ constraintName: "events_pk", columns: ["at", "event_id"] });
+        expect(errors(runbook)).toEqual([]);
+        expect(runbook.steps.some((step) => step.title.includes("public.events.at is not null"))).toBe(false);
+        expect(sql(runbook)).toContain("CREATE UNIQUE INDEX CONCURRENTLY events_pk ON public.events (at, event_id);");
+        expect(runbook.expected.tables[0].primaryKey).toEqual(["at", "event_id"]);
+    });
+
+    it("is one step on a table the plan creates", () => {
+        const runbook = compile(plan({ type: "create_table", table: { name: "audit", fields: [{ name: "id", dataType: "bigint" }, { name: "note", dataType: "text" }] } }, { type: "add_primary_key", tableName: "audit", columns: ["id"] }), facts());
+        expect(errors(runbook)).toEqual([]);
+        expect(runbook.steps.map((step) => step.sql).join("\n")).toContain("ADD CONSTRAINT audit_pkey PRIMARY KEY (id);");
+    });
+
+    it("lets a later foreign key point at the new key", () => {
+        const child = table({ name: "event_notes", rows: 10, columns: ["id:bigint:notnull", "event_id:bigint"] });
+        const runbook = compile(plan({ type: "add_primary_key", tableName: "events", columns: ["event_id"] }, { type: "add_relationship", relationship: { sourceTable: "events", sourceColumn: "event_id", targetTable: "event_notes", targetColumn: "event_id" } }), facts(heap(), child));
+        expect(errors(runbook)).toEqual([]);
+    });
+
+    it("refuses a table that has a key, a partitioned table, and columns or names that are wrong", () => {
+        expect(errors(add({ columns: ["id"] }, table({ name: "events", columns: ["id:bigint:notnull"] })))).toEqual(["has-primary-key"]);
+        expect(errors(add({ columns: ["event_id"] }, heap({ partitions: ["public.events_1"] })))).toEqual(["unsupported"]);
+        expect(errors(add({ columns: ["nope"] }))).toEqual(["unknown-column"]);
+        expect(errors(add({ columns: ["event_id", "EVENT_ID"] }))).toEqual(["duplicate-column"]);
+        expect(add({ constraintName: "events_idx", columns: ["event_id"] }, heap({ indexes: [{ name: "events_idx", columns: ["kind"] }] })).findings.map((finding) => finding.code)).toContain("name-taken");
+    });
+});

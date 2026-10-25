@@ -155,6 +155,8 @@ function describeOperation(operation: PlanResponse["plan"]["operations"][number]
             return `check${operation.constraintName ? ` ${get("constraintName")}` : ""} on ${get("tableName")}: ${get("expression")}`;
         case "drop_constraint":
             return `drop constraint ${get("constraintName")} on ${get("tableName")}`;
+        case "add_primary_key":
+            return `primary key${operation.constraintName ? ` ${get("constraintName")}` : ""} on ${get("tableName")} (${((operation.columns as string[]) ?? []).join(", ")})`;
         default:
             return String(operation.type);
     }

@@ -86,6 +86,8 @@ interface Scenario {
     /** The runbook is expected to compile with this error code instead of running. */
     refused?: string;
     includeOptional?: boolean;
+    /** SQL run on the scratch database before the plan is compiled (for what the shared fixture does not have). */
+    setup?: string;
 }
 
 const one = async (client: PgClient, sql: string): Promise<Record<string, unknown> | undefined> => (await client.query(sql)).rows[0];
@@ -265,6 +267,18 @@ const SCENARIOS: Scenario[] = [
         },
     },
     {
+        name: "add a primary key to a table without one (NOT NULL first, unique index CONCURRENTLY, USING INDEX)",
+        setup: "CREATE TABLE orders_nopk AS SELECT id, customer_id, status FROM orders; ANALYZE orders_nopk;",
+        tables: ["public.orders_nopk"],
+        operations: [{ type: "add_primary_key", tableName: "orders_nopk", columns: ["id"] }],
+        async verify(client, checks) {
+            checks.equal(await one(client, "SELECT contype::text AS t, (SELECT attnotnull FROM pg_attribute WHERE attrelid = 'orders_nopk'::regclass AND attname = 'id') AS nn FROM pg_constraint WHERE conrelid = 'orders_nopk'::regclass AND contype = 'p'"), { t: "p", nn: true }, "a primary key on a NOT NULL column");
+            checks.equal((await one(client, "SELECT indisprimary AS p, indisvalid AS v FROM pg_index WHERE indexrelid = 'orders_nopk_pkey'::regclass"))?.p, true, "the index built for it is the primary key's");
+            await client.query("INSERT INTO orders_nopk VALUES (1, 1, 'dup')").then(() => checks.ok(false, "a duplicate key is refused"), () => checks.ok(true, "a duplicate key is refused"));
+            checks.equal((await one(client, "SELECT count(*)::int AS n FROM pg_constraint WHERE conrelid = 'orders_nopk'::regclass AND contype = 'c'"))?.n, 0, "the helper CHECK is gone");
+        },
+    },
+    {
         name: "refuses NOT NULL without a default on a table with rows",
         tables: ["public.orders"],
         operations: [{ type: "add_column", tableName: "orders", field: { name: "must_have", dataType: "text", nullable: false } }],
@@ -289,6 +303,7 @@ async function compileSection(checks: Checks, only?: string) {
         for (const scenario of SCENARIOS) {
             if (only && !scenario.name.includes(only)) continue;
             await withDatabase(async (client) => {
+                if (scenario.setup) await client.query(scenario.setup);
                 const plan = parsePlan(scenario.operations);
                 const { runbook } = await compileOn(client, plan, scenario.tables);
                 if (scenario.refused) {
@@ -348,6 +363,7 @@ async function locksSection(checks: Checks) {
         for (const scenario of SCENARIOS) {
             if (scenario.refused || scenario.name.includes("(fails") || scenario.name.includes("has NULLs")) continue;
             await withDatabase(async (client) => {
+                if (scenario.setup) await client.query(scenario.setup);
                 const { runbook } = await compileOn(client, parsePlan(scenario.operations), scenario.tables);
                 for (const step of runbook.steps) {
                     if (step.optional && !scenario.includeOptional) continue;
@@ -960,7 +976,7 @@ async function modelSection(checks: Checks) {
     ];
     let compared = 0;
     try {
-        const scenarios = [...SCENARIOS.filter((scenario) => !(scenario.refused || scenario.name.includes("(fails") || scenario.name.includes("has NULLs"))).map((scenario) => ({ name: scenario.name, tables: scenario.tables, operations: scenario.operations, setup: undefined as string | undefined })), ...own];
+        const scenarios = [...SCENARIOS.filter((scenario) => !(scenario.refused || scenario.name.includes("(fails") || scenario.name.includes("has NULLs"))).map((scenario) => ({ name: scenario.name, tables: scenario.tables, operations: scenario.operations, setup: scenario.setup })), ...own];
         for (const scenario of scenarios) {
             await withDatabase(async (client) => {
                 if (scenario.setup) await client.query(scenario.setup);

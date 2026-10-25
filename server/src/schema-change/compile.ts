@@ -299,6 +299,7 @@ class Compiler {
             case "add_unique": return this.addUnique(operation);
             case "add_check": return this.addCheck(operation);
             case "drop_constraint": return this.dropConstraint(operation);
+            case "add_primary_key": return this.addPrimaryKey(operation);
             default:
                 this.fail("unsupported-operation", `Operation ${index + 1} has a type this compiler does not know.`);
         }
@@ -1300,6 +1301,49 @@ class Compiler {
             });
         }
         table.checks.push({ name, kind: "check", definition: `CHECK ((${expression}))`, columns: used, validated: true });
+    }
+
+    private addPrimaryKey(operation: Extract<Operation, { type: "add_primary_key" }>): void {
+        const table = this.findTable(operation.tableName);
+        const label = table.qualified;
+        if (table.primaryKey.length > 0) this.fail("has-primary-key", `${label} already has a primary key (${table.primaryKey.join(", ")}). Drop it first, or change the key some other way.`, table.qualified);
+        if (table.partitioned) this.fail("unsupported", `${label} is partitioned. A primary key on a partitioned table has to include the partition key and is built partition by partition; that is not compiled.`, table.qualified);
+        const columns = operation.columns.map((name) => this.findColumn(table, name));
+        if (new Set(columns.map((column) => lower(column.name))).size !== columns.length) this.fail("duplicate-column", `The primary key of ${label} names a column twice.`, table.qualified);
+        const names = columns.map((column) => column.name);
+        const target = qualifiedIdent(table.schema, table.name);
+        const given = operation.constraintName ?? undefined;
+        const name = given ?? limitName(`${table.name}_pkey`, this.names(table));
+        this.claimRelation(table.schema, name, "Primary key");
+        if (this.names(table).has(name)) this.fail("name-taken", `${label} already has a constraint called ${name}.`, table.qualified);
+
+        // A primary key makes its columns NOT NULL. Doing that first, through the validated CHECK, keeps ADD PRIMARY KEY from having to read the table under its lock.
+        for (const column of columns) {
+            if (column.notNull) continue;
+            if (column.nullFraction !== null && column.nullFraction > 0) this.note("warning", "has-nulls", `${label}.${column.name} has NULLs according to the table statistics (about ${(column.nullFraction * 100).toFixed(1)}% of rows). A primary key cannot have any: the validation step will fail until they are filled.`, table.qualified);
+            if (column.generated === null && column.default === null) this.note("info", "null-key", `${label}.${column.name} has no default, so rows inserted without it would fail once it is NOT NULL.`, table.qualified);
+            this.notNullSteps(table, column.name);
+            column.notNull = true;
+        }
+
+        const list = names.map(ident).join(", ");
+        if (sizeClass(table) === "new") {
+            this.add({ title: `Add the primary key ${name} to ${label}`, sql: `ALTER TABLE ${target} ADD CONSTRAINT ${ident(name)} PRIMARY KEY (${list});`, mode: "short", lock: "ACCESS EXCLUSIVE", work: "none", table });
+        } else {
+            this.concurrentIndexStep(table, name, names, true, `Build a unique index for the primary key of ${label}(${names.join(", ")})`);
+            this.add({
+                title: `Make the index the primary key of ${label}`,
+                sql: `ALTER TABLE ${target} ADD CONSTRAINT ${ident(name)} PRIMARY KEY USING INDEX ${ident(name)};`,
+                mode: "short",
+                lock: "ACCESS EXCLUSIVE",
+                work: "metadata",
+                table,
+                notes: ["The columns are already NOT NULL and the index is built and valid, so this only changes the catalog.", "A unique index fails to build if the table already has duplicates: find them with SELECT " + list + ", count(*) FROM " + target + " GROUP BY " + list + " HAVING count(*) > 1 LIMIT 10;"],
+                undo: `ALTER TABLE ${target} DROP CONSTRAINT ${ident(name)};`,
+            });
+        }
+        table.primaryKey = names;
+        table.indexes.push({ name, definition: "", columns: names, uses: names, method: "btree", unique: true, primary: true, valid: true, partial: false, constraint: name, bytes: 0, scans: null });
     }
 
     private dropConstraint(operation: Extract<Operation, { type: "drop_constraint" }>): void {
