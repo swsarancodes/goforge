@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { installOpenAiBackend } from "../../server/src/ai/openai";
 import { DEFAULT_SETTINGS } from "../../server/src/ai/policy";
 import { getAuditStore, installAiStores } from "../../server/src/ai/provider";
+import { substituteBinds } from "./binds";
 import { databaseFor, databasesFor, loadCase, type LoadedCase } from "./case";
 import type { Database } from "./database";
 import { hardCodingSuspicion, runLoop, type ProposalInput, type Proposer } from "./loop";
@@ -298,6 +299,41 @@ describe("the wall-clock limit in the loop", () => {
         // the database came back with its data: the next query is judged normally
         expect(result.outcome).toBe("verified");
         expect(d2.primary.restarts).toBeGreaterThanOrEqual(1);
+    });
+});
+
+describe("bind variables", () => {
+    // Case 1's file says `>= :cutoff`; case.json says the reference result was produced with 2026-01-01.
+    it("reads a declared bind variable as the value the case gives it, and verifies without a model (case 1)", async () => {
+        expect(case1.legacyTemplate).toContain(":cutoff");
+        expect(case1.legacySql).not.toContain(":cutoff");
+        const result = await run(case1, d1);
+        expect(result.outcome).toBe("verified");
+        expect(result.reasons).toEqual([]);
+        expect(result.attempts).toHaveLength(1);
+        expect(result.attempts[0].sql).toContain("TO_DATE('2026-01-01', 'YYYY-MM-DD')");
+    });
+
+    it("sends a bind variable the case gives no value for to a human, and asks no model", async () => {
+        const proposer = scripted([candidate(case1, "correct.sql")]);
+        const result = await run({ ...case1, legacySql: case1.legacyTemplate }, d1, { proposer });
+        expect(result.outcome).toBe("needs_human_review");
+        expect(result.reasons.map((reason) => reason.code)).toEqual(["bind_parameters"]);
+        expect(result.reasons[0].message).toContain(":cutoff");
+        expect(result.reasons[0].message).toContain("bindValues");
+        // PostgreSQL cannot run `:cutoff`, and the loop does not pretend otherwise or try to correct around it
+        expect(result.attempts).toHaveLength(1);
+        expect(result.attempts[0].verdict).toBe("error");
+        expect(proposer.asked).toHaveLength(0);
+    });
+
+    it("measures against the declared value: another value gives another result, which is not the reference", async () => {
+        const june = { type: "date" as const, value: "2026-06-01" };
+        const result = await run({ ...case1, legacySql: substituteBinds(case1.legacyTemplate, { cutoff: june }).sql }, d1);
+        expect(result.outcome).toBe("needs_human_review");
+        expect(result.reasons.map((reason) => reason.code)).toEqual(["no_proposer"]);
+        expect(result.attempts[0].verdict).toBe("fail");
+        expect(result.attempts[0].sql).toContain("2026-06-01");
     });
 });
 

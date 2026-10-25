@@ -197,7 +197,7 @@ async function runLoopOn(options: { loaded: LoadedCase; db: Database; proposer?:
     const findings0 = await read(mapped.sql, report);
     attempts.push({ n: 0, source: "rule-engine", sql: mapped.sql, verdict: report.verdict, summary: report.summary, findings: findings0, evidence: report.verdict === "pass" ? undefined : { ...diagnose(loaded, report), staticFindings: suspects(findings0) } });
     if (conversion.parameters.length > 0) {
-        reasons.push({ code: "bind_parameters", message: `The query has bind variables (${conversion.parameters.join(", ")}); the rule engine replaced them and the reference result does not say with what.` });
+        reasons.push({ code: "bind_parameters", message: `The legacy query has bind variables the case gives no value for (${conversion.parameters.join(", ")}). The reference result belongs to particular values, so the converted query cannot be run and compared until case.json declares them under "bindValues". No model is asked: nothing it proposed could be checked.` });
         return finish("needs_human_review");
     }
     if (report.verdict === "pass") return finish((await accepted(attempts[0])) ? "verified" : "needs_human_review");
