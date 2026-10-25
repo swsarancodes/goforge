@@ -23,6 +23,8 @@ export interface TableSpec {
     checks?: { name: string; definition: string; columns: string[] }[];
     partitions?: string[];
     views?: string[];
+    rowSecurity?: boolean;
+    privileges?: { grantee: string; privilege: string; grantable?: boolean; owner?: boolean }[];
     /** Objects that depend on a column (`column` is its name) or, with no column, on the table. */
     dependents?: { column?: string; kind: Dependent["kind"]; description: string; blocks?: boolean; external?: boolean }[];
 }
@@ -67,6 +69,8 @@ export function table(spec: TableSpec): TableFacts {
         dependentViews: spec.views ?? [],
         dependents: [],
         userTriggers: 0,
+        rowSecurity: spec.rowSecurity ?? false,
+        privileges: (spec.privileges ?? []).map((privilege) => ({ grantable: false, owner: false, ...privilege })),
         stats: null,
     };
     for (const dependent of spec.dependents ?? []) {

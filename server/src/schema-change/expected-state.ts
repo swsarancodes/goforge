@@ -19,6 +19,8 @@ export interface ExpectedTable {
     checks: { name: string; validated: boolean }[];
     foreignKeys: { name: string; columns: string[]; refTable: string; refColumns: string[]; validated: boolean }[];
     indexes: { name: string; columns: (string | null)[]; unique: boolean }[];
+    /** Views that depend on the table, schema qualified: the others it already had, and the old name a rename leaves behind. */
+    views: string[];
 }
 
 export interface ExpectedState {
@@ -30,7 +32,7 @@ export interface ExpectedState {
 export interface Mismatch {
     table: string;
     /** What differs: a column, index, constraint, foreign key, the primary key, or the table itself. */
-    kind: "table" | "column" | "primary-key" | "unique" | "check" | "foreign-key" | "index";
+    kind: "table" | "column" | "primary-key" | "unique" | "check" | "foreign-key" | "index" | "view";
     message: string;
 }
 
@@ -43,6 +45,7 @@ export function expectedState(original: Map<string, TableFacts>, final: Map<stri
         checks: table.checks.map((check) => ({ name: check.name, validated: check.validated })),
         foreignKeys: table.foreignKeys.map((fk) => ({ name: fk.name, columns: [...fk.columns], refTable: `${fk.refSchema}.${fk.refTable}`, refColumns: [...fk.refColumns], validated: fk.validated })),
         indexes: table.indexes.filter((index) => !index.primary).map((index) => ({ name: index.name, columns: [...index.columns], unique: index.unique })),
+        views: [...table.dependentViews].sort(),
     }));
     const kept = new Set(tables.map((table) => table.qualified));
     const absent = [...original.keys()].filter((key) => !kept.has(key));
@@ -110,6 +113,13 @@ export function diffExpected(expected: ExpectedState, actual: Facts): Mismatch[]
         }
         for (const have of real.foreignKeys) {
             if (!table.foreignKeys.some((fk) => fk.name === have.name)) note("foreign-key", `Foreign key ${have.name} exists, but the plan did not expect it.`);
+        }
+
+        for (const view of table.views) {
+            if (!real.dependentViews.includes(view)) note("view", `View ${view} should depend on this table, but it does not exist.`);
+        }
+        for (const view of real.dependentViews) {
+            if (!table.views.includes(view)) note("view", `View ${view} depends on this table, but the plan did not expect it.`);
         }
 
         for (const index of table.indexes) {

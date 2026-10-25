@@ -135,12 +135,14 @@ export interface CompileSettings {
     lockTimeoutSeconds: number;
     /** Attempts a step that takes a strong lock makes before it gives up (1 means it does not retry). */
     lockAttempts: number;
+    /** Renaming an existing table leaves a view under the old name, so applications keep working until they have switched. */
+    compatViews: boolean;
     backfillBatchRows: number;
     backfillPauseMs: number;
     defaultSchema: string;
 }
 
-export const DEFAULT_COMPILE_SETTINGS: CompileSettings = { lockTimeoutSeconds: 2, lockAttempts: 8, backfillBatchRows: 10_000, backfillPauseMs: 50, defaultSchema: "public" };
+export const DEFAULT_COMPILE_SETTINGS: CompileSettings = { lockTimeoutSeconds: 2, lockAttempts: 8, compatViews: true, backfillBatchRows: 10_000, backfillPauseMs: 50, defaultSchema: "public" };
 
 const statementLines = (sql: string): string[] => sql.replace(/\s+$/, "").split("\n");
 

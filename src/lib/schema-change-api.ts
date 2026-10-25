@@ -115,7 +115,7 @@ export interface Runbook {
     script: string;
     uncompiled: number[];
     server: { version: string; collectedAt: string };
-    settings: { lockTimeoutSeconds: number; lockAttempts: number; backfillBatchRows: number; backfillPauseMs: number; defaultSchema: string };
+    settings: { lockTimeoutSeconds: number; lockAttempts: number; compatViews: boolean; backfillBatchRows: number; backfillPauseMs: number; defaultSchema: string };
     /** What the tables should look like once the steps that run by default have run, for checking the database afterwards. */
     expected: ExpectedState;
 }
@@ -128,6 +128,7 @@ export interface ExpectedTable {
     checks: { name: string; validated: boolean }[];
     foreignKeys: { name: string; columns: string[]; refTable: string; refColumns: string[]; validated: boolean }[];
     indexes: { name: string; columns: (string | null)[]; unique: boolean }[];
+    views: string[];
 }
 
 export interface ExpectedState {
@@ -310,7 +311,7 @@ export const fetchPreflight = (connectionId: string, tables: string[], signal?: 
 
 export interface VerifyMismatch {
     table: string;
-    kind: "table" | "column" | "primary-key" | "unique" | "check" | "foreign-key" | "index";
+    kind: "table" | "column" | "primary-key" | "unique" | "check" | "foreign-key" | "index" | "view";
     message: string;
 }
 

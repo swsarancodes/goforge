@@ -361,8 +361,8 @@ describe("tables, renames and drops", () => {
         expect(errors(compile(plan({ type: "create_table", table: { name: "t", fields: [field, { name: "ID", dataType: "bigint" }] } }), facts()))).toEqual(["column-exists"]);
     });
 
-    it("renames a table and says it breaks callers; later steps see the new name", () => {
-        const runbook = compile(plan({ type: "rename_table", tableName: "orders", newName: "sales_orders" }, { type: "add_column", tableName: "sales_orders", field: { name: "x", dataType: "text" } }), facts(orders()));
+    it("renames a table and says it breaks callers when compatibility views are off; later steps see the new name", () => {
+        const runbook = compile(plan({ type: "rename_table", tableName: "orders", newName: "sales_orders" }, { type: "add_column", tableName: "sales_orders", field: { name: "x", dataType: "text" } }), facts(orders()), { settings: { compatViews: false } });
         expect(errors(runbook)).toEqual([]);
         expect(runbook.steps[0]).toMatchObject({ breaksClients: true, lock: "ACCESS EXCLUSIVE" });
         expect(runbook.steps[1].sql).toContain("ALTER TABLE public.sales_orders ADD COLUMN x text;");

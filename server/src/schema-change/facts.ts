@@ -94,6 +94,15 @@ export interface TableStats {
     modificationsSinceAnalyze: number;
 }
 
+/** One privilege on a table as the catalog lists it (aclexplode of relacl); `grantee` is a role name or PUBLIC. */
+export interface TablePrivilege {
+    grantee: string;
+    privilege: string;
+    grantable: boolean;
+    /** The grantee owns the table: its privileges are implied and a copy of the table's grants does not repeat them. */
+    owner: boolean;
+}
+
 export interface TableFacts {
     schema: string;
     name: string;
@@ -121,6 +130,9 @@ export interface TableFacts {
     /** Objects on other tables, and functions, that depend on this table or any of its columns: what would block `DROP TABLE`. */
     dependents: Dependent[];
     userTriggers: number;
+    /** Row-level security is switched on: a view over the table would not apply the policies to its owner. */
+    rowSecurity: boolean;
+    privileges: TablePrivilege[];
     stats: TableStats | null;
     /** True for a table the plan itself creates: empty, with no history. */
     isNew?: boolean;
@@ -192,6 +204,8 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
                 t.relkind = 'p' AND EXISTS (SELECT 1 FROM pg_partition_tree(t.oid) p WHERE p.level > 1) AS nested_partitions,
                 CASE WHEN t.relkind = 'p' THEN (SELECT COALESCE(json_agg(p.name ORDER BY p.name), '[]'::json) FROM (SELECT pn.nspname || '.' || pc.relname AS name FROM pg_partition_tree(t.oid) pt JOIN pg_class pc ON pc.oid = pt.relid JOIN pg_namespace pn ON pn.oid = pc.relnamespace WHERE pt.level = 1 ORDER BY 1 LIMIT ${MAX_LISTED_PARTITIONS}) p) ELSE '[]'::json END AS partitions,
                 (SELECT count(*) FROM pg_trigger g WHERE g.tgrelid = t.oid AND NOT g.tgisinternal)::int AS user_triggers,
+                (SELECT c3.relrowsecurity FROM pg_class c3 WHERE c3.oid = t.oid) AS row_security,
+                COALESCE((SELECT json_agg(json_build_object('grantee', CASE WHEN a.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(a.grantee) END, 'privilege', a.privilege_type, 'grantable', a.is_grantable, 'owner', a.grantee = c2.relowner) ORDER BY a.grantee, a.privilege_type) FROM pg_class c2, aclexplode(c2.relacl) a WHERE c2.oid = t.oid), '[]'::json) AS privileges,
                 s.n_live_tup::text AS live, s.n_dead_tup::text AS dead, s.last_vacuum, s.last_autovacuum, s.last_analyze, s.last_autoanalyze,
                 s.seq_scan::text AS seq_scan, s.idx_scan::text AS idx_scan, s.n_mod_since_analyze::text AS mods
          FROM t LEFT JOIN pg_stat_user_tables s ON s.relid = t.oid`,
@@ -303,6 +317,8 @@ export async function loadFacts(client: Queryable, qualified: string[]): Promise
             dependentViews: [],
             dependents: [],
             userTriggers: Number(row.user_triggers),
+            rowSecurity: row.row_security === true,
+            privileges: (row.privileges as TablePrivilege[] | null) ?? [],
             stats: hasStats
                 ? {
                       liveTuples: Number(row.live),
