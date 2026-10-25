@@ -2,6 +2,7 @@ import type { AiSchemaPlan } from "../ai/schema-plan.js";
 import { keyedBackfill, pagedBackfill } from "./backfill.js";
 import {
     castKey,
+    checkKey,
     defaultKey,
     emptyProbes,
     qualifiedName,
@@ -76,7 +77,7 @@ class Compiler {
     private readonly uncompiled: number[] = [];
     private tables: Map<string, TableFacts>;
     private readonly settings: CompileSettings;
-    private readonly needed: ProbeRequest = { types: [], typeChanges: [], functions: [], defaults: [], relations: [], schemas: [] };
+    private readonly needed: ProbeRequest = { types: [], typeChanges: [], functions: [], defaults: [], checks: [], relations: [], schemas: [] };
     private current = -1;
     /** Names this plan has claimed so far, so two operations can't both create `orders_status_idx`. */
     private readonly claimedRelations = new Set<string>();
@@ -295,6 +296,9 @@ class Compiler {
             case "drop_relationship": return this.dropRelationship(operation);
             case "add_index": return this.addIndex(operation);
             case "drop_index": return this.dropIndex(operation);
+            case "add_unique": return this.addUnique(operation);
+            case "add_check": return this.addCheck(operation);
+            case "drop_constraint": return this.dropConstraint(operation);
             default:
                 this.fail("unsupported-operation", `Operation ${index + 1} has a type this compiler does not know.`);
         }
@@ -623,9 +627,9 @@ class Compiler {
     }
 
     /** UNIQUE on columns of an existing table: the index is built without blocking writes, then attached as a constraint. */
-    private uniqueSteps(table: TableFacts, columns: string[]): void {
+    private uniqueSteps(table: TableFacts, columns: string[], given?: string): void {
         const target = qualifiedIdent(table.schema, table.name);
-        const name = limitName(`${table.name}_${columns.join("_")}_key`, this.names(table));
+        const name = given ?? limitName(`${table.name}_${columns.join("_")}_key`, this.names(table));
         this.claimRelation(table.schema, name, "Index");
         const list = columns.map(ident).join(", ");
         const size = sizeClass(table);
@@ -1156,6 +1160,109 @@ class Compiler {
             undo: index.definition ? index.definition.replace(/^CREATE (UNIQUE )?INDEX /, "CREATE $1INDEX CONCURRENTLY ") + ";" : undefined,
         });
         table.indexes = table.indexes.filter((candidate) => candidate !== index);
+    }
+
+    // ---- constraints ------------------------------------------------------------------------------------------------------
+
+    private addUnique(operation: Extract<Operation, { type: "add_unique" }>): void {
+        const table = this.findTable(operation.tableName);
+        const columns = operation.columns.map((name) => this.findColumn(table, name).name);
+        if (new Set(columns.map(lower)).size !== columns.length) this.fail("duplicate-column", `The unique constraint on ${table.qualified} names a column twice.`, table.qualified);
+        const same = (names: readonly (string | null)[]) => names.length === columns.length && names.every((name, i) => name !== null && lower(name) === lower(columns[i]));
+        if (same(table.primaryKey) || table.uniques.some((unique) => unique.kind === "unique" && same(unique.columns))) {
+            this.note("info", "no-change", `${table.qualified} (${columns.join(", ")}) is already unique.`, table.qualified);
+            return;
+        }
+        // the index that enforces it carries the constraint's name, so uniqueSteps claims the name
+        this.uniqueSteps(table, columns, operation.constraintName ?? undefined);
+    }
+
+    private addCheck(operation: Extract<Operation, { type: "add_check" }>): void {
+        const table = this.findTable(operation.tableName);
+        const expression = operation.expression.trim();
+        const label = `${table.qualified}`;
+        const problem = checkDefaultExpression(expression);
+        if (problem) this.fail("bad-check", `CHECK on ${label}: ${problem.replace(/^The default/, "The expression")}`, table.qualified);
+        const functions = functionsIn(expression);
+        const target = qualifiedIdent(table.schema, table.name);
+        if (this.discovery) {
+            this.needed.functions.push(...functions);
+            this.needed.checks.push({ table: target, expression });
+            return;
+        }
+        const rejected = this.probes.checks.get(checkKey(target, expression));
+        if (!this.probes.checks.has(checkKey(target, expression))) this.fail("check-unverified", `The CHECK on ${label} was not tried against the database.`, table.qualified);
+        if (rejected) this.fail("bad-check", `PostgreSQL rejects the CHECK (${expression}) on ${label}: ${rejected}`, table.qualified);
+        const unknown = functions.filter((fn) => !this.probes.volatility.get(fn));
+        if (unknown.length > 0) this.fail("bad-check", `The CHECK on ${label} calls ${unknown.join(", ")}, which PostgreSQL does not have.`, table.qualified);
+        const notImmutable = functions.filter((fn) => this.probes.volatility.get(fn) !== "i");
+        if (notImmutable.length > 0) this.fail("bad-check", `The CHECK on ${label} calls ${notImmutable.join(", ")}, which is not immutable. A constraint has to give the same answer for the same row every time.`, table.qualified);
+
+        const name = operation.constraintName ?? limitName(`${table.name}_check`, this.names(table));
+        this.checkNameLength(name, "Constraint");
+        if (this.names(table).has(name)) this.fail("name-taken", `${label} already has a constraint called ${name}.`, table.qualified);
+        // the columns the expression uses, outside string literals: what a later column drop or type change has to know about
+        const bare = expression.replace(/'(?:[^']|'')*'/g, " ");
+        const used = table.columns.filter((column) => new RegExp(`(^|[^A-Za-z0-9_$"])"?${column.name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"?($|[^A-Za-z0-9_$"])`, "i").test(bare)).map((column) => column.name);
+
+        if (sizeClass(table) === "new" || !this.hasRows(table)) {
+            this.add({ title: `Add the check ${name} to ${label}`, sql: `ALTER TABLE ${target} ADD CONSTRAINT ${ident(name)} CHECK (${expression});`, mode: "short", lock: "ACCESS EXCLUSIVE", work: this.hasRows(table) ? "scan" : "metadata", table, notes: ["The table is empty, so there is nothing to check."], undo: `ALTER TABLE ${target} DROP CONSTRAINT ${ident(name)};` });
+        } else {
+            this.add({
+                title: `Add the check ${name} to ${label} as NOT VALID`,
+                sql: `ALTER TABLE ${target} ADD CONSTRAINT ${ident(name)} CHECK (${expression}) NOT VALID;`,
+                mode: "short",
+                lock: "ACCESS EXCLUSIVE",
+                work: "metadata",
+                table,
+                notes: ["NOT VALID enforces the rule for new and changed rows without reading the existing ones."],
+                undo: `ALTER TABLE ${target} DROP CONSTRAINT ${ident(name)};`,
+            });
+            this.add({
+                title: `Validate the check ${name} on ${label}`,
+                sql: `ALTER TABLE ${target} VALIDATE CONSTRAINT ${ident(name)};`,
+                mode: "long",
+                lock: "SHARE UPDATE EXCLUSIVE",
+                work: "scan",
+                table,
+                notes: ["Reads the whole table but does not block reads or writes.", `If it fails, rows break the rule. Find them with: SELECT * FROM ${target} WHERE NOT (${expression}) LIMIT 10; fix them, then run this step again.`],
+            });
+        }
+        table.checks.push({ name, kind: "check", definition: `CHECK ((${expression}))`, columns: used, validated: true });
+    }
+
+    private dropConstraint(operation: Extract<Operation, { type: "drop_constraint" }>): void {
+        const table = this.findTable(operation.tableName);
+        const name = operation.constraintName;
+        const target = qualifiedIdent(table.schema, table.name);
+        if (table.indexes.some((index) => index.primary && index.constraint === name)) this.fail("primary-key-constraint", `${name} is the primary key of ${table.qualified}; dropping it is not compiled.`, table.qualified);
+        if (table.foreignKeys.some((fk) => fk.name === name)) this.fail("foreign-key-constraint", `${name} is a foreign key of ${table.qualified}: use drop_relationship.`, table.qualified);
+        const check = table.checks.find((candidate) => candidate.name === name);
+        const unique = table.uniques.find((candidate) => candidate.name === name);
+        const found = check ?? unique;
+        if (!found) this.fail("unknown-constraint", `${table.qualified} has no unique or check constraint called ${name}.`, table.qualified);
+
+        if (unique) {
+            const inbound = table.referencedBy.filter((fk) => fk.refColumns.length === unique.columns.length && fk.refColumns.every((column, i) => lower(column) === lower(unique.columns[i])));
+            if (inbound.length > 0) this.fail("referenced", `${name} is the unique key that ${inbound.map((fk) => `${fk.schema}.${fk.table} (${fk.name})`).join(", ")} points at. Drop those foreign keys first.`, table.qualified);
+        }
+        const index = unique ? table.indexes.find((candidate) => candidate.constraint === name) : undefined;
+        this.add({
+            title: `Drop the ${check ? "check" : "unique constraint"} ${name} on ${table.qualified}`,
+            sql: `ALTER TABLE ${target} DROP CONSTRAINT ${ident(name)};`,
+            mode: "short",
+            lock: "ACCESS EXCLUSIVE",
+            work: "metadata",
+            table,
+            notes: [
+                check ? "Rows that break the rule can be written as soon as this runs." : "Its index is dropped with it, and duplicates can be written as soon as this runs.",
+                `To put it back: ALTER TABLE ${target} ADD CONSTRAINT ${ident(name)} ${found.definition}; (this reads the whole table under a lock; for a large table use add_${check ? "check" : "unique"} instead, which does it online).`,
+                ...(index && (index.scans ?? 0) > 0 ? [`Its index has been scanned ${formatCount(index.scans ?? 0)} times since the statistics were reset, so queries use it.`] : []),
+            ],
+        });
+        table.checks = table.checks.filter((candidate) => candidate !== check);
+        table.uniques = table.uniques.filter((candidate) => candidate !== unique);
+        if (index) table.indexes = table.indexes.filter((candidate) => candidate !== index);
     }
 }
 
