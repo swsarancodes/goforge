@@ -887,24 +887,31 @@ class Compiler {
 
         if (changes.newName !== undefined && changes.newName !== column.name) {
             if (this.hasColumn(table, changes.newName)) this.fail("column-exists", `Column "${table.qualified}.${changes.newName}" already exists.`, table.qualified);
-            this.add({
-                title: `Rename ${label} to ${changes.newName}`,
-                sql: `ALTER TABLE ${target} RENAME COLUMN ${ref} TO ${ident(changes.newName)};`,
-                mode: "short",
-                lock: "ACCESS EXCLUSIVE",
-                work: "metadata",
-                table,
-                breaksClients: true,
-                notes: ["The old name stops working immediately. Queries, functions and application code that use it will fail until they are changed.", "Indexes, constraints and views follow the column."],
-                undo: `ALTER TABLE ${target} RENAME COLUMN ${ident(changes.newName)} TO ${ref};`,
-            });
-            for (const index of table.indexes) {
-                index.columns = index.columns.map((name) => (name === column.name ? changes.newName ?? name : name));
-                index.uses = index.uses.map((name) => (name === column.name ? changes.newName ?? name : name));
+            if (this.settings.compatColumns && !table.isNew) {
+                const others = Object.entries(changes).filter(([key, value]) => key !== "newName" && value !== undefined);
+                if (others.length > 0) this.fail("unsupported", `${label} is renamed with a second column kept in step, which cannot also change ${others.map(([key]) => key).join(", ")} in the same operation. Rename it in a change of its own, or turn compatColumns off to rename it directly.`, table.qualified);
+                this.renameColumnKeepingBoth(table, column, changes.newName);
+                changed = true;
+            } else {
+                this.add({
+                    title: `Rename ${label} to ${changes.newName}`,
+                    sql: `ALTER TABLE ${target} RENAME COLUMN ${ref} TO ${ident(changes.newName)};`,
+                    mode: "short",
+                    lock: "ACCESS EXCLUSIVE",
+                    work: "metadata",
+                    table,
+                    breaksClients: !table.isNew,
+                    notes: [...(table.isNew ? [] : ["The old name stops working immediately. Queries, functions and application code that use it will fail until they are changed."]), "Indexes, constraints and views follow the column."],
+                    undo: `ALTER TABLE ${target} RENAME COLUMN ${ident(changes.newName)} TO ${ref};`,
+                });
+                for (const index of table.indexes) {
+                    index.columns = index.columns.map((name) => (name === column.name ? changes.newName ?? name : name));
+                    index.uses = index.uses.map((name) => (name === column.name ? changes.newName ?? name : name));
+                }
+                table.primaryKey = table.primaryKey.map((name) => (name === column.name ? changes.newName ?? name : name));
+                column.name = changes.newName;
+                changed = true;
             }
-            table.primaryKey = table.primaryKey.map((name) => (name === column.name ? changes.newName ?? name : name));
-            column.name = changes.newName;
-            changed = true;
         }
 
         if (!changed && !this.findings.some((finding) => finding.operation === this.current)) {
@@ -956,6 +963,109 @@ class Compiler {
             undo: `ALTER TABLE ${target} ALTER COLUMN ${ref} DROP IDENTITY;`,
         });
         column.generated = "default-identity";
+    }
+
+    /**
+     * Renaming a column for applications that cannot all change at the same moment: a second column with the new name is added next to the old
+     * one and kept in step with it in both directions by a trigger, filled in batches, indexed like the old one, and made NOT NULL if it is. Both names
+     * work from then on, applications switch when they are ready, and a last step (not run by default) drops the old column and the trigger.
+     */
+    private renameColumnKeepingBoth(table: TableFacts, column: ColumnFacts, newName: string): void {
+        const label = `${table.qualified}.${column.name}`;
+        const target = qualifiedIdent(table.schema, table.name);
+        const old = ident(column.name);
+        const fresh = ident(newName);
+        this.checkNameLength(newName, "Column");
+        if (table.partitioned) this.fail("unsupported", `${table.qualified} is partitioned; keeping a renamed column in step with a trigger is not compiled for it. Turn compatColumns off to rename the column directly.`, table.qualified);
+        if (column.generated !== null) this.fail("unsupported", `${label} is a ${column.generated.includes("identity") ? "identity" : "generated"} column; a copy of it cannot be kept in step. Turn compatColumns off to rename it directly.`, table.qualified);
+        const inKey = table.primaryKey.includes(column.name) || table.uniques.some((unique) => unique.columns.includes(column.name));
+        if (inKey) this.fail("unsupported", `${label} is part of a key or a unique constraint. Keeping a copy in step means changing the key and every foreign key that points at it; turn compatColumns off to rename it directly (the constraint follows the column).`, table.qualified);
+        const checks = table.checks.filter((check) => check.columns.includes(column.name));
+        const foreign = [...table.foreignKeys.filter((fk) => fk.columns.includes(column.name)), ...table.referencedBy.filter((fk) => fk.refColumns.includes(column.name))];
+        if (foreign.length > 0 || checks.length > 0) {
+            this.fail("unsupported", `${label} appears in ${foreign.length ? `foreign key ${foreign.map((fk) => fk.name).join(", ")}` : `check ${checks.map((check) => check.name).join(", ")}`}. A copy of it would not carry that; turn compatColumns off to rename it directly (it follows the column).`, table.qualified);
+        }
+        const blockers = column.dependents.filter((dependent) => dependent.blocks);
+        if (blockers.length > 0) this.fail("dependents", `${label} is used by ${this.describeDependents(blockers)}, which would keep reading the old column. Change them first, or turn compatColumns off to rename the column directly (they follow it).`, table.qualified);
+
+        const fn = limitName(`${table.name}_${column.name}_${newName}__sync`, this.names(table));
+        const fnName = qualifiedIdent(table.schema, fn);
+        const copy = (index: IndexFacts) => {
+            const renamed = index.name.includes(column.name) ? index.name.replace(column.name, newName) : `${index.name}_${newName}`;
+            return limitName(renamed === index.name ? `${index.name}_${newName}` : renamed, this.names(table));
+        };
+
+        this.add({
+            title: `Expand: add ${newName} (${column.type}) next to ${label}`,
+            sql: `ALTER TABLE ${target} ADD COLUMN ${fresh} ${column.type};`,
+            mode: "short",
+            lock: "ACCESS EXCLUSIVE",
+            work: "metadata",
+            table,
+            notes: [
+                `Instead of renaming ${column.name}, a column called ${newName} is added with the same type. Applications keep using ${column.name} until they switch.`,
+                "Collation, storage settings, statistics targets, comments and column-level grants of the old column are not copied.",
+            ],
+            undo: `ALTER TABLE ${target} DROP COLUMN ${fresh};`,
+        });
+        this.add({
+            title: `Expand: keep ${newName} and ${column.name} in step`,
+            sql: `CREATE OR REPLACE FUNCTION ${fnName}() RETURNS trigger LANGUAGE plpgsql AS $sync$\nBEGIN\n  IF TG_OP = 'INSERT' THEN\n    IF NEW.${fresh} IS NOT NULL THEN NEW.${old} := NEW.${fresh}; ELSE NEW.${fresh} := NEW.${old}; END IF;\n  ELSIF NEW.${old} IS DISTINCT FROM OLD.${old} THEN\n    NEW.${fresh} := NEW.${old};\n  ELSIF NEW.${fresh} IS DISTINCT FROM OLD.${fresh} THEN\n    NEW.${old} := NEW.${fresh};\n  END IF;\n  RETURN NEW;\nEND\n$sync$;\nCREATE TRIGGER ${ident(fn)} BEFORE INSERT OR UPDATE OF ${old}, ${fresh} ON ${target} FOR EACH ROW EXECUTE FUNCTION ${fnName}();`,
+            mode: "short",
+            lock: "SHARE ROW EXCLUSIVE",
+            work: "metadata",
+            table,
+            notes: [
+                `Writes to ${column.name} reach ${newName} and writes to ${newName} reach ${column.name}. On an insert that gives both, ${newName} wins; on an update that changes both, ${column.name} wins.`,
+                "The trigger runs for every insert and update of those columns until the last step drops it.",
+            ],
+            undo: `DROP TRIGGER ${ident(fn)} ON ${target};\nDROP FUNCTION ${fnName}();`,
+        });
+        this.backfillStep(table, `Expand: copy ${column.name} into ${newName}`, `${fresh} = ${old}`, `${fresh} IS DISTINCT FROM ${old}`);
+        this.add({
+            title: `Check that ${newName} matches ${column.name}`,
+            sql: `SELECT count(*) AS rows_that_differ FROM ${target} WHERE ${fresh} IS DISTINCT FROM ${old};`,
+            mode: "long",
+            lock: "ACCESS SHARE",
+            work: "scan",
+            table,
+            notes: ["Reads the whole table without blocking anything. Expect 0 before you continue."],
+        });
+
+        const copied: IndexFacts[] = [];
+        for (const index of table.indexes.filter((candidate) => candidate.uses.includes(column.name) && !candidate.constraint)) {
+            if (index.partial || index.columns.some((c) => c === null) || index.method !== "btree" || !index.columns.includes(column.name)) {
+                this.note("warning", "index-not-copied", `Index ${index.name} on ${label} is partial, an expression index or not a btree index, so it was not copied to ${newName}. Create it on ${newName} yourself.`, table.qualified);
+                continue;
+            }
+            const name = copy(index);
+            this.claimRelation(table.schema, name, "Index");
+            const columns = index.columns.map((c) => (c === column.name ? newName : (c as string)));
+            this.concurrentIndexStep(table, name, columns, index.unique, `Expand: build the copy of index ${index.name} on ${newName}`);
+            copied.push({ ...index, name, definition: "", columns, uses: index.uses.map((used) => (used === column.name ? newName : used)), constraint: null });
+        }
+        if (column.notNull) this.notNullSteps(table, newName, { skipUpdate: true });
+
+        this.add({
+            title: `Contract: drop the old column ${column.name} and the sync trigger`,
+            sql: `DROP TRIGGER ${ident(fn)} ON ${target};\nDROP FUNCTION ${fnName}();${column.default ? `\nALTER TABLE ${target} ALTER COLUMN ${fresh} SET DEFAULT ${column.default};` : ""}\nALTER TABLE ${target} DROP COLUMN ${old};`,
+            mode: "short",
+            lock: "ACCESS EXCLUSIVE",
+            work: "metadata",
+            table,
+            optional: true,
+            destructive: true,
+            breaksClients: true,
+            notes: [
+                `Run this once nothing reads or writes ${column.name} any more. From then on only ${newName} exists, and anything that still uses the old name fails.`,
+                ...(column.default ? [`${newName} gets the default of ${column.name} here (not before: two columns with a volatile default would each draw their own value).`] : []),
+                `The indexes on ${column.name} are dropped with it; the copies on ${newName} stay.`,
+            ],
+        });
+
+        // the model after the steps that run by default: both columns, the copies of the indexes, and the old column's indexes still on it
+        table.columns.push({ name: newName, type: column.type, typeSchema: column.typeSchema, notNull: column.notNull, default: null, generated: null, dependents: [], nullFraction: column.nullFraction, distinct: column.distinct });
+        table.indexes.push(...copied);
     }
 
     /** ALTER COLUMN ... TYPE: in place when PostgreSQL only has to change the catalog, otherwise the expand/contract sequence. */
