@@ -11,7 +11,7 @@ npm run queryshift:check-model         # one request to the model in the real co
 npm run queryshift -- --engine         # what GoForge's rule engine makes of each legacy query (add --show-sql)
 npm run queryshift -- --case queryshift/cases/case-01-outer-join-active-policies --candidate my_translation.sql
 npm run queryshift -- --json
-npx vitest run queryshift              # 157 tests
+npx vitest run queryshift              # 160 tests
 ```
 
 All data is synthetic. Nothing here connects to a database you own: the target is PostgreSQL 18 running inside the process (PGlite).
@@ -53,7 +53,7 @@ Copy a case folder, edit `case.json`, write the legacy query, **derive `expected
 
 - The wall-clock limit stops a runaway query; it does not limit its memory.
 - The static checks are heuristics over a parsed query: a query with no findings has not been shown to be right, and one with findings may be right.
-- `verified` means it matched the primary data, the held-out data and the invariants. It is evidence, not a proof for all data: two small datasets can still miss a case. Both references are derived from documented Oracle behaviour by the same author, so a shared misunderstanding of Oracle would pass both.
+- `verified` means it matched the primary data, the held-out data and the invariants. It is evidence, not a proof for all data: two small datasets can still miss a case. The references were derived by hand from documented Oracle behaviour by one author, and then checked against a real Oracle Database (below), which they matched; the data is still two small datasets.
 - The model path is tested against a stand-in OpenAI, never against api.openai.com (no key was available): strict-schema acceptance and real model behaviour are unmeasured.
-- The reference results are derived from documented Oracle behaviour; no Oracle was available.
+- The reference results were derived by hand, because the harness itself runs without Oracle. `npm run queryshift:oracle-check` removes the reading: it loads the same data into an Oracle schema (the legacy schema, the seed renamed through `domain/schema_mapping.csv`), runs each legacy query there and compares what Oracle returns with the reference using this harness's comparator. On 25 Oct 2026 against Oracle Database 23.26 Free (Docker image `gvenzl/oracle-free:23-slim-faststart`), 6 of 6 references (3 cases, primary and held-out data) were exactly what Oracle returns; the result is in `reports/oracle-check.json`. It needs Docker and `ORACLE_ADMIN_URL`, so it is not part of the default run. It checks the references against Oracle 23ai, not against an older release, and not the PostgreSQL translations (those are judged against the references by `npm run queryshift`).
 - An invariant cannot prove equivalence, only disprove it; the comparator carries the proof.
