@@ -301,6 +301,30 @@ const SCENARIOS: Scenario[] = [
         },
     },
     {
+        name: "create an enum, add a column of that type with a default, then add a label after one",
+        tables: ["public.orders"],
+        operations: [
+            { type: "create_enum", typeName: "status_kind", values: ["new", "open"] },
+            { type: "add_column", tableName: "orders", field: { name: "kind", dataType: "status_kind", nullable: false, defaultValue: "'new'" } },
+            { type: "add_enum_value", typeName: "status_kind", value: "closed", after: "open" },
+        ],
+        async verify(client, checks) {
+            checks.equal((await client.query("SELECT enumlabel AS l FROM pg_enum WHERE enumtypid = 'status_kind'::regtype ORDER BY enumsortorder")).rows.map((row) => row.l), ["new", "open", "closed"], "the labels, in order");
+            checks.equal(Number((await one(client, "SELECT count(*)::int AS n FROM orders WHERE kind = 'new'"))?.n), 400000, "every existing row reads the default");
+            await client.query("UPDATE orders SET kind = 'closed' WHERE id = 1");
+            checks.ok(true, "the added label can be used");
+        },
+    },
+    {
+        name: "add a label before another to an enum that exists",
+        setup: "CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy');",
+        tables: [],
+        operations: [{ type: "add_enum_value", typeName: "mood", value: "meh", before: "ok" }],
+        async verify(client, checks) {
+            checks.equal((await client.query("SELECT enumlabel AS l FROM pg_enum WHERE enumtypid = 'mood'::regtype ORDER BY enumsortorder")).rows.map((row) => row.l), ["sad", "meh", "ok", "happy"], "the label is where it was asked to be");
+        },
+    },
+    {
         name: "refuses NOT NULL without a default on a table with rows",
         tables: ["public.orders"],
         operations: [{ type: "add_column", tableName: "orders", field: { name: "must_have", dataType: "text", nullable: false } }],
@@ -484,7 +508,7 @@ async function rewritesSection(checks: Checks) {
             await client.query(`INSERT INTO ${table} SELECT g, ${sample}${from.startsWith("char(") ? "::" + from : ""} FROM generate_series(1, 100) g`);
             const files = async () => (await client.query(`SELECT string_agg(c.relname || '=' || pg_relation_filenode(c.oid)::text, ',' ORDER BY c.relname) AS f FROM pg_class c WHERE c.relname IN ('${table}', '${table}_v')`)).rows[0].f as string;
             const before = await files();
-            const probes = await probe(asRunner(client), { types: [], typeChanges: [{ from, to }], functions: [], defaults: [], checks: [], relations: [], schemas: [] });
+            const probes = await probe(asRunner(client), { types: [], typeChanges: [{ from, to }], functions: [], defaults: [], checks: [], enums: [], relations: [], schemas: [] });
             const cast = probes.casts.get(castKey(from, to));
             let verdict = classifyTypeChange(await columnType(client, table), to, cast);
             try {
@@ -1278,6 +1302,7 @@ const sections: Record<string, Section> = {
                     { expression: "no_such_function()", type: "text" },
                     { expression: "active", type: "text" },
                 ],
+                enums: [{ schema: "public", name: "mood" }, { schema: "public", name: "no_such_type" }, { schema: "public", name: "orders" }],
                 checks: [
                     { table: "public.orders", expression: "total >= 0 AND status <> 'x'" },
                     { table: "public.orders", expression: "no_such_column > 0" },
@@ -1288,6 +1313,9 @@ const sections: Record<string, Section> = {
             });
             checks.equal(probes.defaults.get(defaultKey("'new'", "varchar(20)")), undefined, "PostgreSQL accepts a text default");
             checks.equal(probes.defaults.get(defaultKey("now()", "timestamptz")), undefined, "and a function default");
+            checks.equal(probes.enums.get("public.mood"), { exists: true, kind: "e", labels: ["ok", "bad"] }, "an enum type is found with its labels in order");
+            checks.equal(probes.enums.get("public.no_such_type")?.exists, false, "a type that is not there is not found");
+            checks.equal(probes.enums.get("public.orders")?.kind, "c", "a table's row type is found, and is not an enum");
             checks.equal(probes.checks.get(checkKey("public.orders", "total >= 0 AND status <> 'x'")), undefined, "PostgreSQL accepts a CHECK over the table's columns");
             checks.match(probes.checks.get(checkKey("public.orders", "no_such_column > 0")), /column "no_such_column" does not exist/, "rejects a CHECK on a column the table does not have, with its own message");
             checks.match(probes.checks.get(checkKey("public.orders", "total + 1")), /must be type boolean/, "and one that is not boolean");
