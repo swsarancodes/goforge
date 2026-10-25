@@ -59,6 +59,17 @@
         "heldOutSummary": "1 expected row(s) missing, 0 unexpected row(s) returned. Invariant broken: one row per customer (7 row(s) returned, 8 expected)."
       },
       {
+        "file": "candidates/reversed_order.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Same rows, but the order differs from row 1: expected [\"1\",\"Asha Rao\",\"1\",\"1200.00\"], got [\"7\",\"Gita Nair\",\"0\",\"0\"].",
+        "heldOutSummary": "Same rows, but the order differs from row 1: expected [\"21\",\"Ines Alvarez\",\"1\",\"1000.00\"], got [\"28\",\"Priya Nair\",\"0\",\"0\"]."
+      },
+      {
         "file": "candidates/overfit_hardcoded_customers.sql",
         "expect": "fail",
         "catchBy": "heldout",
@@ -145,6 +156,17 @@
         "heldOutSummary": "4 expected row(s) missing, 4 unexpected row(s) returned. Invariant broken: claim count is conserved (sum of clm_cnt is 14, 10 expected)."
       },
       {
+        "file": "candidates/reversed_order.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Same rows, but the order differs from row 1: expected [\"1\",\"Asha Rao <asha.rao@example.com>\",\"3\",\"4400.00\",\"700.00\",\"0.3333\"], got [\"7\",\"Gita Nair <gita@example.com>\",\"0\",\"0\",\"0.00\",null].",
+        "heldOutSummary": "Same rows, but the order differs from row 1: expected [\"21\",\"Ines Alvarez <ines@example.com>\",\"0\",\"0\",\"0.00\",null], got [\"28\",\"Priya Nair <priya@example.com>\",\"0\",\"0\",\"0.00\",null]."
+      },
+      {
         "file": "candidates/overfit_customer_2_label.sql",
         "expect": "fail",
         "catchBy": "heldout",
@@ -216,6 +238,17 @@
         "asExpected": true,
         "summary": "5 expected row(s) missing, 5 unexpected row(s) returned.",
         "heldOutSummary": "5 expected row(s) missing, 5 unexpected row(s) returned."
+      },
+      {
+        "file": "candidates/reversed_order.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Same rows, but the order differs from row 1: expected [\"9007\",\"106\",\"2026-03-20\",\"64.333333\",\"2026-07-15\",\"9000.00\"], got [\"9004\",\"103\",\"2026-03-15\",\"15.5208333333333333\",\"2026-08-31\",\"800.25\"].",
+        "heldOutSummary": "Same rows, but the order differs from row 1: expected [\"8002\",\"202\",\"2026-03-31\",\"89.958333\",\"2026-07-01\",\"3200.00\"], got [\"8010\",\"202\",\"2026-03-20\",\"78.5937500000000000\",\"2026-07-01\",\"1000.00\"]."
       },
       {
         "file": "candidates/overfit_special_cased_review_date.sql",
