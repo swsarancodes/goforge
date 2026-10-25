@@ -308,7 +308,7 @@ class Compiler {
         return {
             schema, name, qualified: qualifiedName(schema, name), partitioned: false, partitionCount: 0, partitions: [], nestedPartitions: false,
             estimatedRows: 0, heapBytes: 0, indexBytes: 0, totalBytes: 0, columns: [], primaryKey: [], uniques: [], checks: [], foreignKeys: [], referencedBy: [],
-            indexes: [], dependentViews: [], dependents: [], userTriggers: 0, stats: null, isNew: true,
+            indexes: [], dependentViews: [], dependents: [], userTriggers: 0, rowSecurity: false, privileges: [], stats: null, isNew: true,
         };
     }
 
@@ -395,22 +395,87 @@ class Compiler {
         const target = qualifiedName(table.schema, newName);
         this.claimRelation(table.schema, newName, "Table");
         const oldQualified = table.qualified;
+        const oldName = table.name;
+        const from = qualifiedIdent(table.schema, oldName);
+        const to = qualifiedIdent(table.schema, newName);
+        const keepOldName = this.settings.compatViews && !table.isNew;
 
-        this.add({
-            title: `Rename table ${oldQualified} to ${newName}`,
-            sql: `ALTER TABLE ${qualifiedIdent(table.schema, table.name)} RENAME TO ${ident(newName)};`,
-            mode: "short",
-            lock: "ACCESS EXCLUSIVE",
-            work: "metadata",
-            table,
-            breaksClients: true,
-            notes: [
-                "The old name stops working immediately. Queries, functions and application code that use it will fail until they are changed.",
-                "Views, foreign keys and indexes follow the table. Index and constraint names keep their old text.",
-                ...(table.dependentViews.length ? [`Views that use it: ${table.dependentViews.join(", ")}.`] : []),
-            ],
-            undo: `ALTER TABLE ${qualifiedIdent(table.schema, newName)} RENAME TO ${ident(table.name)};`,
-        });
+        if (!keepOldName) {
+            this.add({
+                title: `Rename table ${oldQualified} to ${newName}`,
+                sql: `ALTER TABLE ${from} RENAME TO ${ident(newName)};`,
+                mode: "short",
+                lock: "ACCESS EXCLUSIVE",
+                work: "metadata",
+                table,
+                breaksClients: !table.isNew,
+                notes: [
+                    ...(table.isNew ? [] : ["The old name stops working immediately. Queries, functions and application code that use it will fail until they are changed."]),
+                    "Views, foreign keys and indexes follow the table. Index and constraint names keep their old text.",
+                    ...(table.dependentViews.length ? [`Views that use it: ${table.dependentViews.join(", ")}.`] : []),
+                ],
+                undo: `ALTER TABLE ${to} RENAME TO ${ident(oldName)};`,
+            });
+        } else {
+            // The old name stays usable as a view over the renamed table, in the same transaction as the rename, so no query ever sees it missing.
+            const invoker = this.facts.serverVersionNum >= 150000;
+            if (table.rowSecurity && !invoker) {
+                this.fail("unsupported", `${oldQualified} has row-level security. Before PostgreSQL 15 a view over it would run as its owner, who is not held to the policies, so a compatibility view under the old name would let applications around them. Rename it directly by turning compatibility views off (compatViews: false), or move to PostgreSQL 15 or later.`, table.qualified);
+            }
+            const skipped = new Set<string>();
+            const grants = table.privileges
+                .filter((privilege) => !privilege.owner)
+                .filter((privilege) => {
+                    const copied = ["SELECT", "INSERT", "UPDATE", "DELETE"].includes(privilege.privilege);
+                    if (!copied) skipped.add(privilege.privilege);
+                    return copied;
+                });
+            const byGrantee = new Map<string, { privileges: string[]; grantable: string[] }>();
+            for (const grant of grants) {
+                const entry = byGrantee.get(grant.grantee) ?? { privileges: [], grantable: [] };
+                entry.privileges.push(grant.privilege);
+                if (grant.grantable) entry.grantable.push(grant.privilege);
+                byGrantee.set(grant.grantee, entry);
+            }
+            const grantSql: string[] = [];
+            for (const [grantee, entry] of byGrantee) {
+                const who = grantee === "PUBLIC" ? "PUBLIC" : ident(grantee);
+                const plain = entry.privileges.filter((privilege) => !entry.grantable.includes(privilege));
+                if (plain.length) grantSql.push(`GRANT ${plain.join(", ")} ON ${from} TO ${who};`);
+                if (entry.grantable.length) grantSql.push(`GRANT ${entry.grantable.join(", ")} ON ${from} TO ${who} WITH GRANT OPTION;`);
+            }
+            this.add({
+                title: `Rename table ${oldQualified} to ${newName}, and keep ${oldName} working as a view`,
+                sql: [`ALTER TABLE ${from} RENAME TO ${ident(newName)};`, `CREATE VIEW ${from}${invoker ? " WITH (security_invoker = true)" : ""} AS SELECT * FROM ${to};`, ...grantSql].join("\n"),
+                mode: "short",
+                lock: "ACCESS EXCLUSIVE",
+                work: "metadata",
+                table,
+                notes: [
+                    `One transaction: ${newName} is the table and ${oldName} is a view over it, so applications using the old name keep working until they have switched.`,
+                    `Through the view, SELECT, INSERT, UPDATE and DELETE work (a view that is just SELECT * is updatable, and the table's defaults still apply to INSERT). ALTER TABLE, TRUNCATE, COPY, LOCK and the like do not work on a view, and the view lists the columns the table has now: columns added later are not in it.`,
+                    ...(grantSql.length ? [`The table's SELECT, INSERT, UPDATE and DELETE grants are copied onto the view (${[...byGrantee.keys()].join(", ")}).`] : ["The table has no grants other than its owner's, so none are copied."]),
+                    ...(skipped.size ? [`Grants of ${[...skipped].join(", ")} are not copied (a view cannot hold them), and column-level grants are not copied either.`] : ["Column-level grants, if there are any, are not copied."]),
+                    ...(invoker ? ["The view runs with the caller's own rights on the table (security_invoker), so row-level security and privileges apply as before."] : []),
+                    "Index and constraint names keep their old text. Views, foreign keys and indexes follow the table.",
+                    ...(table.dependentViews.length ? [`Views that use it: ${table.dependentViews.join(", ")}.`] : []),
+                    `Until the view is dropped, a column of ${newName} that the view lists cannot be dropped or have its type changed: drop the view first.`,
+                ],
+                undo: `DROP VIEW ${from};\nALTER TABLE ${to} RENAME TO ${ident(oldName)};`,
+            });
+            this.add({
+                title: `Contract: drop the old name ${oldQualified}, the compatibility view`,
+                sql: `DROP VIEW ${from};`,
+                mode: "short",
+                lock: "ACCESS EXCLUSIVE",
+                work: "metadata",
+                table,
+                optional: true,
+                breaksClients: true,
+                notes: ["Run this later, once nothing uses the old name any more. Anything that still does will fail from then on."],
+                undo: `CREATE VIEW ${from}${invoker ? " WITH (security_invoker = true)" : ""} AS SELECT * FROM ${to};`,
+            });
+        }
 
         table.name = newName;
         table.qualified = target;
@@ -418,6 +483,12 @@ class Compiler {
         for (const other of this.tables.values()) {
             for (const fk of other.foreignKeys) if (fk.refSchema === table.schema && fk.refTable === splitQualified(oldQualified).name) fk.refTable = newName;
             for (const inbound of other.referencedBy) if (inbound.schema === table.schema && inbound.table === splitQualified(oldQualified).name) inbound.table = newName;
+        }
+        if (keepOldName) {
+            // the view now depends on every column it lists, and later steps in the plan have to know
+            table.dependentViews.push(oldQualified);
+            this.claimedRelations.add(relationKey(table.schema, oldName));
+            for (const column of table.columns) column.dependents.push({ kind: "view", description: `view ${oldQualified}`, blocks: true, external: true });
         }
     }
 
