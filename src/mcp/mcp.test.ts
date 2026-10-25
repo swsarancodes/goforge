@@ -156,6 +156,53 @@ describe("GoForge MCP Server (Model Context Protocol)", () => {
         expect(unsupported?.result.isError).toBe(true);
     });
 
+    it("converts a whole script with one status per statement, and leaves procedures and DDL alone", async () => {
+        const call = async (args: Record<string, unknown>) =>
+            server.handleMessage({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "goforge_modernize_query", arguments: args } });
+        const script = `SET LINESIZE 80
+SELECT NVL(bonus, 0) FROM emp;
+SELECT TRUNC(hired) FROM emp;
+SELECT name FROM emp WHERE id = 1;
+CREATE TABLE t (a NUMBER);
+CREATE OR REPLACE PROCEDURE p AS BEGIN NULL; END;
+/
+SELECT * FROM emp WHERE ROWNUM <= 10 ORDER BY salary DESC;`;
+
+        const answer = JSON.parse((await call({ script, sourceDialect: "oracle" }))?.result.content[0].text);
+        expect(answer.summary.statements).toBe(7);
+        expect(answer.summary.byStatus).toEqual({ converted: 1, unchanged: 1, review: 1, failed: 1, "out-of-scope": 3 });
+        expect(answer.summary.checkedBy).toMatch(/grammar only/);
+        // by default only what needs attention is listed
+        expect(answer.statements.map((s: { status: string }) => s.status).sort()).toEqual(["failed", "out-of-scope", "out-of-scope", "out-of-scope", "review"]);
+        const failed = answer.statements.find((s: { status: string }) => s.status === "failed");
+        expect(failed.notConverted[0].construct).toMatch(/TRUNC/);
+        expect(failed).not.toHaveProperty("convertedSql");
+        expect(answer).not.toHaveProperty("convertedScript");
+        expect(JSON.stringify(answer)).not.toMatch(/confidence/i);
+
+        const all = JSON.parse((await call({ script, statements: "all", includeConvertedScript: true, includeReport: true }))?.result.content[0].text);
+        expect(all.statements).toHaveLength(7);
+        expect(all.statements.find((s: { status: string }) => s.status === "converted").convertedSql).toBe("SELECT COALESCE(bonus, 0) FROM emp");
+        expect(all.convertedScript).toContain("SELECT COALESCE(bonus, 0) FROM emp;");
+        expect(all.reportMarkdown).toMatch(/^# Migration report: pasted script \(Oracle to PostgreSQL\)/);
+
+        const limited = JSON.parse((await call({ script, statements: "all", maxStatements: 2 }))?.result.content[0].text);
+        expect(limited.statements).toHaveLength(2);
+        expect(limited.statementsNotListed).toBe(5);
+
+        const none = JSON.parse((await call({ script, statements: "none" }))?.result.content[0].text);
+        expect(none.statements).toEqual([]);
+        expect(none.summary.statements).toBe(7);
+    });
+
+    it("needs exactly one of query and script, and refuses a script that is too large", async () => {
+        const call = async (args: Record<string, unknown>) =>
+            server.handleMessage({ jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "goforge_modernize_query", arguments: args } });
+        expect((await call({}))?.result.isError).toBe(true);
+        expect((await call({ query: "SELECT 1", script: "SELECT 2" }))?.result.isError).toBe(true);
+        expect((await call({ script: "x".repeat(5_000_001) }))?.result.isError).toBe(true);
+    });
+
     it("executes goforge_inspect_schema", async () => {
         const schema = {
             name: "ECommerce",
