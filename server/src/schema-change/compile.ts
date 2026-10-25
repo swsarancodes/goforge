@@ -77,10 +77,12 @@ class Compiler {
     private readonly uncompiled: number[] = [];
     private tables: Map<string, TableFacts>;
     private readonly settings: CompileSettings;
-    private readonly needed: ProbeRequest = { types: [], typeChanges: [], functions: [], defaults: [], checks: [], relations: [], schemas: [] };
+    private readonly needed: ProbeRequest = { types: [], typeChanges: [], functions: [], defaults: [], checks: [], enums: [], relations: [], schemas: [] };
     private current = -1;
     /** Names this plan has claimed so far, so two operations can't both create `orders_status_idx`. */
     private readonly claimedRelations = new Set<string>();
+    /** Enum types this plan creates, and the labels they have so far (key: lower-case `schema.name`), so a later operation can use them before they exist. */
+    private createdEnums = new Map<string, string[]>();
 
     constructor(
         private readonly plan: AiSchemaPlan,
@@ -103,6 +105,7 @@ class Compiler {
             const keepSteps = this.steps.length;
             const keepTables = structuredClone(this.tables);
             const keepClaims = new Set(this.claimedRelations);
+            const keepEnums = new Map([...this.createdEnums].map(([key, labels]) => [key, [...labels]]));
             try {
                 this.compileOperation(operation, index);
             } catch (error) {
@@ -111,6 +114,7 @@ class Compiler {
                 this.tables = keepTables;
                 this.claimedRelations.clear();
                 keepClaims.forEach((claim) => this.claimedRelations.add(claim));
+                this.createdEnums = keepEnums;
                 this.uncompiled.push(index);
             }
         });
@@ -183,6 +187,7 @@ class Compiler {
 
     private type(spec: { dataType: string; maxLength?: number | null; precision?: number | null; scale?: number | null }, label: string): string {
         const text = renderType(spec);
+        if (this.createdEnum(text)) return text;
         if (this.discovery) {
             this.needed.types.push(text);
             return text;
@@ -215,6 +220,13 @@ class Compiler {
     private defaultExpression(expression: string, type: string, label: string): { expression: string; volatile: boolean } {
         const problem = checkDefaultExpression(expression);
         if (problem) this.fail("bad-default", `Default for ${label}: ${problem}`);
+        const created = this.createdEnum(type);
+        if (created) {
+            // the type does not exist yet, so PostgreSQL cannot be asked: the default has to be one of its labels
+            const literalLabel = /^'((?:[^']|'')*)'(?:\s*::\s*[A-Za-z_][\w."]*)?$/.exec(expression.trim());
+            if (!literalLabel || !created.includes(literalLabel[1].replace(/''/g, "'"))) this.fail("bad-default", `The default for ${label} has to be one of the labels of ${type}: ${created.map((value) => `'${value.replace(/'/g, "''")}'`).join(", ")}.`);
+            return { expression, volatile: false };
+        }
         const functions = functionsIn(expression);
         if (this.discovery) {
             this.needed.functions.push(...functions);
@@ -300,6 +312,8 @@ class Compiler {
             case "add_check": return this.addCheck(operation);
             case "drop_constraint": return this.dropConstraint(operation);
             case "add_primary_key": return this.addPrimaryKey(operation);
+            case "create_enum": return this.createEnum(operation);
+            case "add_enum_value": return this.addEnumValue(operation);
             default:
                 this.fail("unsupported-operation", `Operation ${index + 1} has a type this compiler does not know.`);
         }
@@ -365,7 +379,7 @@ class Compiler {
                 table.uniques.push({ name: unique, kind: "unique", definition: `UNIQUE (${ident(field.name)})`, columns: [field.name], validated: true });
                 table.indexes.push({ name: unique, definition: "", columns: [field.name], uses: [field.name], method: "btree", unique: true, primary: false, valid: true, partial: false, constraint: unique, bytes: 0, scans: null });
             }
-            if (field.values && field.values.length > 0) this.note("warning", "values-ignored", `"values" for ${qualified}.${field.name} was ignored: create an enum type or a CHECK constraint separately.`, qualified);
+            if (field.values && field.values.length > 0) this.note("warning", "values-ignored", `"values" for ${qualified}.${field.name} was ignored: create the enum with create_enum (or a CHECK constraint) and give the column its type.`, qualified);
             if (field.unsigned) this.note("warning", "unsigned-ignored", `PostgreSQL has no unsigned types; "unsigned" for ${qualified}.${field.name} was ignored.`, qualified);
         }
 
@@ -551,7 +565,7 @@ class Compiler {
             this.fail("not-null-needs-default", `${label} is NOT NULL with no default, and ${table.qualified} has rows (${table.estimatedRows === null ? "size unknown" : `about ${formatCount(table.estimatedRows)}`}): PostgreSQL would reject it. Give it a default, or add it as nullable, fill it, then make it NOT NULL.`, table.qualified);
         }
         if (spec.unique && withDefault && rows) this.fail("unique-with-default", `${label} is unique and has a default, so every existing row would get the same value.`, table.qualified);
-        if (spec.values?.length) this.note("warning", "values-ignored", `"values" for ${label} was ignored: create an enum type or a CHECK constraint separately.`, table.qualified);
+        if (spec.values?.length) this.note("warning", "values-ignored", `"values" for ${label} was ignored: create the enum with create_enum (or a CHECK constraint) and give the column its type.`, table.qualified);
         if (spec.unsigned) this.note("warning", "unsigned-ignored", `PostgreSQL has no unsigned types; "unsigned" for ${label} was ignored.`, table.qualified);
         if (table.partitioned && spec.unique) this.fail("unsupported", `A unique column on the partitioned table ${table.qualified} is not compiled: the key must include the partition key.`, table.qualified);
 
@@ -1354,6 +1368,90 @@ class Compiler {
             });
         }
         table.checks.push({ name, kind: "check", definition: `CHECK ((${expression}))`, columns: used, validated: true });
+    }
+
+    // ---- enums ------------------------------------------------------------------------------------------------------------
+
+    private enumName(name: string): { schema: string; name: string; key: string; sql: string } {
+        const { schema, name: bare } = splitQualified(name.trim());
+        const resolved = schema ?? this.settings.defaultSchema;
+        return { schema: resolved, name: bare, key: lower(`${resolved}.${bare}`), sql: qualifiedIdent(resolved, bare) };
+    }
+
+    /** The labels of an enum this plan creates, when `type` (a column's type, arrays included) names one. */
+    private createdEnum(type: string): string[] | undefined {
+        const bare = type.replace(/\s*\[.*$/, "").replace(/"/g, "").trim();
+        if (!bare || /[()]/.test(bare)) return undefined;
+        return this.createdEnums.get(this.enumName(bare).key);
+    }
+
+    private createEnum(operation: Extract<Operation, { type: "create_enum" }>): void {
+        const type = this.enumName(operation.typeName);
+        this.checkNameLength(type.name, "Type");
+        const values = operation.values.map((value) => value);
+        if (new Set(values).size !== values.length) this.fail("duplicate-value", `The enum ${type.schema}.${type.name} lists a label twice.`);
+        for (const value of values) {
+            if (Buffer.byteLength(value) > 63) this.fail("name-too-long", `The label "${value.slice(0, 30)}…" of ${type.schema}.${type.name} is longer than the 63 bytes PostgreSQL allows.`);
+            if (value.includes("\0")) this.fail("bad-value", `A label of ${type.schema}.${type.name} contains a null byte.`);
+        }
+        if (this.discovery) this.needed.enums.push({ schema: type.schema, name: type.name });
+        // a type and a table of the same name cannot both exist, so the relation namespace is checked as well as the types
+        this.claimRelation(type.schema, type.name, "Type");
+        if (!this.discovery) {
+            const known = this.probes.enums.get(relationKey(type.schema, type.name));
+            if (!known) this.fail("type-unverified", `The type ${type.schema}.${type.name} was not looked for in the database.`);
+            if (known.exists || this.createdEnums.has(type.key)) this.fail("name-taken", `A type called "${type.schema}.${type.name}" already exists.`);
+        }
+        this.add({
+            title: `Create the enum ${type.schema}.${type.name} (${values.join(", ")})`,
+            sql: `CREATE TYPE ${type.sql} AS ENUM (${values.map(literal).join(", ")});`,
+            mode: "short",
+            lock: "none",
+            work: "none",
+            notes: ["A new type: nothing existing is locked or rewritten.", "Labels can be added later but never removed or reordered without recreating the type."],
+            undo: `DROP TYPE ${type.sql};`,
+        });
+        this.createdEnums.set(type.key, [...values]);
+    }
+
+    private addEnumValue(operation: Extract<Operation, { type: "add_enum_value" }>): void {
+        const type = this.enumName(operation.typeName);
+        const value = operation.value;
+        if (Buffer.byteLength(value) > 63) this.fail("name-too-long", `The label "${value.slice(0, 30)}…" is longer than the 63 bytes PostgreSQL allows.`);
+        if (value.includes("\0")) this.fail("bad-value", `The label contains a null byte.`);
+        if (operation.before && operation.after) this.fail("bad-position", `Say BEFORE or AFTER a label, not both.`);
+        if (this.discovery) {
+            this.needed.enums.push({ schema: type.schema, name: type.name });
+            return;
+        }
+        let labels = this.createdEnums.get(type.key);
+        if (!labels) {
+            const known = this.probes.enums.get(relationKey(type.schema, type.name));
+            if (!known) this.fail("type-unverified", `The type ${type.schema}.${type.name} was not looked for in the database.`);
+            if (!known.exists) this.fail("unknown-type", `PostgreSQL has no type called ${type.schema}.${type.name}.`);
+            if (known.kind !== "e") this.fail("not-an-enum", `${type.schema}.${type.name} is not an enum type.`);
+            labels = [...known.labels];
+        }
+        const neighbour = operation.before ?? operation.after ?? undefined;
+        if (neighbour !== undefined && !labels.includes(neighbour)) this.fail("unknown-value", `${type.schema}.${type.name} has no label "${neighbour}" to put the new one ${operation.before ? "before" : "after"}.`);
+        if (labels.includes(value)) {
+            this.note("info", "no-change", `${type.schema}.${type.name} already has the label "${value}".`);
+            return;
+        }
+        this.add({
+            title: `Add the label ${value} to the enum ${type.schema}.${type.name}`,
+            sql: `ALTER TYPE ${type.sql} ADD VALUE IF NOT EXISTS ${literal(value)}${operation.before ? ` BEFORE ${literal(operation.before)}` : operation.after ? ` AFTER ${literal(operation.after)}` : ""};`,
+            mode: "short",
+            lock: "none",
+            work: "none",
+            notes: [
+                "Changes only the type: no table that uses it is locked, scanned or rewritten.",
+                "A label can never be removed from an enum again (only by recreating the type), and it cannot be used in the same transaction that adds it: this step runs on its own, so later steps can use it.",
+            ],
+        });
+        const at = neighbour === undefined ? labels.length : labels.indexOf(neighbour) + (operation.after ? 1 : 0);
+        labels.splice(at, 0, value);
+        this.createdEnums.set(type.key, labels);
     }
 
     private addPrimaryKey(operation: Extract<Operation, { type: "add_primary_key" }>): void {

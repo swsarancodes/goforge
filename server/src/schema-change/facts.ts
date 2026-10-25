@@ -447,9 +447,18 @@ export interface ProbeRequest {
     defaults: { expression: string; type: string }[];
     /** CHECK expressions with the (quoted, schema-qualified) table they are for: PostgreSQL is asked to plan `SELECT 1 FROM table WHERE (expression)`. */
     checks: { table: string; expression: string }[];
+    /** Types the plan creates or adds values to (schema qualified): do they exist, are they enums, and which labels do they have? */
+    enums: { schema: string; name: string }[];
     /** Quoted, schema-qualified names the plan wants to create: are they free? */
     relations: { schema: string; name: string }[];
     schemas: string[];
+}
+
+export interface EnumProbe {
+    exists: boolean;
+    /** pg_type.typtype: `e` for an enum. */
+    kind: string | null;
+    labels: string[];
 }
 
 export interface Probes {
@@ -463,6 +472,8 @@ export interface Probes {
     defaults: Map<string, string | undefined>;
     /** PostgreSQL's message when it rejects a CHECK expression on a table; undefined when it accepts it. */
     checks: Map<string, string | undefined>;
+    /** What PostgreSQL has under each requested type name, keyed `schema.name`. */
+    enums: Map<string, EnumProbe>;
     /** Whether a table, index or sequence already has this schema-qualified name. */
     relationExists: Map<string, boolean>;
     schemaExists: Map<string, boolean>;
@@ -473,7 +484,7 @@ export const defaultKey = (expression: string, type: string): string => `${type}
 export const checkKey = (table: string, expression: string): string => `${table}\u0000${expression}`;
 export const relationKey = (schema: string, name: string): string => `${schema}.${name}`;
 
-export const emptyProbes = (): Probes => ({ types: new Map(), casts: new Map(), volatility: new Map(), defaults: new Map(), checks: new Map(), relationExists: new Map(), schemaExists: new Map() });
+export const emptyProbes = (): Probes => ({ types: new Map(), casts: new Map(), volatility: new Map(), defaults: new Map(), checks: new Map(), enums: new Map(), relationExists: new Map(), schemaExists: new Map() });
 
 const quoteName = (name: string): string => `"${name.replace(/"/g, '""')}"`;
 
@@ -501,8 +512,18 @@ export async function probe(client: Queryable, request: ProbeRequest): Promise<P
           ].join(", ")}`) - 1
         : -1;
 
+    const enumTypes = [...new Map((request.enums ?? []).map((type) => [relationKey(type.schema, type.name), type])).values()];
+    const enumIndexes = enumTypes.map((type) => {
+        const literal = quoteLiteral(`${quoteName(type.schema)}.${quoteName(type.name)}`);
+        return statements.push(`SELECT to_regtype(${literal}) IS NOT NULL AS exists, (SELECT typtype::text FROM pg_type WHERE oid = to_regtype(${literal})) AS kind, COALESCE((SELECT json_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_enum e WHERE e.enumtypid = to_regtype(${literal})), '[]'::json) AS labels`) - 1;
+    });
+
     if (statements.length > 0) {
         const results = await runReadOnly(client, statements);
+        enumTypes.forEach((type, i) => {
+            const row = results[enumIndexes[i]].rows[0] as Row;
+            probes.enums.set(relationKey(type.schema, type.name), { exists: row.exists === true, kind: (row.kind as string | null) ?? null, labels: (row.labels as string[]) ?? [] });
+        });
 
         if (typeIndex >= 0) {
             const row = results[typeIndex].rows[0] as Row;

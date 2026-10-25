@@ -15,7 +15,7 @@ function buildInstructions(request: AiSchemaPlanRequest): string {
         "If a missing requirement could materially change table structure, keys, cardinality, tenancy, or deletion behavior, ask concise clarifying questions and return no operations.",
         "Use assumptions only for low-risk details that do not materially change the design.",
         "The JSON object must contain: summary (string), assumptions (string[]), warnings (string[]), clarifyingQuestions (string[]), operations (array).",
-        "Supported operation types: create_table, rename_table, drop_table, add_column, alter_column, drop_column, add_relationship, drop_relationship, add_index, drop_index, add_unique, add_check, drop_constraint, add_primary_key.",
+        "Supported operation types: create_table, rename_table, drop_table, add_column, alter_column, drop_column, add_relationship, drop_relationship, add_index, drop_index, add_unique, add_check, drop_constraint, add_primary_key, create_enum, add_enum_value.",
         "Use the exact nested operation shapes described below; do not put field attributes at the operation root.",
         "Every key of the answer's shape is always written: give null for any that does not apply. To remove an existing column's default, set changes.dropDefault to true; to leave the default alone, leave it null.",
         "create_table.table contains name, optional note, fields, and optional indexes.",

@@ -79,7 +79,8 @@ export function referencedTableNames(plan: AiSchemaPlan): string[] {
     };
     const names: string[] = [];
     for (const operation of plan.operations) {
-        if (operation.type === "create_table") continue;
+        // a type is not a table
+        if (operation.type === "create_table" || operation.type === "create_enum" || operation.type === "add_enum_value") continue;
         if (operation.type === "add_relationship") names.push(operation.relationship.sourceTable, operation.relationship.targetTable);
         else if (operation.type === "drop_relationship") names.push(operation.sourceTable, operation.targetTable);
         else names.push(operation.tableName);

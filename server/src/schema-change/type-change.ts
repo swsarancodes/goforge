@@ -49,7 +49,14 @@ export function parseType(text: string): ParsedType {
 export const sameType = (a: string, b: string): boolean => {
     const left = parseType(a);
     const right = parseType(b);
-    return left.base === right.base && left.array === right.array && left.args.join(",") === right.args.join(",");
+    return sameName(left.base, right.base) && left.array === right.array && left.args.join(",") === right.args.join(",");
+};
+
+/** `public.mood` and `mood` are the same type: PostgreSQL leaves the schema out of a type that is on the search path. */
+const sameName = (a: string, b: string): boolean => {
+    if (a === b) return true;
+    const [left, right] = [a.split("."), b.split(".")];
+    return (left.length === 1 || right.length === 1) && left[left.length - 1] === right[right.length - 1];
 };
 
 export interface TypeChangeVerdict {

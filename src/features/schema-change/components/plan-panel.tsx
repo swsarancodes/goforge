@@ -155,6 +155,10 @@ function describeOperation(operation: PlanResponse["plan"]["operations"][number]
             return `check${operation.constraintName ? ` ${get("constraintName")}` : ""} on ${get("tableName")}: ${get("expression")}`;
         case "drop_constraint":
             return `drop constraint ${get("constraintName")} on ${get("tableName")}`;
+        case "create_enum":
+            return `enum type ${get("typeName")} (${((operation.values as string[]) ?? []).join(", ")})`;
+        case "add_enum_value":
+            return `add "${get("value")}" to enum ${get("typeName")}${operation.before ? ` before "${get("before")}"` : operation.after ? ` after "${get("after")}"` : ""}`;
         case "add_primary_key":
             return `primary key${operation.constraintName ? ` ${get("constraintName")}` : ""} on ${get("tableName")} (${((operation.columns as string[]) ?? []).join(", ")})`;
         default:
