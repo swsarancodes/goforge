@@ -68,6 +68,11 @@ describe("type changes", () => {
         expect(parseType("int4").base).toBe("integer");
         expect(sameType("varchar(20)", "character varying(20)")).toBe(true);
         expect(sameType("varchar(20)", "character varying(21)")).toBe(false);
+        // a type on the search path is reported without its schema
+        expect(sameType("public.mood", "mood")).toBe(true);
+        expect(sameType("mood[]", "public.mood[]")).toBe(true);
+        expect(sameType("billing.mood", "public.mood")).toBe(false);
+        expect(sameType("public.mood", "public.moods")).toBe(false);
     });
 
     it("lists the changes that are catalog-only and treats everything else as a rewrite", () => {

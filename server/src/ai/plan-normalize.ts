@@ -85,6 +85,10 @@ const normalizeOperation = (value: unknown): unknown => {
             return { type, tableName, constraintName: operation.constraintName ?? operation.name, expression: operation.expression ?? operation.condition ?? operation.check };
         case "drop_constraint":
             return { type, tableName, constraintName: operation.constraintName ?? operation.name };
+        case "create_enum":
+            return { type, typeName: operation.typeName ?? operation.name ?? operation.enumName, values: operation.values ?? operation.labels };
+        case "add_enum_value":
+            return { type, typeName: operation.typeName ?? operation.name ?? operation.enumName, value: operation.value ?? operation.label, before: operation.before, after: operation.after };
         case "add_primary_key":
             return { type, tableName, constraintName: operation.constraintName ?? operation.name, columns: operation.columns ?? (operation.column !== undefined ? [operation.column] : undefined) };
         case "add_relationship":
