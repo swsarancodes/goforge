@@ -1,6 +1,7 @@
 import type { CorrectQueryRequest } from "../../server/src/ai/correct-query";
 import { createQueryCorrection } from "../../server/src/ai/correct-query";
-import type { Proposer } from "./loop";
+import { getAuditStore } from "../../server/src/ai/provider";
+import type { Proposal, Proposer } from "./loop";
 
 /**
  * Asks the model through GoForge's own AI layer (policy check, the audit log, structured outputs), not around it. What it sends is the
@@ -37,7 +38,23 @@ export function modelProposer(): Proposer {
                 engineWarnings: input.engineWarnings,
             };
             const { result, model, auditId, usage, latencyMs } = await createQueryCorrection(request);
-            return { sql: result.sql, explanation: result.explanation, changes: result.changes, risks: result.risks, model, auditId, usage, latencyMs };
+            return { sql: result.sql, explanation: result.explanation, changes: result.changes, risks: result.risks, model, auditId, usage, latencyMs, prompt: await sentPrompt(auditId) };
         },
     };
+}
+
+/**
+ * What the AI layer's audit log says it sent for this request. A harness run keeps that log in memory, so the id alone points at nothing
+ * once the run is over; the trace carries the prompt itself. Absent when the log has no payload for it.
+ */
+async function sentPrompt(auditId: number): Promise<Proposal["prompt"]> {
+    const entry = await getAuditStore().get(auditId);
+    if (!entry?.payload) return undefined;
+    try {
+        const { instructions, input } = JSON.parse(entry.payload) as { instructions: string; input: string };
+        return { instructions, input: JSON.parse(input), sha256: entry.sha256 ?? undefined };
+    } catch {
+        // a payload the log cut at its size limit is no longer JSON
+        return undefined;
+    }
 }

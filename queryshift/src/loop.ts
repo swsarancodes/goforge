@@ -58,6 +58,10 @@ export interface Proposal {
     /** Tokens the provider reported for this request, when it did. */
     usage?: { inputTokens: number | null; outputTokens: number | null };
     latencyMs?: number;
+    /** Exactly what the model was sent for this request, as the AI layer's audit log recorded it, so the trace does not ask to be taken on trust. */
+    prompt?: { instructions: string; input: unknown; sha256?: string };
+    /** Set when this answer was read back from an earlier trace and not asked for now (see replay-proposer.ts). Everything else in the proposal then describes that earlier request. */
+    replayedFrom?: string;
 }
 
 export interface Proposer {
