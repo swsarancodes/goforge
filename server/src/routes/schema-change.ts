@@ -170,6 +170,7 @@ const expectedSchema = z.object({
         checks: z.array(z.object({ name, validated: z.boolean() })).max(500),
         foreignKeys: z.array(z.object({ name, columns: z.array(name).max(100), refTable: name, refColumns: z.array(name).max(100), validated: z.boolean() })).max(500),
         indexes: z.array(z.object({ name, columns: z.array(name.nullable()).max(100), unique: z.boolean() })).max(1_000),
+        views: z.array(name).max(1_000),
     })).max(100),
     absent: z.array(name).max(100),
 });
