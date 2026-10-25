@@ -115,7 +115,7 @@ export interface Runbook {
     script: string;
     uncompiled: number[];
     server: { version: string; collectedAt: string };
-    settings: { lockTimeoutSeconds: number; lockAttempts: number; compatViews: boolean; backfillBatchRows: number; backfillPauseMs: number; defaultSchema: string };
+    settings: { lockTimeoutSeconds: number; lockAttempts: number; compatViews: boolean; compatColumns: boolean; backfillBatchRows: number; backfillPauseMs: number; defaultSchema: string };
     /** What the tables should look like once the steps that run by default have run, for checking the database afterwards. */
     expected: ExpectedState;
 }

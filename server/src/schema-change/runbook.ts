@@ -137,12 +137,14 @@ export interface CompileSettings {
     lockAttempts: number;
     /** Renaming an existing table leaves a view under the old name, so applications keep working until they have switched. */
     compatViews: boolean;
+    /** Renaming a column of an existing table adds the new column next to the old one, keeps the two in step and leaves the old one for a last step, so applications keep working until they have switched. */
+    compatColumns: boolean;
     backfillBatchRows: number;
     backfillPauseMs: number;
     defaultSchema: string;
 }
 
-export const DEFAULT_COMPILE_SETTINGS: CompileSettings = { lockTimeoutSeconds: 2, lockAttempts: 8, compatViews: true, backfillBatchRows: 10_000, backfillPauseMs: 50, defaultSchema: "public" };
+export const DEFAULT_COMPILE_SETTINGS: CompileSettings = { lockTimeoutSeconds: 2, lockAttempts: 8, compatViews: true, compatColumns: true, backfillBatchRows: 10_000, backfillPauseMs: 50, defaultSchema: "public" };
 
 const statementLines = (sql: string): string[] => sql.replace(/\s+$/, "").split("\n");
 
