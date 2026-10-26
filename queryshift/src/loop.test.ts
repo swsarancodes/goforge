@@ -23,15 +23,17 @@ const candidate = (loaded: LoadedCase, file: string) => readFileSync(resolve(loa
 const case1 = loadCase(dirOf("case-01"));
 const case2 = loadCase(dirOf("case-02"));
 const case3 = loadCase(dirOf("case-03"));
+const case4 = loadCase(dirOf("case-04"));
 type Dbs = Awaited<ReturnType<typeof databasesFor>>;
 let d1: Dbs;
 let d2: Dbs;
 let d3: Dbs;
+let d4: Dbs;
 beforeAll(async () => {
-    [d1, d2, d3] = await Promise.all([databasesFor(case1), databasesFor(case2), databasesFor(case3)]);
+    [d1, d2, d3, d4] = await Promise.all([databasesFor(case1), databasesFor(case2), databasesFor(case3), databasesFor(case4)]);
 });
 afterAll(async () => {
-    await Promise.all([d1.close(), d2.close(), d3.close()]);
+    await Promise.all([d1.close(), d2.close(), d3.close(), d4.close()]);
 });
 const run = (loaded: LoadedCase, dbs: Dbs, rest: { proposer?: Proposer; maxCorrections?: number; timeoutMs?: number } = {}) => runLoop({ loaded, db: dbs.primary, heldOutDb: dbs.heldOut, ...rest });
 
@@ -95,7 +97,7 @@ describe("corrections", () => {
         expect(asked.previousSql).toBe(result.attempts[0].sql);
         expect(asked.evidence.differingColumns.length).toBeGreaterThan(0);
         expect(asked.evidence.missingRows.length).toBe(4);
-        expect(asked.schema.map((table) => table.name).sort()).toEqual(["claims", "customers", "policies"]);
+        expect(asked.schema.map((table) => table.name).sort()).toEqual(["claims", "coverages", "customers", "policies"]);
         expect(asked.mapping.length).toBeGreaterThan(10);
     });
 
@@ -330,6 +332,21 @@ describe("bind variables", () => {
         expect(proposer.asked).toHaveLength(0);
     });
 
+    it("ends case 4, whose date nobody gave, in needs_human_review with bind_parameters, whoever is configured to correct it, and calls no model", async () => {
+        expect(case4.definition.bindValues).toEqual({});
+        expect(case4.legacySql).toContain(":AS_OF_DATE");
+        for (const proposer of [undefined, scripted(["SELECT 1"])]) {
+            const result = await run(case4, d4, { proposer });
+            expect(result.outcome).toBe("needs_human_review");
+            expect(result.reasons.map((reason) => reason.code)).toEqual(["bind_parameters"]);
+            expect(result.reasons[0].message).toContain(":AS_OF_DATE");
+            expect(result.heldOut).toBe("none");
+            expect(result.attempts).toHaveLength(1);
+            expect(result.attempts[0].source).toBe("rule-engine");
+            if (proposer) expect((proposer as ReturnType<typeof scripted>).asked, "no model call").toHaveLength(0);
+        }
+    });
+
     it("measures against the declared value: another value gives another result, which is not the reference", async () => {
         const june = { type: "date" as const, value: "2026-06-01" };
         const result = await run({ ...case1, legacySql: substituteBinds(case1.legacyTemplate, { cutoff: june }).sql }, d1);
@@ -392,7 +409,7 @@ describe("through the real model path (stand-in OpenAI)", () => {
         expect(input.evidence.differingColumns.length).toBeGreaterThan(0);
         expect(input.evidence.expectedColumns).toEqual(["cust_id", "contact_label", "clm_cnt", "tot_claimed", "avg_paid", "open_ratio"]);
         expect(input.mapping.length).toBeGreaterThan(10);
-        expect(input.schema.tables.map((table: { name: string }) => table.name).sort()).toEqual(["claims", "customers", "policies"]);
+        expect(input.schema.tables.map((table: { name: string }) => table.name).sort()).toEqual(["claims", "coverages", "customers", "policies"]);
         expect(sent[0].instructions).toMatch(/NEVER write the expected rows/);
         for (const name of ["Ines Alvarez", "Jonas Weber", "Olga Petrov"]) expect(sent[0].input).not.toContain(name);
         const audit = await getAuditStore().list();

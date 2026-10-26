@@ -1,6 +1,6 @@
 {
   "oracleVersion": "23.26.3.0.0",
-  "checkedAt": "2026-10-26T06:14:11.801Z",
+  "checkedAt": "2026-10-26T12:03:00.043Z",
   "outcomes": [
     {
       "case": "case-01",
@@ -46,6 +46,20 @@
       ]
     },
     {
+      "case": "case-05",
+      "dataset": "primary",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 7,
+      "columns": [
+        "POLCY_ID",
+        "POLCY_TYP_CD",
+        "CLM_TOT",
+        "LIMIT_TOT",
+        "COVR_CNT"
+      ]
+    },
+    {
       "case": "case-01",
       "dataset": "heldout",
       "passed": true,
@@ -86,6 +100,20 @@
         "DAYS_TO_CLAIM",
         "REVIEW_DT",
         "CLM_AMT"
+      ]
+    },
+    {
+      "case": "case-05",
+      "dataset": "heldout",
+      "passed": true,
+      "message": "Results are equivalent.",
+      "oracleRows": 6,
+      "columns": [
+        "POLCY_ID",
+        "POLCY_TYP_CD",
+        "CLM_TOT",
+        "LIMIT_TOT",
+        "COVR_CNT"
       ]
     }
   ]

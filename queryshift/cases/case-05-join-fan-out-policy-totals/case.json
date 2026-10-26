@@ -1,0 +1,69 @@
+{
+  "id": "case-05",
+  "title": "Claims and coverage totals per active policy (join fan-out)",
+  "businessPurpose": "Underwriting wants one line per active policy with the total claimed, the total coverage limit and the number of coverages. Claims and coverages are both several rows per policy, so joining both to the policy before adding them up multiplies every row by the other table's row count: the sums are too big, nothing fails, and the totals look plausible.",
+  "difficulty": "hard",
+  "risks": [
+    "join_semantics",
+    "silent_executable_failure"
+  ],
+  "legacyDialect": "oracle",
+  "legacyQuery": "legacy_query.sql",
+  "expected": "expected_result.csv",
+  "orderSensitive": true,
+  "invariants": [
+    {
+      "name": "one row per active policy",
+      "kind": "row_count_equals",
+      "sql": "SELECT count(*) FROM policies WHERE status_code = 'AC'"
+    },
+    {
+      "name": "claimed amount is conserved against the claims of active policies",
+      "kind": "column_sum_equals",
+      "column": "clm_tot",
+      "sql": "SELECT COALESCE(sum(c.claim_amount), 0) FROM claims c JOIN policies p ON p.policy_id = c.policy_id WHERE p.status_code = 'AC'"
+    },
+    {
+      "name": "coverage limit is conserved against the coverages of active policies",
+      "kind": "column_sum_equals",
+      "column": "limit_tot",
+      "sql": "SELECT COALESCE(sum(v.limit_amount), 0) FROM coverages v JOIN policies p ON p.policy_id = v.policy_id WHERE p.status_code = 'AC'"
+    },
+    {
+      "name": "coverage count is conserved against the coverages of active policies",
+      "kind": "column_sum_equals",
+      "column": "covr_cnt",
+      "sql": "SELECT count(*) FROM coverages v JOIN policies p ON p.policy_id = v.policy_id WHERE p.status_code = 'AC'"
+    }
+  ],
+  "candidates": [
+    {
+      "file": "candidates/correct.sql",
+      "expect": "pass",
+      "why": "Each many-side table is totalled per policy first and then joined, as the legacy query does, so a policy stays one row.",
+      "flags": []
+    },
+    {
+      "file": "candidates/silent_join_fan_out.sql",
+      "expect": "fail",
+      "why": "Joins claims and coverages to the policy and then sums: every claim is counted once per coverage and every coverage once per claim. Executes, returns the right number of rows, and inflates the totals of every policy that has more than one of each.",
+      "catchBy": "primary",
+      "flags": []
+    },
+    {
+      "file": "candidates/distinct_band_aid.sql",
+      "expect": "fail",
+      "why": "Avoids the fan-out on the coverage total with SUM(DISTINCT limit_amount), which also drops a second coverage with the same limit. Right while every limit on a policy differs, as in the primary data; wrong when two coverages share one.",
+      "catchBy": "heldout",
+      "flags": []
+    },
+    {
+      "file": "candidates/reversed_order.sql",
+      "expect": "fail",
+      "why": "The right rows in the wrong order: ORDER BY policy_id DESC where the legacy query sorts ascending.",
+      "catchBy": "primary",
+      "flags": []
+    }
+  ],
+  "heldOutExpected": "expected_heldout.csv"
+}

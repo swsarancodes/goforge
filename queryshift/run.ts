@@ -75,6 +75,7 @@ function writeReports(outDir: string, caseId: string, files: { json?: unknown; m
 async function main(): Promise<number> {
     const json: unknown[] = [];
     let unexpected = 0;
+    let skipped = 0;
     const single = option("candidate");
 
     const reportFrom = option("report-from");
@@ -118,6 +119,14 @@ async function main(): Promise<number> {
         } else if (flag("engine")) {
             await db.exec(legacyNameViews(loadMapping(resolve(loaded.dir, loaded.definition.domain))));
             const conversion = convertQuery({ sql: loaded.legacySql, dialect: loaded.definition.legacyDialect as LegacyDialect });
+            if (conversion.parameters.length > 0) {
+                // No reference result belongs to a bind variable nobody gave a value for: there is nothing to judge the engine's query against.
+                json.push({ case: loaded.definition.id, engine: true, needsPerson: true, parameters: conversion.parameters });
+                if (!flag("json")) console.log(`${label}\n  NEEDS A PERSON: bind variable(s) ${conversion.parameters.map((name) => (name.startsWith(":") ? name : `:${name}`)).join(", ")} have no value in the case, so there is no reference result and the rule engine's query is not judged.`);
+                skipped++;
+                await dbs.close();
+                continue;
+            }
             const report: CandidateReport = await evaluateCandidate(db, loaded, conversion.validationSql);
             json.push({ case: loaded.definition.id, engine: true, convertedSql: conversion.sql, traps: conversion.traps.map((trap) => trap.title), unconverted: conversion.unconverted.length, ...report });
             if (!flag("json")) {
@@ -156,7 +165,7 @@ async function main(): Promise<number> {
         console.log(`\n${unexpected === 0 ? "Every case was verified." : `${unexpected} of ${caseDirs.length} case(s) need a human.`}`);
         if (replayed) console.log(`The corrections above were read from ${relative(process.cwd(), replayDir)}: no model was called. Every query, recorded or not, was run again just now.`);
     }
-    else if (flag("engine")) console.log(`\n${unexpected === 0 ? "The rule engine's output matched on every case." : `The rule engine's output did not match on ${unexpected} of ${caseDirs.length} case(s).`}`);
+    else if (flag("engine")) console.log(`\n${unexpected === 0 ? "The rule engine's output matched on every case it could be judged on." : `The rule engine's output did not match on ${unexpected} of ${caseDirs.length - skipped} judged case(s).`}${skipped ? ` ${skipped} case(s) need a person and were not judged.` : ""}`);
     else if (!single) console.log(`\n${unexpected === 0 ? "Every candidate was judged as its case says." : `${unexpected} candidate(s) were judged differently from what the case says.`}`);
     return unexpected === 0 ? 0 : 1;
 }

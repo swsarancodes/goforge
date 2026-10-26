@@ -265,5 +265,65 @@
         "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned."
       }
     ]
+  },
+  {
+    "case": "case-04",
+    "risks": [
+      "date_or_time_semantics"
+    ],
+    "runs": []
+  },
+  {
+    "case": "case-05",
+    "risks": [
+      "join_semantics",
+      "silent_executable_failure"
+    ],
+    "runs": [
+      {
+        "file": "candidates/correct.sql",
+        "expect": "pass",
+        "catchBy": "primary",
+        "verdict": "pass",
+        "heldOutVerdict": "pass",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 4 invariant(s) hold.",
+        "heldOutSummary": "Matches the reference result and all 4 invariant(s) hold."
+      },
+      {
+        "file": "candidates/silent_join_fan_out.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [],
+        "asExpected": true,
+        "summary": "5 expected row(s) missing, 5 unexpected row(s) returned. Invariant broken: claimed amount is conserved against the claims of active policies (sum of clm_tot is 101070.5, 34170.25 expected). Invariant broken: coverage limit is conserved against the coverages of active policies (sum of limit_tot is 4302000, 2271000 expected). Invariant broken: coverage count is conserved against the coverages of active policies (sum of covr_cnt is 23, 13 expected).",
+        "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned. Invariant broken: claimed amount is conserved against the claims of active policies (sum of clm_tot is 21650, 11950 expected). Invariant broken: coverage limit is conserved against the coverages of active policies (sum of limit_tot is 1710000, 680000 expected). Invariant broken: coverage count is conserved against the coverages of active policies (sum of covr_cnt is 17, 7 expected)."
+      },
+      {
+        "file": "candidates/distinct_band_aid.sql",
+        "expect": "fail",
+        "catchBy": "heldout",
+        "verdict": "pass",
+        "heldOutVerdict": "fail",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Matches the reference result and all 4 invariant(s) hold.",
+        "heldOutSummary": "2 expected row(s) missing, 2 unexpected row(s) returned. Invariant broken: coverage limit is conserved against the coverages of active policies (sum of limit_tot is 560000, 680000 expected)."
+      },
+      {
+        "file": "candidates/reversed_order.sql",
+        "expect": "fail",
+        "catchBy": "primary",
+        "verdict": "fail",
+        "heldOutVerdict": "fail",
+        "findings": [],
+        "asExpected": true,
+        "summary": "Same rows, but the order differs from row 1: expected [\"101\",\"AUTO\",\"3700.00\",\"151000.00\",\"3\"], got [\"108\",\"AUTO\",\"450.00\",\"25000.00\",\"1\"].",
+        "heldOutSummary": "Same rows, but the order differs from row 1: expected [\"201\",\"AUTO\",\"0.00\",\"30000.00\",\"1\"], got [\"207\",\"LIAB\",\"0\",\"0\",\"0\"]."
+      }
+    ]
   }
 ]

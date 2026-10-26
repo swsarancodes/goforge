@@ -62,7 +62,7 @@ async function run(): Promise<number> {
 
     const mapping = parseMapping(readFileSync(resolve(domain, "schema_mapping.csv"), "utf8"));
     const legacySchema = readFileSync(resolve(domain, "legacy_schema.sql"), "utf8");
-    const cases = ["case-01-outer-join-active-policies", "case-02-null-and-aggregation-claims", "case-03-date-time-claims-window"].map((name) => loadCase(resolve(here, "cases", name)));
+    const cases = ["case-01-outer-join-active-policies", "case-02-null-and-aggregation-claims", "case-03-date-time-claims-window", "case-05-join-fan-out-policy-totals"].map((name) => loadCase(resolve(here, "cases", name)));
     const outcomes: Outcome[] = [];
 
     const datasets: { name: "primary" | "heldout"; seed: (loaded: LoadedCase) => string | undefined; expected: (loaded: LoadedCase) => ExpectedTable | undefined }[] = [

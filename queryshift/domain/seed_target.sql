@@ -32,3 +32,22 @@ INSERT INTO claims (claim_id, policy_id, claim_date, claim_amount, claim_status,
     (9009, 108, TIMESTAMP '2026-03-10 10:00:00',  450.00, 'CL', 'theft',         450.00),
     (9010, 102, TIMESTAMP '2026-03-05 14:20:00',  700.00, 'CL', 'storm',         600.00),
     (9011, 104, TIMESTAMP '2026-03-31 00:00:00',  120.00, 'CL', 'minor',         120.00);  -- ADVERSARIAL: midnight at the start of March 31
+
+-- Several coverages per policy, so a join to them multiplies the rows of a policy. Rows marked ADVERSARIAL are there on purpose.
+INSERT INTO coverages (coverage_id, policy_id, coverage_type, limit_amount) VALUES
+    (3001, 101, 'COLL',  50000.00),   -- policy 101: three coverages and two claims
+    (3002, 101, 'LIAB', 100000.00),
+    (3003, 101, 'GLAS',   1000.00),
+    (3004, 102, 'FIRE', 200000.00),
+    (3005, 102, 'THFT',  15000.00),
+    (3006, 103, 'FIRE', 500000.00),
+    (3007, 103, 'FLOD', 100000.00),
+    -- ADVERSARIAL: policy 104 has no coverage at all (it still has a claim and must still be listed)
+    (3008, 105, 'COLL',  40000.00),   -- ADVERSARIAL: one coverage and two claims: the coverage total doubles if claims are joined in
+    (3009, 106, 'FIRE', 900000.00),   -- policy 106: four coverages and two claims
+    (3010, 106, 'THFT',  30000.00),
+    (3011, 106, 'LIAB', 250000.00),
+    (3012, 106, 'FLOD',  60000.00),
+    (3013, 108, 'COLL',  25000.00),   -- one coverage and one claim: a join does not inflate this one
+    (3014, 107, 'FIRE', 300000.00),   -- ADVERSARIAL: on a lapsed policy, which the report leaves out
+    (3015, 109, 'FIRE',  80000.00);   -- ADVERSARIAL: on a lapsed policy

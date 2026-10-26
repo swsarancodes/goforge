@@ -34,3 +34,15 @@ INSERT INTO claims (claim_id, policy_id, claim_date, claim_amount, claim_status,
     (8008, 205, TIMESTAMP '2026-04-02 08:00:00', 4000.00, 'OP', 'late',     NULL),     -- April
     (8009, 204, TIMESTAMP '2026-03-15 00:00:00', 2000.00, 'CL', 'hail',    1800.00),
     (8010, 202, TIMESTAMP '2026-03-20 14:15:00', 1000.00, 'OP', NULL,      NULL);
+
+-- Coverage ids 7001-7008. Different shapes from the primary data: two coverages with the same limit on one policy, active policies with no coverage and with no claims.
+INSERT INTO coverages (coverage_id, policy_id, coverage_type, limit_amount) VALUES
+    (7001, 201, 'COLL',  30000.00),   -- a coverage and no claims
+    (7002, 202, 'FIRE', 100000.00),   -- three coverages (two with the same limit) and four claims
+    (7003, 202, 'LIAB', 100000.00),
+    (7004, 202, 'THFT',  10000.00),
+    (7005, 203, 'COLL',  20000.00),   -- two coverages with the same limit, no claims
+    (7006, 203, 'FLOD',  20000.00),
+    -- policy 204 has claims and no coverage; policy 207 has neither
+    (7007, 206, 'FIRE', 400000.00),
+    (7008, 205, 'COLL',  15000.00);   -- on a lapsed policy

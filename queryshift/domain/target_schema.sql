@@ -27,3 +27,10 @@ CREATE TABLE claims (
     adjuster_note   varchar(200),
     paid_amount     numeric(12,2)
 );
+
+CREATE TABLE coverages (
+    coverage_id    integer        PRIMARY KEY,
+    policy_id      integer        NOT NULL REFERENCES policies (policy_id),
+    coverage_type  varchar(4)     NOT NULL,
+    limit_amount   numeric(12,2)  NOT NULL
+);

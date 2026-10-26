@@ -1,0 +1,47 @@
+{
+  "caseId": "case-04",
+  "outcome": "needs_human_review",
+  "heldOut": "none",
+  "findings": [],
+  "reasons": [
+    {
+      "code": "bind_parameters",
+      "message": "The legacy query has bind variables the case gives no value for (:AS_OF_DATE). The reference result belongs to particular values, so the converted query cannot be run and compared until case.json declares them under \"bindValues\". No model is asked: nothing it proposed could be checked."
+    }
+  ],
+  "finalSql": "-- NOT CONVERTED: TRUNC(cl.CLM_DT) (TRUNC(x) cuts a date to midnight or a number to a whole number, and the type of x is not known here)\n-- NOT CONVERTED: :AS_OF_DATE (The bind variable :AS_OF_DATE is not converted)\nSELECT c.customer_id AS CUST_ID,\n       c.customer_name AS CUST_NM,\n       COUNT(cl.claim_id)                                AS OPEN_CLAIMS,\n       MAX(:AS_OF_DATE - TRUNC(cl.claim_date))             AS OLDEST_DAYS,\n       ROUND(AVG(:AS_OF_DATE - TRUNC(cl.claim_date)), 1)   AS AVG_DAYS_OPEN\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nJOIN claims cl ON cl.policy_id = p.policy_id\nWHERE cl.claim_status = 'OP'\nGROUP BY c.customer_id, c.customer_name\nORDER BY OLDEST_DAYS DESC, c.customer_id",
+  "attempts": [
+    {
+      "n": 0,
+      "source": "rule-engine",
+      "sql": "-- NOT CONVERTED: TRUNC(cl.CLM_DT) (TRUNC(x) cuts a date to midnight or a number to a whole number, and the type of x is not known here)\n-- NOT CONVERTED: :AS_OF_DATE (The bind variable :AS_OF_DATE is not converted)\nSELECT c.customer_id AS CUST_ID,\n       c.customer_name AS CUST_NM,\n       COUNT(cl.claim_id)                                AS OPEN_CLAIMS,\n       MAX(:AS_OF_DATE - TRUNC(cl.claim_date))             AS OLDEST_DAYS,\n       ROUND(AVG(:AS_OF_DATE - TRUNC(cl.claim_date)), 1)   AS AVG_DAYS_OPEN\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nJOIN claims cl ON cl.policy_id = p.policy_id\nWHERE cl.claim_status = 'OP'\nGROUP BY c.customer_id, c.customer_name\nORDER BY OLDEST_DAYS DESC, c.customer_id",
+      "verdict": "error",
+      "summary": "PostgreSQL rejected it: syntax error at or near \":\"",
+      "findings": [],
+      "evidence": {
+        "kind": "error",
+        "message": "PostgreSQL rejected it: syntax error at or near \":\"",
+        "expectedColumns": [
+          "cust_id",
+          "cust_nm",
+          "open_claims",
+          "oldest_days",
+          "avg_days_open"
+        ],
+        "missingRows": [],
+        "unexpectedRows": [],
+        "missingCount": 0,
+        "unexpectedCount": 0,
+        "differingColumns": [],
+        "brokenInvariants": [],
+        "staticFindings": []
+      }
+    }
+  ],
+  "maxCorrections": 3,
+  "engineWarnings": [
+    "Not converted: TRUNC(cl.CLM_DT) (TRUNC(x) cuts a date to midnight or a number to a whole number, and the type of x is not known here)",
+    "Not converted: :AS_OF_DATE (The bind variable :AS_OF_DATE is not converted)"
+  ],
+  "proposerRisks": []
+}

@@ -46,7 +46,7 @@ describe("the pasted insurance schema (the Oracle file from queryshift/domain)",
     it("becomes PostgreSQL DDL with PostgreSQL types and lower-case names, and runs on PostgreSQL", async () => {
         const diagram = await fromOracleSql(INSURANCE);
         expect(diagram.dialect).toBe(oracle);
-        expect(diagram.tables.map((table) => table.name).sort()).toEqual(["CLM_DTL", "CUST_MST", "POLCY_HDR"]);
+        expect(diagram.tables.map((table) => table.name).sort()).toEqual(["CLM_DTL", "COVERAGE", "CUST_MST", "POLCY_HDR"]);
 
         const sql = await liveSchemaSql(diagram, oracleTypes);
         expect(sql).not.toMatch(/VARCHAR2|\bNUMBER\b/i);
@@ -60,8 +60,8 @@ describe("the pasted insurance schema (the Oracle file from queryshift/domain)",
         await db.close();
 
         const byName = new Map(columns.map((column) => [`${column.table_name}.${column.column_name}`, column]));
-        expect([...new Set(columns.map((column) => column.table_name))].sort()).toEqual(["clm_dtl", "cust_mst", "polcy_hdr"]);
-        expect(columns).toHaveLength(19);
+        expect([...new Set(columns.map((column) => column.table_name))].sort()).toEqual(["clm_dtl", "coverage", "cust_mst", "polcy_hdr"]);
+        expect(columns).toHaveLength(23);
 
         const type = (name: string) => byName.get(name)?.data_type;
         expect(type("cust_mst.cust_id")).toBe("bigint"); // NUMBER(10)
@@ -75,7 +75,7 @@ describe("the pasted insurance schema (the Oracle file from queryshift/domain)",
         expect(byName.get("cust_mst.cust_email")?.is_nullable).toBe("YES");
     });
 
-    it("keeps the keys: the primary keys and the foreign keys between the three tables", async () => {
+    it("keeps the keys: the primary keys and the foreign keys between the four tables", async () => {
         const sql = await liveSchemaSql(await fromOracleSql(INSURANCE), oracleTypes);
         const db = new PGlite();
         await db.exec(sql);
@@ -88,8 +88,8 @@ describe("the pasted insurance schema (the Oracle file from queryshift/domain)",
         await expect(db.exec("INSERT INTO polcy_hdr VALUES (102, 99, 'AUTO', now(), now(), 1, 'AC')")).rejects.toThrow(/foreign key/i);
         const joined = await db.query<{ cust_nm: string; annl_prem: string }>("SELECT c.cust_nm, p.annl_prem FROM cust_mst c JOIN polcy_hdr p ON p.cust_id = c.cust_id");
         await db.close();
-        expect(constraints.filter((c) => c.constraint_type === "PRIMARY KEY")).toHaveLength(3);
-        expect(constraints.filter((c) => c.constraint_type === "FOREIGN KEY")).toHaveLength(2);
+        expect(constraints.filter((c) => c.constraint_type === "PRIMARY KEY")).toHaveLength(4);
+        expect(constraints.filter((c) => c.constraint_type === "FOREIGN KEY")).toHaveLength(3);
         expect(joined.rows).toEqual([{ cust_nm: "Asha", annl_prem: "1200.50" }]);
     });
 });

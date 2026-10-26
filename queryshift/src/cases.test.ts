@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { RISK_CATEGORIES, databaseFor, databasesFor, evaluateCandidate, loadCase, parseCaseDefinition, runKnownCandidates, type LoadedCase } from "./case";
 import type { Database } from "./database";
+import { convertQuery } from "../../src/features/query-modernizer/engine/convert";
 import { skeleton } from "./sql-guard";
 
 // Each of these starts PostgreSQL workers (a few hundred ms to a second or two each, more when the whole suite runs in parallel).
@@ -13,20 +14,29 @@ const root = resolve(import.meta.dirname, "../cases");
 const dirs = readdirSync(root).map((name) => resolve(root, name)).filter((path) => statSync(path).isDirectory()).sort();
 const cases = dirs.map(loadCase);
 
+/**
+ * A case whose legacy query has a bind variable it gives no value for is one the harness must send to a person: no reference result can belong to
+ * a value nobody chose, so it has no candidates and no held-out result, and the loop ends in `needs_human_review` (see loop.test.ts). It is read from
+ * the query itself, not from a flag, so a case cannot be excused from judging by declaring it.
+ */
+const needsPerson = (c: LoadedCase) => convertQuery({ sql: c.legacySql, dialect: "oracle" }).parameters.length > 0;
+const judged = cases.filter((c) => !needsPerson(c));
+const escalating = cases.filter(needsPerson);
+
 /** True when the query's outermost SELECT sorts its result: an ORDER BY after the last closing parenthesis. */
 const endsInOrderBy = (sql: string) => /\border\s+by\b/.test((skeleton(sql) ?? "").split(")").pop() ?? "");
 
 describe("the case set meets the challenge", () => {
     it("has at least three cases", () => expect(cases.length).toBeGreaterThanOrEqual(3));
-    it("gives every case held-out data and a reference result for it", () => {
-        for (const c of cases) expect(c.heldOut?.expected.rows.length, c.definition.id).toBeGreaterThan(0);
+    it("gives every case that can be judged held-out data and a reference result for it", () => {
+        for (const c of judged) expect(c.heldOut?.expected.rows.length, c.definition.id).toBeGreaterThan(0);
     });
     it("covers every required risk category", () => {
         const covered = new Set(cases.flatMap((c) => c.definition.risks));
         for (const risk of RISK_CATEGORIES) expect(covered, risk).toContain(risk);
     });
-    it("gives every case one correct translation and at least one known-wrong one that still executes", () => {
-        for (const c of cases) {
+    it("gives every case that can be judged one correct translation and at least one known-wrong one that still executes", () => {
+        for (const c of judged) {
             expect(c.definition.candidates.filter((x) => x.expect === "pass"), c.definition.id).toHaveLength(1);
             expect(c.definition.candidates.filter((x) => x.expect === "fail").length, c.definition.id).toBeGreaterThanOrEqual(1);
         }
@@ -61,7 +71,21 @@ describe("the case set meets the challenge", () => {
     });
 });
 
-describe.each(cases)("$definition.id: $definition.title", (loaded: LoadedCase) => {
+describe("a case that must go to a person", () => {
+    it("exists, and holds no candidates, no held-out result and no declared value for the bind variable it leaves open", () => {
+        expect(escalating.length, "at least one shipped case escalates").toBeGreaterThanOrEqual(1);
+        for (const c of escalating) {
+            const open = convertQuery({ sql: c.legacySql, dialect: "oracle" }).parameters;
+            expect(open.length, c.definition.id).toBeGreaterThan(0);
+            expect(c.definition.candidates, `${c.definition.id}: a translation cannot be judged without a reference`).toEqual([]);
+            expect(c.heldOut, c.definition.id).toBeUndefined();
+            expect(c.expected.rows, `${c.definition.id}: expected_result.csv is a placeholder with column names only`).toEqual([]);
+            expect(c.definition.businessPurpose, `${c.definition.id} says why a person must decide`).toMatch(/person must decide/);
+        }
+    });
+});
+
+describe.each(judged)("$definition.id: $definition.title", (loaded: LoadedCase) => {
     let dbs: Awaited<ReturnType<typeof databasesFor>>;
     beforeAll(async () => {
         dbs = await databasesFor(loaded);
@@ -145,6 +169,35 @@ describe.each(cases)("$definition.id: $definition.title", (loaded: LoadedCase) =
         const before = await count();
         await runKnownCandidates(dbs, loaded);
         expect(await count()).toEqual(before);
+    });
+});
+
+describe("a join fan-out (case 5)", () => {
+    const fanOut = cases.find((c) => c.definition.id === "case-05")!;
+    let dbs: Awaited<ReturnType<typeof databasesFor>>;
+    beforeAll(async () => {
+        dbs = await databasesFor(fanOut);
+    });
+    afterAll(async () => {
+        await dbs.close();
+    });
+
+    it("has a many-to-one table behind two branches: more than one claim and more than one coverage on a policy, and a policy with none of one", async () => {
+        const rows = (await dbs.primary.query<{ claims: string; coverages: string }>("SELECT (SELECT count(*) FROM claims c WHERE c.policy_id = p.policy_id) AS claims, (SELECT count(*) FROM coverages v WHERE v.policy_id = p.policy_id) AS coverages FROM policies p WHERE p.status_code = 'AC'")).rows.map((row) => ({ claims: Number(row.claims), coverages: Number(row.coverages) }));
+        expect(rows.some((row) => row.claims > 1 && row.coverages > 1)).toBe(true);
+        expect(rows.some((row) => row.claims > 0 && row.coverages === 0)).toBe(true);
+    });
+
+    it("lets the fan-out translation run, return the right rows and the right order, and fail only on the totals, with the conservation invariants saying so", async () => {
+        const run = (await runKnownCandidates(dbs, fanOut)).find((candidate) => candidate.file.endsWith("silent_join_fan_out.sql"))!;
+        expect(run.report.verdict).toBe("fail");
+        expect(run.report.comparison?.orderProblem, "not an order problem").toBeUndefined();
+        expect(run.report.actualColumns?.length).toBe(fanOut.expected.columns.length);
+        // it did not fail by returning a different number of rows: the row-count invariant holds, the three totals do not
+        const broken = run.report.invariants.filter((invariant) => !invariant.ok).map((invariant) => invariant.name);
+        expect(run.report.invariants.find((invariant) => invariant.name.startsWith("one row per active policy"))?.ok).toBe(true);
+        expect(broken.length).toBe(3);
+        expect(broken.join(" ")).toMatch(/claimed amount.*coverage limit.*coverage count/);
     });
 });
 

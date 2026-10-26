@@ -18,3 +18,7 @@ CLM_DTL,CLM_AMT,claims,claim_amount,
 CLM_DTL,CLM_STAT_CD,claims,claim_status,
 CLM_DTL,ADJ_NOTE,claims,adjuster_note,Oracle treats '' as NULL; the load maps '' to NULL
 CLM_DTL,PAID_AMT,claims,paid_amount,
+COVERAGE,COVR_ID,coverages,coverage_id,
+COVERAGE,POLCY_ID,coverages,policy_id,
+COVERAGE,COVR_TYP_CD,coverages,coverage_type,
+COVERAGE,COVR_LIMIT_AMT,coverages,limit_amount,
