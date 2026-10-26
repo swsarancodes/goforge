@@ -40,7 +40,7 @@ describe.skipIf(!url)("Oracle databases over HTTP (real Oracle)", () => {
         const ddl = fs.readFileSync(path.resolve(import.meta.dirname, "../../../queryshift/domain/legacy_schema.sql"), "utf8");
         const created = await api("POST", "/api/oracle-databases", { name: "insurance", sql: ddl });
         expect(created.status).toBe(201);
-        expect(created.body.statementsRun).toBe(3);
+        expect(created.body.statementsRun).toBe(4);
         const id = created.body.connection.id as string;
         const schema = created.body.connection.username as string;
         expect(created.body.connection.engine).toBe("oracle");

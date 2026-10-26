@@ -111,7 +111,7 @@ describe.skipIf(!oracleUrl || !pgUrl)("Oracle to PostgreSQL, the whole journey (
         expect((await api("POST", "/api/auth/signup", { email: "flow@example.com", password: "correct horse battery staple" })).status).toBe(201);
         const created = await api("POST", "/api/oracle-databases", { name: "insurance legacy", sql: domain("legacy_schema.sql") });
         expect(created.status).toBe(201);
-        expect(created.body.statementsRun).toBe(3);
+        expect(created.body.statementsRun).toBe(4);
         oracleId = created.body.connection.id;
         oracleSchema = created.body.connection.username;
         expect(created.body.connection).toMatchObject({ engine: "oracle", kind: "cloud" });
@@ -130,7 +130,7 @@ describe.skipIf(!oracleUrl || !pgUrl)("Oracle to PostgreSQL, the whole journey (
         const plan = await api("POST", "/api/migrations/oracle-to-postgres/plan", { sourceConnectionId: oracleId });
         expect(plan.status).toBe(200);
         expect(plan.body.problems).toEqual([]);
-        expect(plan.body.tables.map((t: { pgName: string }) => t.pgName)).toEqual(["clm_dtl", "cust_mst", "polcy_hdr"]);
+        expect(plan.body.tables.map((t: { pgName: string }) => t.pgName)).toEqual(["clm_dtl", "coverage", "cust_mst", "polcy_hdr"]);
 
         const migrated = await api("POST", "/api/migrations/oracle-to-postgres", { sourceConnectionId: oracleId, name: "insurance postgres", target: { kind: "cloud" } });
         expect(migrated.status, JSON.stringify(migrated.body)).toBe(201);
@@ -138,7 +138,7 @@ describe.skipIf(!oracleUrl || !pgUrl)("Oracle to PostgreSQL, the whole journey (
         cloudDatabase = migrated.body.connection.database;
         expect(migrated.body.connection).toMatchObject({ kind: "cloud", name: "insurance postgres" });
         expect(migrated.body.connection.engine ?? "postgres").toBe("postgres");
-        expect(migrated.body.tables.map((t: { name: string; rows: number }) => t.name)).toEqual(["clm_dtl", "cust_mst", "polcy_hdr"]);
+        expect(migrated.body.tables.map((t: { name: string; rows: number }) => t.name)).toEqual(["clm_dtl", "coverage", "cust_mst", "polcy_hdr"]);
         expect(migrated.body.verification.every((v: { mismatches: string[] }) => v.mismatches.length === 0)).toBe(true);
 
         // the new database is an ordinary PostgreSQL connection now: it is listed with the PostgreSQL ones and the Oracle one is not
@@ -149,7 +149,7 @@ describe.skipIf(!oracleUrl || !pgUrl)("Oracle to PostgreSQL, the whole journey (
         // and the rows are really there, from the app's own SQL route
         const sql = await run(pgId, "SELECT (SELECT count(*) FROM cust_mst), (SELECT count(*) FROM polcy_hdr), (SELECT count(*) FROM clm_dtl)", "flow-session-0002");
         expect(sql.ok).toBe(true);
-        expect(sql.results[0].rows[0].map(Number)).toEqual(migrated.body.tables.slice().sort((a: { name: string }, b: { name: string }) => ["cust_mst", "polcy_hdr", "clm_dtl"].indexOf(a.name) - ["cust_mst", "polcy_hdr", "clm_dtl"].indexOf(b.name)).map((t: { rows: number }) => t.rows));
+        expect(sql.results[0].rows[0].map(Number)).toEqual(migrated.body.tables.filter((t: { name: string }) => t.name !== "coverage").sort((a: { name: string }, b: { name: string }) => ["cust_mst", "polcy_hdr", "clm_dtl"].indexOf(a.name) - ["cust_mst", "polcy_hdr", "clm_dtl"].indexOf(b.name)).map((t: { rows: number }) => t.rows));
     }, 180_000);
 
     it("4. every legacy Oracle query runs on Oracle, is converted, runs on the migrated PostgreSQL, and the results are compared", async () => {

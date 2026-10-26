@@ -77,7 +77,7 @@ describe.skipIf(!server || !pgUrl)("Oracle to PostgreSQL migration (real Oracle,
         const { config } = await oracleWith(domain("legacy_schema.sql"), [domain("generate_synthetic_data_oracle.sql")]);
         const plan = await withOracle(config, planOracleMigration);
         expect(plan.problems).toEqual([]);
-        expect(plan.tables.map((t) => t.pgName)).toEqual(["clm_dtl", "cust_mst", "polcy_hdr"]);
+        expect(plan.tables.map((t) => t.pgName)).toEqual(["clm_dtl", "coverage", "cust_mst", "polcy_hdr"]);
         expect(plan.tables.find((t) => t.pgName === "cust_mst")?.rows).toBe(200);
 
         const database = newDatabase();
@@ -93,7 +93,7 @@ describe.skipIf(!server || !pgUrl)("Oracle to PostgreSQL migration (real Oracle,
             expect(await type("polcy_hdr", "annl_prem")).toMatchObject({ data_type: "numeric", numeric_precision: 12, numeric_scale: 2 });
             expect(await type("clm_dtl", "clm_dt")).toMatchObject({ data_type: "timestamp without time zone", datetime_precision: 0 });
             const constraints = (await pg.query("SELECT constraint_type, count(*)::int AS n FROM information_schema.table_constraints WHERE table_schema = 'public' AND constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') GROUP BY 1 ORDER BY 1")).rows;
-            expect(constraints).toEqual([{ constraint_type: "FOREIGN KEY", n: 2 }, { constraint_type: "PRIMARY KEY", n: 3 }]);
+            expect(constraints).toEqual([{ constraint_type: "FOREIGN KEY", n: 3 }, { constraint_type: "PRIMARY KEY", n: 4 }]);
             // the keys are enforced in the copy
             await expect(pg.query("INSERT INTO polcy_hdr VALUES (999999, 999999, 'AUTO', now(), now(), 1, 'AC')")).rejects.toThrow(/foreign key/i);
         });

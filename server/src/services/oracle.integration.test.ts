@@ -37,9 +37,9 @@ describe.skipIf(!server)("Oracle schemas and SQL (real Oracle)", () => {
         const schema = schemaFor("ins");
         const password = newSchemaPassword();
         const { statementsRun } = await createOracleSchema(admin, schema, password, INSURANCE);
-        expect(statementsRun).toBe(3);
+        expect(statementsRun).toBe(4);
         const tables = await withOracle({ ...admin, user: schema, password }, async (c) => ((await c.execute("SELECT table_name FROM user_tables ORDER BY table_name")).rows as string[][]).map((r) => r[0]));
-        expect(tables).toEqual(["CLM_DTL", "CUST_MST", "POLCY_HDR"]);
+        expect(tables).toEqual(["CLM_DTL", "COVERAGE", "CUST_MST", "POLCY_HDR"]);
     });
 
     it("runs Oracle SQL through the SQL page's runner: results as text, NULL as null, dates with their time, numbers with a leading zero", async () => {
