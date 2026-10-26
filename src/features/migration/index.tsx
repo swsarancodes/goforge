@@ -12,6 +12,7 @@ import { ConfirmBar } from "./confirm-bar";
 import { MigrationChecklist } from "./migration-checklist";
 import { MigrationProof } from "./migration-proof";
 import { ReportPanel, downloadReport } from "./report-panel";
+import { ReviewPanel } from "./review-panel";
 import { useMigration } from "./use-migration";
 
 /**
@@ -77,6 +78,7 @@ const MigrationPage: React.FC = () => {
                             </p>
                             {/* the report is what the person reads and approves; while it is being made, the plan's own checklist is shown */}
                             {report ? <ReportPanel migration={migration} report={report} /> : <MigrationChecklist plan={plan} edits={edits} />}
+                            {report && <ReviewPanel migration={migration} />}
                             <ConfirmBar migration={migration} />
                         </>
                     )}
@@ -84,6 +86,11 @@ const MigrationPage: React.FC = () => {
                         <>
                             <div className="space-y-2 rounded-lg border border-emerald-500/40 p-3 text-xs" role="status">
                                 <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400"><Check className="size-4" /> “{outcome.connection.name}” is a PostgreSQL database now, and every table matches Oracle.</p>
+                                {outcome.carried.length > 0 && (
+                                    <p className="text-muted-foreground" data-testid="created-objects">
+                                        Created and found in PostgreSQL: {outcome.carried.filter((entry) => entry.kind === "index").length} index{outcome.carried.filter((entry) => entry.kind === "index").length === 1 ? "" : "es"} and {outcome.carried.filter((entry) => entry.kind === "check").length} check constraint{outcome.carried.filter((entry) => entry.kind === "check").length === 1 ? "" : "s"} ({outcome.carried.map((entry) => entry.name).join(", ")}). Every row was checked against them as they were added.
+                                    </p>
+                                )}
                                 {outcome.approval && (
                                     <p className="text-muted-foreground">
                                         Approved at {new Date(outcome.approval.approvedAt).toLocaleString()}, on the report with fingerprint <span className="font-mono">{outcome.approval.reportHash.slice(0, 12)}</span>. The approved report goes with this result.
@@ -91,7 +98,7 @@ const MigrationPage: React.FC = () => {
                                 )}
                                 <div className="flex flex-wrap gap-2">
                                     {report && outcome.approval && (
-                                        <Button size="sm" variant="outline" onClick={() => downloadReport(report, { approval: outcome.approval!, summary: summary ? { text: summary.text, model: summary.model } : undefined })}>Download the approved report (.md)</Button>
+                                        <Button size="sm" variant="outline" onClick={() => downloadReport(report, { approval: outcome.approval!, summary: summary ? { text: summary.text, model: summary.model } : undefined, review: migration.reviewIsCurrent && migration.review ? { ...migration.review.result, model: migration.review.model } : undefined })}>Download the approved report (.md)</Button>
                                     )}
                                     <Button size="sm" variant="outline" onClick={() => navigate("/database/data")}>Browse it in Data</Button>
                                     <Button size="sm" variant="outline" onClick={() => navigate("/database/sql")}>Open it in the SQL editor</Button>

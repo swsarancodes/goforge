@@ -80,6 +80,10 @@ export interface NotCarried {
     name: string;
     /** The table it belongs to, or what it does, when that helps. */
     detail?: string;
+    /** For an index or CHECK constraint: whether the migration could carry it over if asked (absent for the rest). */
+    canCarry?: boolean;
+    /** Why it cannot be carried over, when it cannot. */
+    reason?: string;
 }
 
 type Row = Record<string, unknown>;

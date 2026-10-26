@@ -149,7 +149,7 @@ const TableView: React.FC<{ table: ReportTable; open: boolean }> = ({ table, ope
  * for, sits in a box of its own that says what it is. Reading it and approving it is what allows the migration to start.
  */
 export const ReportPanel: React.FC<{ migration: Migration; report: MigrationReport }> = ({ migration, report }) => {
-    const { summary, summarizing, summaryError, writeSummary, loadingReport } = migration;
+    const { summary, summarizing, summaryError, writeSummary, loadingReport, review, reviewIsCurrent } = migration;
     const verdict = VERDICT[report.verdict];
     const s = report.summary;
     const byYou = report.renames.filter((rename) => rename.by === "you");
@@ -165,7 +165,7 @@ export const ReportPanel: React.FC<{ migration: Migration; report: MigrationRepo
                     <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void writeSummary()} disabled={summarizing || loadingReport}>
                         {summarizing ? <Loader2 className="size-3 animate-spin" /> : null} {summary ? "Write the summary again" : "Write a plain-language summary"}
                     </Button>
-                    <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => downloadReport(report, { summary: summary ? { text: summary.text, model: summary.model } : undefined })} disabled={loadingReport}>
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-xs" onClick={() => downloadReport(report, { summary: summary ? { text: summary.text, model: summary.model } : undefined, review: reviewIsCurrent && review ? { ...review.result, model: review.model } : undefined })} disabled={loadingReport}>
                         <Download className="size-3" /> Download (.md)
                     </Button>
                 </div>
@@ -188,7 +188,8 @@ export const ReportPanel: React.FC<{ migration: Migration; report: MigrationRepo
                 <p><span className="font-medium">{s.tables}</span> table{s.tables === 1 ? "" : "s"}, <span className="font-medium">{s.columns}</span> columns, <span className="font-medium">{n(s.rows)}</span> rows</p>
                 <p><span className="font-medium">{s.exact}</span> stay the same, <span className="font-medium">{s.changed}</span> behave differently, <span className="font-medium">{s.risk}</span> may lose data</p>
                 <p>The copy: <span className="font-medium">{s.values.kept}</span> kept as they are, <span className="font-medium">{s.values.reformatted}</span> written another way, <span className="font-medium">{s.values.converted}</span> converted, <span className="font-medium">{s.values.dropped}</span> with something dropped</p>
-                <p><span className="font-medium">{s.changesByYou}</span> change{s.changesByYou === 1 ? "" : "s"} by you, <span className="font-medium">{s.notCarried}</span> object{s.notCarried === 1 ? "" : "s"} not carried over, <span className="font-medium">{s.problems}</span> blocking problem{s.problems === 1 ? "" : "s"}</p>
+                <p><span className="font-medium">{s.changesByYou}</span> change{s.changesByYou === 1 ? "" : "s"} by you, <span className="font-medium">{s.problems}</span> blocking problem{s.problems === 1 ? "" : "s"}</p>
+                <p><span className="font-medium">{s.carried}</span> index{s.carried === 1 ? "" : "es"} and check constraint{s.carried === 1 ? "" : "s"} carried over, <span className="font-medium">{s.notCarried}</span> object{s.notCarried === 1 ? "" : "s"} not carried over{s.canBeCarried > 0 ? ` (${s.canBeCarried} could be)` : ""}</p>
             </div>
 
             {report.editProblems.length > 0 && (
@@ -232,14 +233,37 @@ export const ReportPanel: React.FC<{ migration: Migration; report: MigrationRepo
                 {report.tables.map((table, index) => <TableView key={table.oracleName} table={table} open={index === 0 && report.tables.length <= 2} />)}
             </div>
 
+            {report.carried.length > 0 && (
+                <div data-testid="carried-over">
+                    <p className="font-medium">Carried over by your choice</p>
+                    <p className="text-muted-foreground">Created in PostgreSQL after the rows are copied, so each one is checked against the data. If a row broke one, the migration would stop and nothing would be kept.</p>
+                    <ul className="list-disc pl-4">
+                        {report.carried.map((entry) => (
+                            <li key={`${entry.kind}:${entry.name}`}>
+                                {entry.kind === "index" ? "index" : "check constraint"} <span className="font-mono">{entry.name}</span> <span className="text-muted-foreground">({entry.detail})</span>
+                                <code className="block break-all font-mono text-[10px] text-muted-foreground">{entry.sql}</code>
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
             <div>
                 <p className="font-medium">Not carried over</p>
                 {report.notCarried.length === 0 ? (
                     <p className="text-muted-foreground">Nothing else in the schema: no indexes beyond the keys, CHECK constraints, sequences, views, triggers or programs.</p>
                 ) : (
                     <>
-                        <p className="text-muted-foreground">The migration carries tables, columns, NOT NULL, same-meaning defaults, primary keys, unique constraints and foreign keys. These are left behind, and would have to be recreated in PostgreSQL by hand:</p>
-                        <ul className="list-disc pl-4">{report.notCarried.map((entry) => <li key={`${entry.kind}:${entry.name}`}>{entry.kind} <span className="font-mono">{entry.name}</span>{entry.detail ? <span className="text-muted-foreground"> ({entry.detail})</span> : null}</li>)}</ul>
+                        <p className="text-muted-foreground">The migration carries tables, columns, NOT NULL, same-meaning defaults, primary keys, unique constraints and foreign keys. Indexes and CHECK constraints can be carried too when you ask {ASSISTANT_NAME} to, if their meaning is the same in PostgreSQL. The rest is left behind, and would have to be recreated in PostgreSQL by hand:</p>
+                        <ul className="list-disc pl-4">
+                            {report.notCarried.map((entry) => (
+                                <li key={`${entry.kind}:${entry.name}`}>
+                                    {entry.kind} <span className="font-mono">{entry.name}</span>{entry.detail ? <span className="text-muted-foreground"> ({entry.detail})</span> : null}
+                                    {entry.canCarry === true && <span className="ml-1 rounded border border-emerald-500/40 px-1 py-0.5 text-[10px] text-emerald-700 dark:text-emerald-400">can be carried over: ask {ASSISTANT_NAME}</span>}
+                                    {entry.canCarry === false && <span className="block text-[11px] text-muted-foreground">cannot be carried over: {entry.reason}</span>}
+                                </li>
+                            ))}
+                        </ul>
                     </>
                 )}
             </div>

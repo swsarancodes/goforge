@@ -9,10 +9,10 @@ const column = (extra: Partial<ReportColumn> = {}): ReportColumn => ({
 });
 const report = (extra: Partial<MigrationReport> = {}): MigrationReport => ({
     generatedAt: "2026-10-26T12:00:00.000Z", source: "insurance", verdict: "ready",
-    summary: { tables: 1, columns: 1, rows: 340, exact: 1, changed: 0, risk: 0, values: { kept: 1, reformatted: 0, converted: 0, dropped: 0 }, changesByYou: 0, notCarried: 0, problems: 0 },
+    summary: { tables: 1, columns: 1, rows: 340, exact: 1, changed: 0, risk: 0, values: { kept: 1, reformatted: 0, converted: 0, dropped: 0 }, changesByYou: 0, notCarried: 0, canBeCarried: 0, carried: 0, problems: 0 },
     renames: [], droppedDefaults: [], rewrittenDefaults: [],
     tables: [{ oracleName: "POLCY_HDR", pgName: "polcy_hdr", renamed: false, rows: 340, primaryKey: ["POLCY_ID"], columns: [column()] }],
-    notCarried: [], behaviour: [], problems: [], editProblems: [], mustAccept: [], dataRead: false, hash: "a".repeat(64), ...extra,
+    notCarried: [], carried: [], behaviour: [], problems: [], editProblems: [], mustAccept: [], dataRead: false, hash: "a".repeat(64), ...extra,
 });
 
 describe("the report as Markdown", () => {
@@ -105,5 +105,48 @@ describe("the report as Markdown", () => {
 
     it("is the same document every time for the same report", () => {
         expect(reportToMarkdown(report())).toBe(reportToMarkdown(report()));
+    });
+    it("lists what is carried over with its statement, and for what is left behind says whether it could be carried", () => {
+        const text = reportToMarkdown(report({
+            summary: { ...report().summary, carried: 2, notCarried: 3, canBeCarried: 1 },
+            carried: [
+                { kind: "index", name: "IX_CLM_POLCY", pgName: "ix_clm_polcy", table: "CLM_DTL", pgTable: "clm_dtl", detail: "on CLM_DTL (POLCY_ID)", sql: 'CREATE INDEX "ix_clm_polcy" ON "clm_dtl" ("polcy_id")' },
+                { kind: "check", name: "CK_CLM_AMT", pgName: "ck_clm_amt", table: "CLM_DTL", pgTable: "clm_dtl", detail: "CLM_AMT >= 0", sql: 'ALTER TABLE "clm_dtl" ADD CONSTRAINT "ck_clm_amt" CHECK ("clm_amt" >= 0)' },
+            ],
+            notCarried: [
+                { kind: "index", name: "IX_B", detail: "on T", canCarry: true },
+                { kind: "check constraint", name: "CK_F", detail: "on T: UPPER(X) = X", canCarry: false, reason: "it calls UPPER()" },
+                { kind: "view", name: "V_ALL" },
+            ],
+        }));
+        expect(text).toContain("## Carried over by your choice");
+        expect(text).toContain('- index `IX_CLM_POLCY` (on CLM_DTL (POLCY_ID)): `CREATE INDEX "ix_clm_polcy" ON "clm_dtl" ("polcy_id")`');
+        expect(text).toContain("2 indexes and check constraints carried over by your choice;");
+        expect(text).toContain("- index `IX_B` (on T): could be carried over if asked");
+        expect(text).toContain("- check constraint `CK_F` (on T: UPPER(X) = X): cannot be carried over, it calls UPPER()");
+        expect(text).toContain("- view `V_ALL`\n");
+        expect(reportToMarkdown(report())).not.toContain("Carried over by your choice");
+    });
+
+    it("puts the second opinion in a block of its own that says what it is, with its findings and what was left out", () => {
+        const text = reportToMarkdown(report(), {
+            review: {
+                model: "gpt-x",
+                overview: "One thing to look at.",
+                dropped: 2,
+                findings: [
+                    { severity: "concern", table: "CHILD", column: "PARENT_ID", title: "Type differs from its parent", detail: "integer against bigint.", suggestion: "Make CHILD.PARENT_ID bigint." },
+                    { severity: "note", table: null, column: null, title: "Nothing else", detail: "d", suggestion: null },
+                ],
+            },
+        });
+        expect(text).toContain("## AI review");
+        expect(text).toContain("a reviewer separate from the assistant that changes the plan");
+        expect(text).toContain("not proof, and not part of what was approved");
+        expect(text).toContain("- **concern** `CHILD.PARENT_ID`: Type differs from its parent. integer against bigint. Suggestion: Make CHILD.PARENT_ID bigint.");
+        expect(text).toContain("- **note**: Nothing else. d");
+        expect(text).toContain("2 findings left out because they named a table or column that is not in the plan.");
+        expect(text.indexOf("## AI review")).toBeLessThan(text.indexOf("## Summary"));
+        expect(reportToMarkdown(report())).not.toContain("## AI review");
     });
 });

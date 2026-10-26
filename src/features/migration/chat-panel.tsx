@@ -16,6 +16,7 @@ export function suggestionsFor(plan: MigrationPlanPreview | undefined): string[]
     if (columns.some((column) => column.oracleType.toUpperCase() === "DATE" && column.edited.length === 0)) suggestions.push("Make the DATE columns real dates");
     if (columns.some((column) => column.note.status === "risk")) suggestions.push("Explain the columns that may lose data");
     if (columns.some((column) => /^NUMBER\(1(,0)?\)$/i.test(column.oracleType))) suggestions.push("Make the NUMBER(1) columns booleans");
+    if (plan.objects?.some((object) => object.carriable && !object.carried)) suggestions.push("Carry over the indexes and check constraints");
     suggestions.push("What is not carried over?");
     return suggestions.slice(0, 3);
 }

@@ -123,7 +123,7 @@ describe.skipIf(!oracleUrl || !pgUrl)("the migration page over HTTP (real Oracle
         expect(answer.body.reply).toContain("real dates");
         expect(answer.body.applied).toEqual(["make POL.STARTED date", "make POL.ENDED date", "rename table POL to policy"]);
         expect(answer.body.rejected.map((r: any) => r.reason)).toEqual([expect.stringContaining('"money" is not a type this migration knows'), "there is no table GHOST"]);
-        expect(answer.body.edits).toEqual({ tables: { POL: { pgName: "policy" } }, columns: { "POL.STARTED": { pgType: "date" }, "POL.ENDED": { pgType: "date" } } });
+        expect(answer.body.edits).toEqual({ tables: { POL: { pgName: "policy" } }, columns: { "POL.STARTED": { pgType: "date" }, "POL.ENDED": { pgType: "date" } }, objects: {} });
 
         const policy = answer.body.plan.tables.find((t: any) => t.oracleName === "POL");
         expect(policy.pgName).toBe("policy");
@@ -139,10 +139,10 @@ describe.skipIf(!oracleUrl || !pgUrl)("the migration page over HTTP (real Oracle
     it("keeps the earlier changes when the next message changes something else", async () => {
         stubbed = { reply: "Active is a boolean now.", operations: [{ op: "set_column_type", table: "POL", column: "ACTIVE", pgType: "boolean" }] };
         const first = await post("/api/migrations/oracle-to-postgres/agent", { sourceConnectionId: oracleId, message: "make ACTIVE a boolean", edits: { tables: { POL: { pgName: "policy" } }, columns: { "POL.STARTED": { pgType: "date" } } } });
-        expect(first.body.edits).toEqual({ tables: { POL: { pgName: "policy" } }, columns: { "POL.STARTED": { pgType: "date" }, "POL.ACTIVE": { pgType: "boolean" } } });
+        expect(first.body.edits).toEqual({ tables: { POL: { pgName: "policy" } }, columns: { "POL.STARTED": { pgType: "date" }, "POL.ACTIVE": { pgType: "boolean" } }, objects: {} });
         stubbed = { reply: "Back to how it was.", operations: [{ op: "reset_column", table: "POL", column: "STARTED" }, { op: "reset_table", table: "POL" }] };
         const second = await post("/api/migrations/oracle-to-postgres/agent", { sourceConnectionId: oracleId, message: "undo the date and the name", edits: first.body.edits });
-        expect(second.body.edits).toEqual({ tables: {}, columns: { "POL.ACTIVE": { pgType: "boolean" } } });
+        expect(second.body.edits).toEqual({ tables: {}, columns: { "POL.ACTIVE": { pgType: "boolean" } }, objects: {} });
     });
 
     it("answers a question without changing anything", async () => {

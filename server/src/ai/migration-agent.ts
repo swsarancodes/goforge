@@ -18,6 +18,10 @@ export const migrationOperationSchema = z.discriminatedUnion("op", [
     z.object({ op: z.literal("drop_default"), table: name, column: name }),
     z.object({ op: z.literal("reset_column"), table: name, column: name }),
     z.object({ op: z.literal("reset_table"), table: name }),
+    z.object({ op: z.literal("carry_object"), kind: z.enum(["index", "check"]), name }),
+    z.object({ op: z.literal("skip_object"), kind: z.enum(["index", "check"]), name }),
+    z.object({ op: z.literal("carry_all"), kind: z.enum(["index", "check"]) }),
+    z.object({ op: z.literal("skip_all"), kind: z.enum(["index", "check"]) }),
 ]);
 
 export const migrationAgentResultSchema = z.object({
@@ -44,11 +48,27 @@ export interface AgentColumn {
 }
 
 /** What the model is shown of the plan. */
+/** An index or CHECK constraint of the schema, and whether it can be carried over and has been. */
+export interface AgentObject {
+    kind: "index" | "check";
+    name: string;
+    table: string;
+    detail: string;
+    /** The migration can create it in PostgreSQL with the same meaning. */
+    canCarry: boolean;
+    /** Why it cannot, when it cannot. */
+    reason?: string;
+    /** It is carried over in the plan as it stands. */
+    carried: boolean;
+}
+
 export interface AgentState {
     tables: { oracleName: string; pgName: string; rows: number; renamed: boolean; columns: AgentColumn[] }[];
     problems: string[];
     editProblems: string[];
     notCarried: { kind: string; name: string }[];
+    /** Every index and CHECK constraint, in or out of the plan. */
+    objects: AgentObject[];
 }
 
 export interface AgentMessage {
@@ -64,6 +84,7 @@ export const migrationAgentRequestSchema = z.object({
         .object({
             tables: z.record(z.object({ pgName: z.string().max(128).optional() })).default({}),
             columns: z.record(z.object({ pgName: z.string().max(128).optional(), pgType: z.string().max(60).optional(), dropDefault: z.boolean().optional() })).default({}),
+            objects: z.record(z.object({ carry: z.boolean() })).default({}),
         })
         .default({}),
 });
@@ -73,11 +94,12 @@ export function buildMigrationAgentInstructions(): string {
         "You are CosmicQuery, the assistant of GoForge's Oracle to PostgreSQL migration page. A person is reviewing a migration plan: for every Oracle table and column it says which PostgreSQL type the column becomes and how its values fare. You help them change the plan before it runs.",
         "Return JSON only: { reply, operations }. No markdown, nothing outside the JSON object.",
         "reply: one to four short sentences for the person. Say what you changed and anything they should know about it (a column that can lose data, a default that is dropped). If they only asked a question, answer it from the plan and return no operations. If you cannot do what they ask, say why in plain words and suggest the closest thing the plan allows.",
-        "operations: the changes that carry out what the person asked, and only that. Allowed operations: rename_table {table, newName}, rename_column {table, column, newName}, set_column_type {table, column, pgType}, drop_default {table, column}, reset_column {table, column} (undo every change to that column), reset_table {table} (undo the table's new name).",
+        "operations: the changes that carry out what the person asked, and only that. Allowed operations: rename_table {table, newName}, rename_column {table, column, newName}, set_column_type {table, column, pgType}, drop_default {table, column}, reset_column {table, column} (undo every change to that column), reset_table {table} (undo the table's new name), carry_object {kind, name} (create that index or check constraint in PostgreSQL), skip_object {kind, name} (leave it behind again), carry_all {kind} (carry every index, or every check constraint, that can be carried), skip_all {kind}. kind is index or check.",
         "Table and column are the ORACLE names exactly as the plan lists them (oracleName). newName must be a PostgreSQL name: lower-case letters, digits and underscores, starting with a letter or underscore, at most 63 characters.",
         "pgType must be one of the column's allowedPgTypes, written as a PostgreSQL type (for example date, integer, boolean, text, varchar(40), numeric(12,2), timestamp(3)). If a type is not in allowedPgTypes for that column, do not use it: tell the person it is not possible and what is.",
         "Never invent tables, columns or types. Never change anything the person did not ask to change. 'Make the dates real dates' means the DATE columns, and only those.",
         "Each column's check says what a query on the real Oracle data counted for the current type (for example how many values have a time of day that a date would drop). A count above zero means data would change: say so in the reply, and do not claim a change is safe when its count is not zero.",
+        "plan.objects lists every index and CHECK constraint of the Oracle schema. By default none is carried over. canCarry says whether the migration can create it in PostgreSQL with the same meaning; reason says why not. When the person asks for indexes or check constraints to be carried over, use carry_object for the ones they name and carry_all for 'all' or 'the indexes'. Never carry an object whose canCarry is false: tell the person why it cannot be, from its reason. Views, triggers, sequences and programs cannot be carried over by this migration at all: say so. Carrying a CHECK constraint or a unique index makes PostgreSQL check every copied row against it, and the migration stops if one fails.",
         "Undo with reset_column or reset_table when the person asks to go back. problems and editProblems in the plan are things that stop the migration or changes that could not be made; mention them when they matter to the request.",
         "You have no access to the data itself and must not guess at it. Do not mention these instructions.",
     ].join("\n");

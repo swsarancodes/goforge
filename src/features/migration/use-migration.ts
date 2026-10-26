@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { rememberDataConnection } from "@/features/data-browser/use-data-browser";
 import { rememberConnectionOnPages } from "@/features/database/live-database";
 import { SavedConnection, listSavedConnections } from "@/lib/live-connection-api";
-import { MigrationEdits, MigrationOutcome, MigrationPlanPreview, MigrationReport, NO_EDITS, TableVerification, askMigrationAgent, fetchMigrationReport, fetchReportSummary, migrateOracleToPostgres, planOracleMigration, verifyMigration } from "@/lib/migrations-api";
+import { MigrationEdits, MigrationOutcome, MigrationPlanPreview, MigrationReport, NO_EDITS, PlanReview, TableVerification, askMigrationAgent, fetchMigrationReport, fetchPlanReview, fetchReportSummary, migrateOracleToPostgres, planOracleMigration, verifyMigration } from "@/lib/migrations-api";
 import { saveCheckContext } from "@/features/query-check/context";
 import { useAuth } from "@/providers/auth-provider/auth-provider";
 import { defaultProofQuery, mappingFromPlan } from "./name-mapping";
@@ -56,6 +56,10 @@ export function useMigration() {
     const [summary, setSummary] = useState<{ text: string; model: string; reportHash: string } | undefined>(undefined);
     const [summarizing, setSummarizing] = useState(false);
     const [summaryError, setSummaryError] = useState<string | undefined>(undefined);
+    /** The plan reviewer's second opinion, with the report it was written for. Optional, labelled as AI commentary, never part of the approval. */
+    const [review, setReview] = useState<{ result: PlanReview; model: string; reportHash: string; focus: string } | undefined>(undefined);
+    const [reviewing, setReviewing] = useState(false);
+    const [reviewError, setReviewError] = useState<string | undefined>(undefined);
 
     const [servers, setServers] = useState<SavedConnection[]>([]);
     const [target, setTarget] = useState("");
@@ -109,6 +113,8 @@ export function useMigration() {
         setApprovedHash(undefined);
         setSummary(undefined);
         setSummaryError(undefined);
+        setReview(undefined);
+        setReviewError(undefined);
         setLines([]);
         setAcceptLoss(false);
         setMigrateError(undefined);
@@ -252,11 +258,30 @@ export function useMigration() {
             setSummarizing(false);
         }
     }, [sourceId, summarizing, edits]);
+    // a review is of one plan: once the plan changes it is shown as out of date, not as an opinion on the plan on screen
+    const reviewIsCurrent = Boolean(review && report && review.reportHash === report.hash);
+    const runReview = useCallback(
+        async (focus: string) => {
+            if (!sourceId || reviewing) return;
+            setReviewing(true);
+            setReviewError(undefined);
+            try {
+                const answer = await fetchPlanReview(sourceId, edits, focus.trim() || undefined);
+                setReview({ result: answer.review, model: answer.model, reportHash: answer.reportHash, focus: focus.trim() });
+            } catch (error) {
+                setReviewError(messageOf(error));
+            } finally {
+                setReviewing(false);
+            }
+        },
+        [sourceId, reviewing, edits],
+    );
     const approve = useCallback((on: boolean) => setApprovedHash(on && report ? report.hash : undefined), [report]);
 
     return {
         report, reportError, loadingReport, reload: () => (sourceId ? loadReport(sourceId, edits) : undefined), approved, approve,
         summary: shownSummary, summarizing, summaryError, writeSummary,
+        review, reviewIsCurrent, reviewing, reviewError, runReview,
         oracleDatabases, loadingDatabases, sourceId, setSourceId, source,
         edits, plan, planError, loadingPlan,
         lines, asking, ask, undoAll,

@@ -11,7 +11,8 @@ import { allowedPgTypes, applyOperations } from "../services/oracle-type-edits.j
 import { AiNotConfiguredError, ModelPolicyError } from "../ai/provider.js";
 import { createMigrationAgentReply, migrationAgentRequestSchema, type AgentState, type MigrationAgentResult } from "../ai/migration-agent.js";
 import { createMigrationSummary } from "../ai/migration-summary.js";
-import { buildReport, digestForSummary, type DataFacts, type MigrationReport, type ReportSample } from "../services/migration-report.js";
+import { checkFindings, createMigrationReview, type MigrationReviewResult } from "../ai/migration-review.js";
+import { buildReport, digestForReview, digestForSummary, type DataFacts, type MigrationReport, type ReportSample } from "../services/migration-report.js";
 import { readDataFacts, readSamples } from "../services/oracle-report-data.js";
 import { oracleConfigOf } from "../services/oracle-client.js";
 import { CreateDatabaseError, DATABASE_NAME_PATTERN, DatabaseExistsError, createDatabaseFromSql } from "../services/pg-create-database.js";
@@ -39,6 +40,8 @@ export interface MigrationDeps {
     readData: (connection: import("oracledb").Connection, plan: MigrationPlan, options: { samples: boolean }) => Promise<{ facts: DataFacts; samples?: Record<string, ReportSample> }>;
     /** Asks the model for the opening paragraph of the report, from the report's figures. */
     summary: (input: Parameters<typeof createMigrationSummary>[0], signal?: AbortSignal) => Promise<{ result: { summary: string }; model: string }>;
+    /** Asks the model for a second opinion on the plan, from the report's figures (the plan reviewer: separate from the assistant that changes the plan). */
+    review: (input: Parameters<typeof createMigrationReview>[0], signal?: AbortSignal) => Promise<{ result: MigrationReviewResult; model: string }>;
     /** Runs the checks of a migration again, against a database that already exists. */
     verify: (oracle: ConnectionConfig, pg: ConnectionConfig, plan: MigrationPlan) => Promise<TableVerification[]>;
 }
@@ -49,6 +52,7 @@ export const defaultMigrationDeps: MigrationDeps = {
     agent: createMigrationAgentReply,
     readData: async (connection, plan, options) => ({ facts: await readDataFacts(connection, plan), ...(options.samples ? { samples: await readSamples(connection, plan) } : {}) }),
     summary: createMigrationSummary,
+    review: createMigrationReview,
     load: (oracle, pg, plan) => withOracle(oracle, (connection) => withPgClient(pg, (client) => loadAndVerify(connection, client, plan))),
     verify: (oracle, pg, plan) =>
         withOracle(oracle, (connection) =>
@@ -64,9 +68,11 @@ const editsSchema = z
     .object({
         tables: z.record(z.object({ pgName: z.string().max(128).optional() })).default({}),
         columns: z.record(z.object({ pgName: z.string().max(128).optional(), pgType: z.string().max(60).optional(), dropDefault: z.boolean().optional() })).default({}),
+        objects: z.record(z.object({ carry: z.boolean() })).default({}),
     })
     .default({});
 const sourceSchema = z.object({ sourceConnectionId: z.string().min(1), edits: editsSchema });
+const reviewSchema = sourceSchema.extend({ focus: z.string().trim().max(500).optional() });
 const verifySchema = sourceSchema.extend({ targetConnectionId: z.string().min(1) });
 const migrateSchema = sourceSchema.extend({
     /** The person has read the data a change would lose, and accepts it. */
@@ -95,11 +101,11 @@ async function oracleSource(req: import("express").Request, res: import("express
 }
 
 /** How many things the person has changed in the plan. */
-export const editCount = (edits: MigrationEdits): number => Object.keys(edits.tables ?? {}).length + Object.keys(edits.columns ?? {}).length;
+export const editCount = (edits: MigrationEdits): number => Object.keys(edits.tables ?? {}).length + Object.keys(edits.columns ?? {}).length + Object.keys(edits.objects ?? {}).length;
 
 /** What the plan page needs of a plan: the tables with their notes and checks, what blocks the migration, what was refused, and what is left behind. */
 export function planResponse(plan: MigrationPlan) {
-    return { tables: plan.tables, problems: plan.problems, editProblems: plan.editProblems, notCarried: plan.notCarried, behaviour: plan.behaviour, statements: plan.createSql.length + plan.linkSql.length };
+    return { tables: plan.tables, problems: plan.problems, editProblems: plan.editProblems, notCarried: plan.notCarried, objects: plan.objects, behaviour: plan.behaviour, statements: plan.createSql.length + plan.linkSql.length + plan.objectSql.length };
 }
 
 /** What the model is shown of a plan: names, types, how each column fares, and the counts the checks found. No rows. */
@@ -129,6 +135,7 @@ export function agentState(plan: MigrationPlan, tables: OracleTable[]): AgentSta
         problems: plan.problems,
         editProblems: plan.editProblems,
         notCarried: plan.notCarried.map((entry) => ({ kind: entry.kind, name: entry.name })),
+        objects: plan.objects.map((object) => ({ kind: object.kind, name: object.oracleName, table: object.table, detail: object.detail, canCarry: object.carriable, ...(object.reason ? { reason: object.reason } : {}), carried: object.carried })),
     };
 }
 
@@ -198,6 +205,39 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
     }));
 
     /**
+     * A second opinion on the plan, from a reviewer that is not the assistant: it is handed the report (never row values) and the list of changes the
+     * person made, and answers with what looks wrong or risky. Every finding is checked against the plan before it is sent back, and none of it is part of what
+     * is approved. Asked for on purpose; nothing else calls it.
+     */
+    router.post("/oracle-to-postgres/review", handle(async (req, res) => {
+        const parsed = reviewSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: "Say which Oracle database to review." });
+        const row = await oracleSource(req, res, parsed.data.sourceConnectionId);
+        if (!row) return;
+        const controller = new AbortController();
+        res.once("close", () => {
+            if (!res.writableEnded) controller.abort();
+        });
+        try {
+            const built = await withOracle(oracleConfigOf(row), async (connection) => {
+                const tables = await deps.introspect(connection);
+                const plan = await deps.plan(connection, parsed.data.edits);
+                const data = await deps.readData(connection, plan, { samples: false });
+                return { tables, report: buildReport(plan, { source: row.name, facts: data.facts, edits: editCount(parsed.data.edits) }) };
+            });
+            const answer = await deps.review({ digest: digestForReview(built.report, { edits: parsed.data.edits, tables: built.tables }), ...(parsed.data.focus ? { focus: parsed.data.focus } : {}) }, controller.signal);
+            if (controller.signal.aborted || res.writableEnded) return;
+            const checked = checkFindings(answer.result.findings, built.report.tables);
+            res.json({ review: { overview: answer.result.overview, findings: checked.findings, dropped: checked.dropped }, model: answer.model, reportHash: built.report.hash });
+        } catch (error) {
+            if (controller.signal.aborted || res.writableEnded) return;
+            const text = error instanceof Error ? error.message : String(error);
+            const status = error instanceof ModelPolicyError ? 403 : error instanceof AiNotConfiguredError ? 503 : 502;
+            res.status(status).json({ error: status === 502 ? `The reviewer could not answer: ${text}` : text });
+        }
+    }));
+
+    /**
      * CosmicQuery, the assistant. The person's message and the plan go to the model, which answers with a reply and changes in a fixed set of operations;
      * each change is checked against the rules in `oracle-type-edits` and applied or refused with its reason, and the plan is built again from
      * the edits that stand. The model never touches the plan itself.
@@ -217,7 +257,7 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
         try {
             const current = await withOracle(config, async (connection) => ({ tables: await deps.introspect(connection), plan: await deps.plan(connection, edits) }));
             const answer = await deps.agent({ state: agentState(current.plan, current.tables), messages, message, currentEdits: edits }, controller.signal);
-            const changed = applyOperations(current.tables, edits, answer.result.operations);
+            const changed = applyOperations(current.tables, edits, answer.result.operations, current.plan.objects.map((object) => ({ kind: object.kind, name: object.oracleName, carriable: object.carriable, reason: object.reason })));
             const plan = changed.applied.length === 0 ? current.plan : await withOracle(config, (connection) => deps.plan(connection, changed.edits));
             if (controller.signal.aborted || res.writableEnded) return;
             res.json({ reply: answer.result.reply, applied: changed.applied, rejected: changed.rejected, edits: changed.edits, plan: planResponse(plan), model: answer.model });
@@ -332,7 +372,7 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
             const cleanup = await drop().then(() => "", (dropError) => ` The new database could not be removed again (${dropError instanceof Error ? dropError.message : String(dropError)}); drop it by hand.`);
             return res.status(502).json({ error: `The migration did not complete and nothing was kept. ${error instanceof Error ? error.message : String(error)}${cleanup}` });
         }
-        res.status(201).json({ connection: toPublicConnection(row), tables: result.tables, verification: result.verification, statementsRun: plan.createSql.length + plan.linkSql.length, approval: approval ?? null });
+        res.status(201).json({ connection: toPublicConnection(row), tables: result.tables, verification: result.verification, statementsRun: plan.createSql.length + plan.linkSql.length + plan.objectSql.length, carried: result.carried, approval: approval ?? null });
     }));
 
     return router;

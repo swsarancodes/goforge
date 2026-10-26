@@ -2,6 +2,7 @@ import type { Client } from "pg";
 import { oracledb } from "./oracle-client.js";
 import { dateText, numberText } from "./oracle-sql.js";
 import { behaviourNotes, conversionNote, findNotCarried, type ConversionNote, type NotCarried } from "./oracle-conversion-notes.js";
+import { NO_OBJECTS, planObjects, readOracleObjects, type OracleObjects, type PlannedObject } from "./oracle-carry.js";
 import { columnKey, dataCheckFor, defaultFitsType, resolveName, resolvePgType, type MigrationEdits, type ParsedPgType } from "./oracle-type-edits.js";
 
 export type { MigrationEdits } from "./oracle-type-edits.js";
@@ -161,6 +162,10 @@ export interface MigrationPlan {
     createSql: string[];
     /** Adds the foreign keys. Runs after the rows, so no order of tables matters and the data is checked against them. */
     linkSql: string[];
+    /** Every index and CHECK constraint of the schema: whether it can be carried over, and whether the person chose to. */
+    objects: PlannedObject[];
+    /** Creates the indexes and CHECK constraints the person chose. Runs after the rows, so each is checked against the data. */
+    objectSql: string[];
     /** Objects of the Oracle schema the migration does not create (indexes, CHECK constraints, sequences, views, triggers, programs). */
     notCarried: NotCarried[];
     /** What behaves differently in queries on the PostgreSQL side, for this schema. */
@@ -229,7 +234,7 @@ export function pgDefaultOf(column: OracleColumn): { value: string | null } | st
 const defaultName = (name: string): string => foldName(name);
 
 /** The migration of the Oracle schema described by `tables`, with the row counts to report and the person's `edits` applied. */
-export function planMigration(tables: OracleTable[], counts: Map<string, number>, edits: MigrationEdits = {}): MigrationPlan {
+export function planMigration(tables: OracleTable[], counts: Map<string, number>, edits: MigrationEdits = {}, found: OracleObjects = NO_OBJECTS): MigrationPlan {
     const problems: string[] = [];
     const editProblems: string[] = [];
 
@@ -342,7 +347,9 @@ export function planMigration(tables: OracleTable[], counts: Map<string, number>
         }
     }
     if (planned.length === 0) problems.push("The schema has no tables.");
-    return { tables: planned, problems, editProblems, createSql, linkSql, notCarried: [], behaviour: behaviourNotes(planned) };
+    const carry = planObjects(tables, planned, found, edits, foldName);
+    editProblems.push(...carry.editProblems);
+    return { tables: planned, problems, editProblems, createSql, linkSql, objects: carry.objects, objectSql: carry.objectSql, notCarried: [], behaviour: behaviourNotes(planned) };
 }
 
 /**
@@ -375,11 +382,23 @@ export async function runDataChecks(connection: oracledb.Connection, tables: Ora
 export const failedChecks = (plan: MigrationPlan): { table: string; column: string; check: DataCheck }[] =>
     plan.tables.flatMap((table) => table.columns.flatMap((column) => (column.check && (column.check.count === null || column.check.count > 0) ? [{ table: table.pgName, column: column.pgName, check: column.check }] : [])));
 
+/** What stays behind: everything the dictionary lists except the indexes and CHECK constraints that are carried; the ones that are not say whether they could be. */
+export function leftBehind(found: NotCarried[], objects: PlannedObject[]): NotCarried[] {
+    return found.flatMap((entry) => {
+        const kind = entry.kind === "index" ? "index" : entry.kind === "check constraint" ? "check" : undefined;
+        const object = kind && objects.find((candidate) => candidate.kind === kind && candidate.oracleName === entry.name);
+        if (!object) return [entry];
+        if (object.carried) return [];
+        return [{ ...entry, canCarry: object.carriable, ...(object.reason ? { reason: object.reason } : {}) }];
+    });
+}
+
 export async function planOracleMigration(connection: oracledb.Connection, edits: MigrationEdits = {}): Promise<MigrationPlan> {
     const tables = await introspectOracle(connection);
     const counts = new Map<string, number>();
     for (const table of tables) counts.set(table.name, Number(((await connection.execute(`SELECT COUNT(*) FROM ${oracleQuote(table.name)}`)).rows as unknown[][])[0][0]));
-    const plan = { ...planMigration(tables, counts, edits), notCarried: await findNotCarried(connection) };
+    const plan = planMigration(tables, counts, edits, await readOracleObjects(connection));
+    plan.notCarried = leftBehind(await findNotCarried(connection), plan.objects);
     await runDataChecks(connection, tables, plan);
     return plan;
 }
@@ -585,6 +604,24 @@ export async function verifyTable(oracle: oracledb.Connection, pg: Client, table
 export interface MigrationResult {
     tables: { name: string; rows: number }[];
     verification: TableVerification[];
+    /** The indexes and CHECK constraints that were created, each looked up in PostgreSQL's catalog afterwards. */
+    carried: { kind: "index" | "check"; name: string; table: string; detail: string }[];
+}
+
+/** Looks each created object up in the catalog: what the plan says it created is what PostgreSQL has. */
+async function confirmCarried(pg: Client, plan: MigrationPlan): Promise<MigrationResult["carried"]> {
+    const carried: MigrationResult["carried"] = [];
+    const missing: string[] = [];
+    for (const object of plan.objects.filter((candidate) => candidate.carried)) {
+        const found =
+            object.kind === "index"
+                ? await pg.query("SELECT 1 FROM pg_indexes WHERE schemaname = current_schema() AND tablename = $1 AND indexname = $2", [object.pgTable, object.pgName])
+                : await pg.query("SELECT 1 FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid WHERE c.contype = 'c' AND t.relname = $1 AND c.conname = $2", [object.pgTable, object.pgName]);
+        if (found.rowCount === 0) missing.push(`${object.kind} ${object.pgName} on ${object.pgTable}`);
+        else carried.push({ kind: object.kind, name: object.pgName, table: object.pgTable, detail: object.detail });
+    }
+    if (missing.length > 0) throw new Error(`PostgreSQL does not have what was created: ${missing.join(", ")}`);
+    return carried;
 }
 
 /**
@@ -597,12 +634,14 @@ export async function loadAndVerify(oracle: oracledb.Connection, pg: Client, pla
         const tables: MigrationResult["tables"] = [];
         for (const table of plan.tables) tables.push({ name: table.pgName, rows: await copyTable(oracle, pg, table) });
         for (const statement of plan.linkSql) await pg.query(statement);
+        for (const statement of plan.objectSql) await pg.query(statement);
+        const carried = await confirmCarried(pg, plan);
         const verification: TableVerification[] = [];
         for (const table of plan.tables) verification.push(await verifyTable(oracle, pg, table));
         const wrong = verification.filter((entry) => entry.mismatches.length > 0);
         if (wrong.length > 0) throw new Error(`The copy does not match Oracle: ${wrong.map((entry) => `${entry.table} (${entry.mismatches.join("; ")})`).join(" · ")}`);
         await pg.query("COMMIT");
-        return { tables, verification };
+        return { tables, verification, carried };
     } catch (error) {
         await pg.query("ROLLBACK").catch(() => undefined);
         throw error;

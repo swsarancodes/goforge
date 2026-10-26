@@ -1,4 +1,4 @@
-import type { MigrationApproval, MigrationReport, ReportColumn, ReportTable } from "@/lib/migrations-api";
+import type { MigrationApproval, MigrationReport, ReportColumn, ReportTable, ReviewFinding } from "@/lib/migrations-api";
 
 /**
  * The migration report as a Markdown document, for attaching to an approval and keeping. Every fact in it is the report's: the plan and what
@@ -9,6 +9,8 @@ import type { MigrationApproval, MigrationReport, ReportColumn, ReportTable } fr
 export interface MarkdownExtras {
     /** The model's opening paragraph, with the model that wrote it. */
     summary?: { text: string; model: string };
+    /** The plan reviewer's second opinion, with the model that wrote it. */
+    review?: { overview: string; findings: ReviewFinding[]; dropped?: number; model: string };
     approval?: MigrationApproval;
 }
 
@@ -71,11 +73,21 @@ export function reportToMarkdown(report: MigrationReport, extras: MarkdownExtras
         out.push("## AI commentary", "", `> Written by the model ${extras.summary.model} from the figures in this report. It is commentary, not part of what was approved: every fact in this document comes from the plan or from reading the database.`, "", extras.summary.text.trim(), "");
     }
 
+    if (extras.review) {
+        out.push("## AI review", "", `> A second opinion on the plan from the model ${extras.review.model}, a reviewer separate from the assistant that changes the plan. It is commentary, not proof, and not part of what was approved.`, "", extras.review.overview.trim(), "");
+        for (const finding of extras.review.findings) {
+            const at = finding.table === null ? "" : ` ${code(finding.column === null ? finding.table : `${finding.table}.${finding.column}`)}`;
+            out.push(`- **${finding.severity}**${at}: ${finding.title}. ${finding.detail}${finding.suggestion ? ` Suggestion: ${finding.suggestion}` : ""}`);
+        }
+        if (extras.review.findings.length > 0) out.push("");
+        if (extras.review.dropped) out.push(`${plural(extras.review.dropped, "finding")} left out because ${extras.review.dropped === 1 ? "it" : "they"} named a table or column that is not in the plan.`, "");
+    }
+
     out.push("## Summary", "");
     out.push(`- ${plural(s.tables, "table")}, ${plural(s.columns, "column")}, ${plural(s.rows, "row")}.`);
     out.push(`- Values: ${s.exact} column${s.exact === 1 ? "" : "s"} stay the same, ${s.changed} behave differently, ${s.risk} may lose data.`);
     out.push(`- What the copy does to the values: ${s.values.kept} kept as they are, ${s.values.reformatted} written another way, ${s.values.converted} converted, ${s.values.dropped} with something dropped.`);
-    out.push(`- ${plural(s.changesByYou, "change")} made by you; ${plural(s.notCarried, "object")} not carried over; ${plural(s.problems, "blocking problem")}.`);
+    out.push(`- ${plural(s.changesByYou, "change")} made by you; ${s.carried.toLocaleString("en-US")} index${s.carried === 1 ? "" : "es"} and check constraint${s.carried === 1 ? "" : "s"} carried over by your choice; ${plural(s.notCarried, "object")} not carried over; ${plural(s.problems, "blocking problem")}.`);
     out.push(`- ${report.dataRead ? "The counts and sample rows below were read from the Oracle data (read only)." : "The Oracle data was not read for this report: it has no counts or sample rows."}`, "");
 
     if (report.problems.length > 0) out.push("## Blocking problems", "", ...report.problems.map((problem) => `- ${problem}`), "");
@@ -103,9 +115,21 @@ export function reportToMarkdown(report: MigrationReport, extras: MarkdownExtras
     out.push("## Tables", "");
     for (const table of report.tables) out.push(...tableSection(table));
 
+    if (report.carried.length > 0) {
+        out.push("## Carried over by your choice", "", "Created in PostgreSQL after the rows are copied, so each is checked against the data:", "");
+        for (const entry of report.carried) out.push(`- ${entry.kind === "index" ? "index" : "check constraint"} ${code(entry.name)} (${entry.detail}): ${code(entry.sql)}`);
+        out.push("");
+    }
+
     out.push("## Not carried over", "");
     if (report.notCarried.length === 0) out.push("Nothing else in the schema: no indexes beyond the keys, CHECK constraints, sequences, views, triggers or programs.", "");
-    else out.push("The migration carries tables, columns, NOT NULL, same-meaning defaults, primary keys, unique constraints and foreign keys. These are left behind:", "", ...report.notCarried.map((entry) => `- ${entry.kind} ${code(entry.name)}${entry.detail ? ` (${entry.detail})` : ""}`), "");
+    else
+        out.push(
+            "The migration carries tables, columns, NOT NULL, same-meaning defaults, primary keys, unique constraints and foreign keys, and the indexes and CHECK constraints listed above. These are left behind:",
+            "",
+            ...report.notCarried.map((entry) => `- ${entry.kind} ${code(entry.name)}${entry.detail ? ` (${entry.detail})` : ""}${entry.canCarry === true ? ": could be carried over if asked" : entry.canCarry === false ? `: cannot be carried over, ${entry.reason}` : ""}`),
+            "",
+        );
 
     if (report.behaviour.length > 0) out.push("## Behaves differently in queries, whatever is stored", "", ...report.behaviour.map((note) => `- ${note}`), "");
     return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd() + "\n";

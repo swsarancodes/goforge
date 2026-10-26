@@ -10,9 +10,13 @@ import type { ColumnKind, OracleColumn, OracleTable } from "./oracle-migration.j
 export interface MigrationEdits {
     tables?: Record<string, { pgName?: string }>;
     columns?: Record<string, { pgName?: string; pgType?: string; dropDefault?: boolean }>;
+    /** Indexes and CHECK constraints to carry over, keyed `index:NAME` or `check:NAME` by their Oracle names. Absent: left behind, as they are by default. */
+    objects?: Record<string, { carry: boolean }>;
 }
 
 export const columnKey = (table: string, column: string): string => `${table}.${column}`;
+/** The key of an index (`index:NAME`) or CHECK constraint (`check:NAME`) in `MigrationEdits.objects`, by its Oracle name. */
+export const objectKey = (kind: "index" | "check", name: string): string => `${kind}:${name}`;
 
 export type OracleFamily = "number" | "float" | "string" | "clob" | "date" | "timestamp" | "timestamptz" | "binary" | "rowid" | "other";
 
@@ -184,7 +188,19 @@ export type MigrationOperation =
     | { op: "set_column_type"; table: string; column: string; pgType: string }
     | { op: "drop_default"; table: string; column: string }
     | { op: "reset_column"; table: string; column: string }
-    | { op: "reset_table"; table: string };
+    | { op: "reset_table"; table: string }
+    | { op: "carry_object"; kind: "index" | "check"; name: string }
+    | { op: "skip_object"; kind: "index" | "check"; name: string }
+    | { op: "carry_all"; kind: "index" | "check" }
+    | { op: "skip_all"; kind: "index" | "check" };
+
+/** An index or CHECK constraint of the schema, as the plan lists it: what an operation on it is checked against. */
+export interface ObjectOption {
+    kind: "index" | "check";
+    name: string;
+    carriable: boolean;
+    reason?: string;
+}
 
 export interface AppliedOperations {
     edits: MigrationEdits;
@@ -208,18 +224,27 @@ const describe = (operation: MigrationOperation): string => {
             return `undo the changes to ${operation.table}.${operation.column}`;
         case "reset_table":
             return `undo the new name of ${operation.table}`;
+        case "carry_object":
+            return `carry over the ${operation.kind === "index" ? "index" : "check constraint"} ${operation.name}`;
+        case "skip_object":
+            return `leave behind the ${operation.kind === "index" ? "index" : "check constraint"} ${operation.name}`;
+        case "carry_all":
+            return `carry over every ${operation.kind === "index" ? "index" : "check constraint"} that can be`;
+        case "skip_all":
+            return `leave behind every ${operation.kind === "index" ? "index" : "check constraint"}`;
     }
 };
 
-const clone = (edits: MigrationEdits): MigrationEdits => ({ tables: { ...(edits.tables ?? {}) }, columns: Object.fromEntries(Object.entries(edits.columns ?? {}).map(([key, value]) => [key, { ...value }])) });
+const clone = (edits: MigrationEdits): MigrationEdits => ({ tables: { ...(edits.tables ?? {}) }, columns: Object.fromEntries(Object.entries(edits.columns ?? {}).map(([key, value]) => [key, { ...value }])), objects: { ...(edits.objects ?? {}) } });
 const prune = (edits: MigrationEdits): MigrationEdits => {
     const columns = Object.fromEntries(Object.entries(edits.columns ?? {}).filter(([, value]) => value.pgName !== undefined || value.pgType !== undefined || value.dropDefault === true));
     const tables = Object.fromEntries(Object.entries(edits.tables ?? {}).filter(([, value]) => value.pgName !== undefined));
-    return { tables, columns };
+    const objects = Object.fromEntries(Object.entries(edits.objects ?? {}).filter(([, value]) => value.carry === true));
+    return { tables, columns, objects };
 };
 
 /** Applies each change in turn to a copy of `edits`; a change that has no rule, or names something that is not there, is refused and the rest still apply. */
-export function applyOperations(tables: OracleTable[], current: MigrationEdits, operations: MigrationOperation[]): AppliedOperations {
+export function applyOperations(tables: OracleTable[], current: MigrationEdits, operations: MigrationOperation[], objects: ObjectOption[] = []): AppliedOperations {
     const edits = clone(current);
     const applied: string[] = [];
     const rejected: AppliedOperations["rejected"] = [];
@@ -231,6 +256,33 @@ export function applyOperations(tables: OracleTable[], current: MigrationEdits, 
     for (const operation of operations) {
         const label = describe(operation);
         const refuse = (reason: string) => rejected.push({ operation: label, reason });
+        if (operation.op === "carry_object" || operation.op === "skip_object") {
+            const object = objects.find((candidate) => candidate.kind === operation.kind && candidate.name.toLowerCase() === operation.name.trim().toLowerCase());
+            if (!object) refuse(`there is no ${operation.kind === "index" ? "index" : "check constraint"} ${operation.name} in this schema`);
+            else if (operation.op === "skip_object") {
+                delete edits.objects![objectKey(object.kind, object.name)];
+                applied.push(`leave behind the ${object.kind === "index" ? "index" : "check constraint"} ${object.name}`);
+            } else if (!object.carriable) refuse(`it cannot be carried over: ${object.reason ?? "its meaning is not the same in PostgreSQL"}`);
+            else {
+                edits.objects![objectKey(object.kind, object.name)] = { carry: true };
+                applied.push(`carry over the ${object.kind === "index" ? "index" : "check constraint"} ${object.name}`);
+            }
+            continue;
+        }
+        if (operation.op === "carry_all" || operation.op === "skip_all") {
+            const ofKind = objects.filter((candidate) => candidate.kind === operation.kind);
+            if (operation.op === "skip_all") {
+                for (const object of ofKind) delete edits.objects![objectKey(object.kind, object.name)];
+                applied.push(label);
+            } else {
+                const can = ofKind.filter((object) => object.carriable);
+                for (const object of can) edits.objects![objectKey(object.kind, object.name)] = { carry: true };
+                if (can.length > 0) applied.push(`${label} (${can.length})`);
+                else refuse(`there is no ${operation.kind === "index" ? "index" : "check constraint"} that can be carried over`);
+                for (const object of ofKind.filter((candidate) => !candidate.carriable)) rejected.push({ operation: `carry over ${object.kind === "index" ? "the index" : "the check constraint"} ${object.name}`, reason: `it cannot be carried over: ${object.reason ?? "its meaning is not the same in PostgreSQL"}` });
+            }
+            continue;
+        }
         const table = findTable(operation.table);
         if (!table) {
             refuse(`there is no table ${operation.table}`);

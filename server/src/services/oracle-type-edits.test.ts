@@ -114,7 +114,7 @@ describe("applying what the assistant asks for", () => {
         ]);
         expect(result.rejected).toEqual([]);
         expect(result.applied).toEqual(["make CLM.CLM_DT date", "rename table CLM to Claim", "rename CLM.AMT to amount", "drop the default of CLM.GUID"]);
-        expect(result.edits).toEqual({ tables: { CLM: { pgName: "claim" } }, columns: { "CLM.CLM_DT": { pgType: "date" }, "CLM.AMT": { pgName: "amount" }, "CLM.GUID": { dropDefault: true } } });
+        expect(result.edits).toEqual({ tables: { CLM: { pgName: "claim" } }, columns: { "CLM.CLM_DT": { pgType: "date" }, "CLM.AMT": { pgName: "amount" }, "CLM.GUID": { dropDefault: true } }, objects: {} });
     });
 
     it("refuses what is not there, what has no rule, and what would clash, and still applies the rest", () => {
@@ -145,7 +145,7 @@ describe("applying what the assistant asks for", () => {
     it("undoes a change, and an edit that changes nothing leaves no trace", () => {
         const start: MigrationEdits = { tables: { CLM: { pgName: "claim" } }, columns: { "CLM.CLM_DT": { pgType: "date" }, "CLM.AMT": { pgName: "amount" } } };
         const result = applyOperations(tables, start, [{ op: "reset_column", table: "CLM", column: "CLM_DT" }, { op: "reset_table", table: "CLM" }]);
-        expect(result.edits).toEqual({ tables: {}, columns: { "CLM.AMT": { pgName: "amount" } } });
+        expect(result.edits).toEqual({ tables: {}, columns: { "CLM.AMT": { pgName: "amount" } }, objects: {} });
         expect(start.columns?.["CLM.CLM_DT"]).toEqual({ pgType: "date" });
     });
 });

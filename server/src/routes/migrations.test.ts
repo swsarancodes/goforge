@@ -109,7 +109,7 @@ describe("POST /api/migrations/oracle-to-postgres/verify", () => {
 
 describe("the report routes", () => {
     it("need an Oracle database to report on", async () => {
-        for (const url of ["/api/migrations/oracle-to-postgres/report", "/api/migrations/oracle-to-postgres/report/summary"]) {
+        for (const url of ["/api/migrations/oracle-to-postgres/report", "/api/migrations/oracle-to-postgres/report/summary", "/api/migrations/oracle-to-postgres/review"]) {
             expect((await post(url, {})).status, url).toBe(400);
             expect((await post(url, { sourceConnectionId: "no-such-id" })).status, url).toBe(404);
             const wrong = await post(url, { sourceConnectionId: postgresId });

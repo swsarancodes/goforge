@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { ConversionStatus, NotCarried } from "./oracle-conversion-notes.js";
 import { dataChangeFor, type DataChange, type DataChangeEffect } from "./oracle-data-changes.js";
-import { failedChecks, foldName, type DataCheck, type MigrationPlan } from "./oracle-migration.js";
+import { failedChecks, foldName, type DataCheck, type MigrationPlan, type OracleTable } from "./oracle-migration.js";
+import type { MigrationEdits } from "./oracle-type-edits.js";
 
 /**
  * The report a person reads before the migration runs: what will change in the schema and in the data, in one structure. It is built from
@@ -77,6 +78,17 @@ export interface ReportDefault {
     detail: string;
 }
 
+/** An index or CHECK constraint the plan creates in PostgreSQL, with the statement that does it. */
+export interface ReportObject {
+    kind: "index" | "check";
+    name: string;
+    pgName: string;
+    table: string;
+    pgTable: string;
+    detail: string;
+    sql: string;
+}
+
 export type Verdict = "ready" | "needs-acceptance" | "blocked";
 
 export interface MigrationReport {
@@ -96,6 +108,10 @@ export interface MigrationReport {
         values: Record<DataChangeEffect, number>;
         changesByYou: number;
         notCarried: number;
+        /** Of those left behind, how many could be carried over if asked. */
+        canBeCarried: number;
+        /** Indexes and CHECK constraints the plan creates. */
+        carried: number;
         problems: number;
     };
     renames: ReportRename[];
@@ -103,6 +119,8 @@ export interface MigrationReport {
     rewrittenDefaults: ReportDefault[];
     tables: ReportTable[];
     notCarried: NotCarried[];
+    /** Indexes and CHECK constraints the person chose to carry over: created after the rows, each checked against them. */
+    carried: ReportObject[];
     behaviour: string[];
     problems: string[];
     editProblems: string[];
@@ -176,17 +194,19 @@ export function buildReport(plan: MigrationPlan, input: ReportInput): MigrationR
     });
 
     const mustAccept = failedChecks(plan).map((entry) => ({ table: entry.table, column: entry.column, description: entry.check.description, count: entry.check.count, sql: entry.check.sql, ...(entry.check.error ? { error: entry.check.error } : {}) }));
+    const carried: ReportObject[] = plan.objects.filter((object) => object.carried).map((object) => ({ kind: object.kind, name: object.oracleName, pgName: object.pgName, table: object.table, pgTable: object.pgTable, detail: object.detail, sql: object.sql! }));
     const verdict: Verdict = plan.problems.length > 0 ? "blocked" : mustAccept.length > 0 ? "needs-acceptance" : "ready";
 
     const body = {
         verdict,
-        summary: { tables: plan.tables.length, columns: counts.columns, rows: counts.rows, exact: counts.exact, changed: counts.changed, risk: counts.risk, values, changesByYou: input.edits ?? 0, notCarried: plan.notCarried.length, problems: plan.problems.length },
+        summary: { tables: plan.tables.length, columns: counts.columns, rows: counts.rows, exact: counts.exact, changed: counts.changed, risk: counts.risk, values, changesByYou: input.edits ?? 0, notCarried: plan.notCarried.length, canBeCarried: plan.notCarried.filter((entry) => entry.canCarry).length, carried: carried.length, problems: plan.problems.length },
         renames,
         droppedDefaults,
         rewrittenDefaults,
         // the rows shown are illustrations, and for a table without a key they are not even stable: they are not part of what is approved
         tables: tables.map(({ sample: _sample, ...rest }) => rest),
         notCarried: plan.notCarried,
+        carried,
         behaviour: plan.behaviour,
         problems: plan.problems,
         editProblems: plan.editProblems,
@@ -223,7 +243,77 @@ export function digestForSummary(report: MigrationReport) {
             counted: [...(column.facts?.affected ?? []).map((entry) => `${entry.count} ${entry.label}`), ...(column.facts ? [`${column.facts.nulls} NULL of ${column.facts.nulls + column.facts.values}`] : [])],
         })),
         mustAccept: report.mustAccept.map((entry) => `${entry.table}.${entry.column}: ${entry.count === null ? "the check could not run" : `${entry.count} ${entry.description}`}`),
-        notCarried: report.notCarried.map((entry) => `${entry.kind} ${entry.name}`),
+        notCarried: report.notCarried.map((entry) => `${entry.kind} ${entry.name}${entry.canCarry === undefined ? "" : entry.canCarry ? " (can be carried over if asked)" : ` (cannot be carried over: ${entry.reason})`}`),
+        carried: report.carried.map((entry) => `${entry.kind} ${entry.name} ${entry.detail}`),
+        behaviour: report.behaviour,
+        problems: report.problems,
+        editProblems: report.editProblems,
+    };
+}
+
+/** What the person changed, one line each, from the edits as they stand. */
+export function describeEdits(edits: MigrationEdits): string[] {
+    const lines: string[] = [];
+    for (const [table, edit] of Object.entries(edits.tables ?? {})) if (edit.pgName !== undefined) lines.push(`table ${table} is called ${edit.pgName}`);
+    for (const [key, edit] of Object.entries(edits.columns ?? {})) {
+        if (edit.pgName !== undefined) lines.push(`column ${key} is called ${edit.pgName}`);
+        if (edit.pgType !== undefined) lines.push(`column ${key} is ${edit.pgType}`);
+        if (edit.dropDefault) lines.push(`the default of ${key} is dropped`);
+    }
+    for (const [key, edit] of Object.entries(edits.objects ?? {})) if (edit.carry) lines.push(`${key.replace(":", " ")} is carried over`);
+    return lines;
+}
+
+/** Each foreign key with the PostgreSQL type of every column on both sides: what a reviewer needs to see that a parent and a child still agree. */
+export function foreignKeysOf(tables: OracleTable[], report: MigrationReport): { from: string; to: string; fromTypes: string[]; toTypes: string[]; sameTypes: boolean }[] {
+    const typeOf = (table: string, column: string) => report.tables.find((candidate) => candidate.oracleName === table)?.columns.find((candidate) => candidate.oracleName === column)?.pgType ?? "?";
+    return tables.flatMap((table) =>
+        table.foreignKeys.map((key) => {
+            const fromTypes = key.columns.map((column) => typeOf(table.name, column));
+            const toTypes = key.refColumns.map((column) => typeOf(key.refTable, column));
+            return { from: `${table.name}(${key.columns.join(", ")})`, to: `${key.refTable}(${key.refColumns.join(", ")})`, fromTypes, toTypes, sameTypes: fromTypes.length === toTypes.length && fromTypes.every((type, at) => type === toTypes[at]) };
+        }),
+    );
+}
+
+const REVIEW_COLUMN_CAP = 300;
+
+/**
+ * What the plan reviewer is shown: every table and column with how it fares, the foreign keys, the counts, what is carried and left behind,
+ * and what the person changed. Never a sample row. Beyond a few hundred columns only the ones that are not plain "same" are listed, and it says so.
+ */
+export function digestForReview(report: MigrationReport, extra: { edits: MigrationEdits; tables: OracleTable[] }) {
+    const total = report.tables.reduce((sum, table) => sum + table.columns.length, 0);
+    const everything = total <= REVIEW_COLUMN_CAP;
+    return {
+        source: report.source,
+        verdict: report.verdict,
+        summary: report.summary,
+        dataRead: report.dataRead,
+        changesTheyMade: describeEdits(extra.edits),
+        tables: report.tables.map((table) => ({
+            table: table.oracleName,
+            becomes: table.pgName,
+            rows: table.rows,
+            primaryKey: table.primaryKey,
+            columns: table.columns
+                .filter((column) => everything || column.status !== "exact" || column.edited.length > 0 || column.facts?.affected.some((entry) => entry.count > 0))
+                .map((column) => ({
+                    column: column.oracleName,
+                    from: column.oracleType,
+                    to: column.pgType,
+                    status: column.status,
+                    ...(column.edited.length > 0 ? { changedByThem: column.edited } : {}),
+                    ...(column.oracleDefault !== null ? { oracleDefault: column.oracleDefault, pgDefault: column.pgDefault } : {}),
+                    whatTheCopyDoes: column.dataChange.summary,
+                    counted: [...(column.facts?.affected ?? []).map((entry) => `${entry.count} ${entry.label}`), ...(column.facts ? [`${column.facts.nulls} NULL of ${column.facts.nulls + column.facts.values}`] : [])],
+                })),
+        })),
+        columnsListed: everything ? "all" : `only those that are not plain 'exact', of ${total}`,
+        foreignKeys: foreignKeysOf(extra.tables, report),
+        mustAccept: report.mustAccept.map((entry) => `${entry.table}.${entry.column}: ${entry.count === null ? "the check could not run" : `${entry.count} ${entry.description}`}`),
+        carriedOver: report.carried.map((entry) => `${entry.kind} ${entry.name} ${entry.detail}`),
+        leftBehind: report.notCarried.map((entry) => `${entry.kind} ${entry.name}${entry.detail ? ` (${entry.detail})` : ""}${entry.canCarry === undefined ? "" : entry.canCarry ? ": could be carried over if asked" : `: cannot be carried over, ${entry.reason}`}`),
         behaviour: report.behaviour,
         problems: report.problems,
         editProblems: report.editProblems,
