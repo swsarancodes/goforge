@@ -2,6 +2,7 @@ import type { EditorView } from "@codemirror/view";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { SavedConnection, deleteSavedConnection, listSavedConnections } from "@/lib/live-connection-api";
+import { useDatabase } from "@/providers/database-provider/database-provider";
 import {
     SqlApiError,
     SqlRunError,
@@ -263,6 +264,15 @@ export function useSqlEditor() {
         current.dispatch({ selection: { anchor: offset + from, head: offset + to }, scrollIntoView: true });
         current.focus();
     }, []);
+
+    // Renaming the diagram renames the database made with it: read the names again when it changes.
+    const { database: openDiagram } = useDatabase();
+    const diagramName = useRef<string | undefined>(openDiagram?.name);
+    useEffect(() => {
+        if (diagramName.current === openDiagram?.name) return;
+        diagramName.current = openDiagram?.name;
+        listSavedConnections("all").then(setConnections).catch(() => undefined);
+    }, [openDiagram?.name]);
 
     /** Reads the saved connections again (a database was just created from this page) and, when `selectId` is given, switches to it. */
     const refreshConnections = useCallback(async (selectId?: string) => {

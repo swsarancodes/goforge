@@ -7,6 +7,9 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/shadcn-io/spinner";
+import useToast from "@/hooks/use-toast";
+import { renameSavedConnection } from "@/lib/live-connection-api";
+import { connectionOfDiagram } from "../live-link";
 
 
 const RenameDB: React.FC = ({ }) => {
@@ -17,6 +20,7 @@ const RenameDB: React.FC = ({ }) => {
     const [editMode, setEditMode] = useState<boolean>(false);
     const [dbName, setDbName] = useState<string>(database?.name || "");
     const { t } = useTranslation();
+    const raise = useToast();
     const [isLoading, setIsLoading] = useState<boolean>(false);
 
 
@@ -44,6 +48,11 @@ const RenameDB: React.FC = ({ }) => {
             id: database.id,
             name: dbName
         });
+        // A live database made together with this diagram keeps its name.
+        const linked = connectionOfDiagram(database.id);
+        if (linked) {
+            await renameSavedConnection(linked, dbName.trim()).catch((caught) => raise("The database kept its old name", caught instanceof Error ? caught.message : String(caught), "ERROR"));
+        }
         setIsLoading(false);
         setEditMode(false);
     }

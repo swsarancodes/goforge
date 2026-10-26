@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { connectionAddress, connectionLabel } from "@/lib/live-connection-api";
+import { RenameConnection } from "@/features/database/components/rename-connection";
 import { cn } from "@/lib/utils";
 import { formatRowEstimate, groupRelations } from "@/utils/data-view/relations";
 import type { DataBrowser } from "./use-data-browser";
@@ -55,6 +56,7 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
             <div className="p-3 space-y-2 shrink-0">
                 <div className="space-y-1">
                     <Label className="text-xs text-muted-foreground">{t("data_browser.connection", { defaultValue: "Connection" })}</Label>
+                    <div className="flex items-center gap-1">
                     <Select value={browser.connectionId} onValueChange={(id) => browser.changeConnection(id)}>
                         <SelectTrigger size="sm" className="w-full min-w-0 h-8" aria-label={t("data_browser.connection", { defaultValue: "Connection" })}>
                             <SelectValue
@@ -74,6 +76,8 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
                             ))}
                         </SelectContent>
                     </Select>
+                    <RenameConnection connection={browser.connections.find((connection) => connection.id === browser.connectionId)} onRenamed={browser.replaceConnection} />
+                    </div>
                 </div>
 
                 <div className="flex items-center gap-2">

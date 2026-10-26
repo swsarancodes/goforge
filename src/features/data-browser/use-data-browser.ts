@@ -4,6 +4,7 @@ import useToast from "@/hooks/use-toast";
 import { RelationInfo, SavedConnection, TableDataPage, fetchRelations, fetchTableRows, listSavedConnections, warmConnection } from "@/lib/live-connection-api";
 import { formatRows, type FormattedRowCell } from "@/utils/data-view/format-rows";
 import { Relation, buildRelations } from "@/utils/data-view/relations";
+import { useDatabase } from "@/providers/database-provider/database-provider";
 import { PageKeyParts, connectionPrefix, loadStoredRelations, pageCache, pageKey, storeRelations } from "./data-cache";
 
 export const PAGE_SIZES = [50, 100, 250, 500];
@@ -424,9 +425,22 @@ export function useDataBrowser() {
     const canGoNext = !!page && page.rows.length === page.limit && (exactTotal === undefined || page.offset + page.limit < exactTotal);
     const showingDetail = page !== undefined && detailRow !== undefined && formatted[detailRow] !== undefined;
 
+    // Renaming the diagram renames the database made with it: read the names again when it changes.
+    const { database: openDiagram } = useDatabase();
+    const diagramName = useRef<string | undefined>(openDiagram?.name);
+    useEffect(() => {
+        if (diagramName.current === openDiagram?.name) return;
+        diagramName.current = openDiagram?.name;
+        listSavedConnections("all").then(setConnections).catch(() => undefined);
+    }, [openDiagram?.name]);
+
+    /** Shows a connection's new name in the picker. */
+    const replaceConnection = useCallback((updated: SavedConnection) => setConnections((list) => list.map((connection) => (connection.id === updated.id ? updated : connection))), []);
+
     return {
         // connection + table list
         connections,
+        replaceConnection,
         isLoadingConnections,
         connectionId,
         changeConnection,

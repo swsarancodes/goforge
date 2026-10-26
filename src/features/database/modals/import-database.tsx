@@ -22,6 +22,7 @@ import { MAX_IMPORT_FILE_BYTES, readTextFile } from "@/utils/file";
 import useToast from "@/hooks/use-toast";
 import { LiveDatabaseOption, useLiveDatabase } from "../components/live-database-option";
 import { liveDatabaseCreatedText, liveTargetFromImport } from "../live-database";
+import { linkDiagram } from "../live-link";
 
 
 const options: ImportDatabaseOption[] = [{
@@ -281,6 +282,7 @@ const ImportDatabaseModal: React.FC<ModalProps> = ({ isOpen, onOpenChange }) => 
             try {
                 const created = await live.create(liveTargetFromImport(parsedDatabase, database, data_types), data_types);
                 createdDatabase = liveDatabaseCreatedText(created.connection);
+                linkDiagram(database.id, created.connection.id);
             } catch (caught) {
                 setLiveError(caught instanceof Error ? caught.message : String(caught));
                 return;

@@ -11,6 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { useDelayedFlag } from "@/hooks/use-delayed-flag";
 import { connectionAddress, connectionLabel } from "@/lib/live-connection-api";
+import { RenameConnection } from "@/features/database/components/rename-connection";
 import { cn } from "@/lib/utils";
 import { MigrateDatabase } from "./migrate-database";
 import { positionToLineColumn } from "./error-position";
@@ -251,6 +252,7 @@ const SqlEditorPage: React.FC = () => {
                         ))}
                     </SelectContent>
                 </Select>
+                <RenameConnection connection={editor.connection} onRenamed={() => void editor.refreshConnections()} />
 
                 <Button size="sm" className="h-8 gap-1.5" onClick={() => editor.run()} disabled={!editor.connectionId || editor.isRunning || !editor.sql.trim()}>
                     {editor.isRunning ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}

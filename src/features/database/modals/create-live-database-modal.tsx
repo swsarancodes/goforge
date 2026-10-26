@@ -1,3 +1,4 @@
+import { linkDiagram } from "../live-link";
 import { useCallback, useState } from "react";
 import Modal, { ModalProps } from "@/components/modal";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -22,6 +23,7 @@ const CreateLiveDatabaseModal: React.FC<Omit<ModalProps, "title" | "children">> 
         setError(undefined);
         try {
             const created = await live.create(database, data_types);
+            linkDiagram(database.id, created.connection.id);
             onOpenChange?.(false);
             raise("Database created", liveDatabaseCreatedText(created.connection), "SUCCESS");
         } catch (caught) {
