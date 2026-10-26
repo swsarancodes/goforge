@@ -11,6 +11,7 @@ import { ChatPanel } from "./chat-panel";
 import { ConfirmBar } from "./confirm-bar";
 import { MigrationChecklist } from "./migration-checklist";
 import { MigrationProof } from "./migration-proof";
+import { ReportPanel, downloadReport } from "./report-panel";
 import { useMigration } from "./use-migration";
 
 /**
@@ -22,7 +23,7 @@ import { useMigration } from "./use-migration";
 const MigrationPage: React.FC = () => {
     const migration = useMigration();
     const navigate = useNavigate();
-    const { oracleDatabases, loadingDatabases, sourceId, setSourceId, plan, planError, loadingPlan, edits, outcome, proof, rerunning, rerunProof, source } = migration;
+    const { oracleDatabases, loadingDatabases, sourceId, setSourceId, plan, planError, loadingPlan, edits, outcome, proof, rerunning, rerunProof, source, report, summary } = migration;
     // on a narrow screen the plan and the assistant take turns
     const [view, setView] = useState<"plan" | "assistant">("plan");
     const [collapsed, setCollapsed] = useState<boolean>(() => readCollapsed());
@@ -74,7 +75,8 @@ const MigrationPage: React.FC = () => {
                             <p className={cn("text-xs text-muted-foreground", loadingPlan && "opacity-60")}>
                                 {plan.tables.length} table{plan.tables.length === 1 ? "" : "s"}, {plan.tables.reduce((sum, table) => sum + table.rows, 0).toLocaleString()} rows in <span className="text-foreground">{source?.name}</span>. {loadingPlan ? "Checking your data again…" : ""}
                             </p>
-                            <MigrationChecklist plan={plan} edits={edits} />
+                            {/* the report is what the person reads and approves; while it is being made, the plan's own checklist is shown */}
+                            {report ? <ReportPanel migration={migration} report={report} /> : <MigrationChecklist plan={plan} edits={edits} />}
                             <ConfirmBar migration={migration} />
                         </>
                     )}
@@ -82,7 +84,15 @@ const MigrationPage: React.FC = () => {
                         <>
                             <div className="space-y-2 rounded-lg border border-emerald-500/40 p-3 text-xs" role="status">
                                 <p className="flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400"><Check className="size-4" /> “{outcome.connection.name}” is a PostgreSQL database now, and every table matches Oracle.</p>
+                                {outcome.approval && (
+                                    <p className="text-muted-foreground">
+                                        Approved at {new Date(outcome.approval.approvedAt).toLocaleString()}, on the report with fingerprint <span className="font-mono">{outcome.approval.reportHash.slice(0, 12)}</span>. The approved report goes with this result.
+                                    </p>
+                                )}
                                 <div className="flex flex-wrap gap-2">
+                                    {report && outcome.approval && (
+                                        <Button size="sm" variant="outline" onClick={() => downloadReport(report, { approval: outcome.approval!, summary: summary ? { text: summary.text, model: summary.model } : undefined })}>Download the approved report (.md)</Button>
+                                    )}
                                     <Button size="sm" variant="outline" onClick={() => navigate("/database/data")}>Browse it in Data</Button>
                                     <Button size="sm" variant="outline" onClick={() => navigate("/database/sql")}>Open it in the SQL editor</Button>
                                 </div>

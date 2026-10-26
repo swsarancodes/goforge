@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { rememberDataConnection } from "@/features/data-browser/use-data-browser";
 import { rememberConnectionOnPages } from "@/features/database/live-database";
 import { SavedConnection, listSavedConnections } from "@/lib/live-connection-api";
-import { MigrationEdits, MigrationOutcome, MigrationPlanPreview, NO_EDITS, TableVerification, askMigrationAgent, migrateOracleToPostgres, planOracleMigration, verifyMigration } from "@/lib/migrations-api";
+import { MigrationEdits, MigrationOutcome, MigrationPlanPreview, MigrationReport, NO_EDITS, TableVerification, askMigrationAgent, fetchMigrationReport, fetchReportSummary, migrateOracleToPostgres, planOracleMigration, verifyMigration } from "@/lib/migrations-api";
 import { saveCheckContext } from "@/features/query-check/context";
 import { useAuth } from "@/providers/auth-provider/auth-provider";
 import { defaultProofQuery, mappingFromPlan } from "./name-mapping";
@@ -46,6 +46,17 @@ export function useMigration() {
     const [asking, setAsking] = useState(false);
     const nextLine = useRef(1);
 
+    // the report a person reads and approves: built from the plan and the data, and read again whenever the changes made to the plan change
+    const [report, setReport] = useState<MigrationReport | undefined>(undefined);
+    const [reportError, setReportError] = useState<string | undefined>(undefined);
+    const [loadingReport, setLoadingReport] = useState(false);
+    /** The fingerprint of the report the person approved. The approval holds only while the report on show is still that one. */
+    const [approvedHash, setApprovedHash] = useState<string | undefined>(undefined);
+    /** The model's opening paragraph, with the report it was written for. Shown labelled as AI commentary; never part of the approval. */
+    const [summary, setSummary] = useState<{ text: string; model: string; reportHash: string } | undefined>(undefined);
+    const [summarizing, setSummarizing] = useState(false);
+    const [summaryError, setSummaryError] = useState<string | undefined>(undefined);
+
     const [servers, setServers] = useState<SavedConnection[]>([]);
     const [target, setTarget] = useState("");
     const [name, setName] = useState("");
@@ -58,6 +69,7 @@ export function useMigration() {
 
     // a request that is no longer the latest one must not overwrite a newer answer
     const latest = useRef(0);
+    const latestReport = useRef(0);
 
     const source = useMemo(() => oracleDatabases.find((connection) => connection.id === sourceId), [oracleDatabases, sourceId]);
 
@@ -91,6 +103,12 @@ export function useMigration() {
         setEdits(NO_EDITS);
         setPlan(undefined);
         setPlanError(undefined);
+        latestReport.current++;
+        setReport(undefined);
+        setReportError(undefined);
+        setApprovedHash(undefined);
+        setSummary(undefined);
+        setSummaryError(undefined);
         setLines([]);
         setAcceptLoss(false);
         setMigrateError(undefined);
@@ -112,6 +130,20 @@ export function useMigration() {
         }
     }, []);
 
+    const loadReport = useCallback(async (id: string, withEdits: MigrationEdits) => {
+        const run = ++latestReport.current;
+        setLoadingReport(true);
+        setReportError(undefined);
+        try {
+            const result = await fetchMigrationReport(id, withEdits);
+            if (run === latestReport.current) setReport(result.report);
+        } catch (error) {
+            if (run === latestReport.current) setReportError(messageOf(error));
+        } finally {
+            if (run === latestReport.current) setLoadingReport(false);
+        }
+    }, []);
+
     // choosing another database starts over: its own plan, no changes, an empty conversation
     useEffect(() => {
         reset();
@@ -121,6 +153,14 @@ export function useMigration() {
         setName(`${connection?.name ?? "database"} postgres`.slice(0, 60));
         void loadPlan(sourceId, NO_EDITS);
     }, [sourceId, oracleDatabases, reset, loadPlan]);
+
+    // (after the reset above, which would otherwise cancel it) the report is made again whenever the changes made to the plan change (a question that changes nothing does not read the data again)
+    const editsKey = JSON.stringify(edits);
+    useEffect(() => {
+        if (sourceId) void loadReport(sourceId, edits);
+        // the key stands for the edits
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sourceId, editsKey, loadReport]);
 
     const push = useCallback((line: Omit<ChatLine, "id">) => setLines((existing) => [...existing, { ...line, id: nextLine.current++ }]), []);
 
@@ -159,14 +199,15 @@ export function useMigration() {
 
     const failing = useMemo(() => (plan ? plan.tables.flatMap((table) => table.columns.flatMap((column) => (column.check && (column.check.count === null || column.check.count > 0) ? [{ table: table.pgName, column: column.pgName, check: column.check }] : []))) : []), [plan]);
 
-    const canMigrate = Boolean(plan && plan.problems.length === 0 && plan.tables.length > 0 && target && name.trim() && !migrating && !outcome && !loadingPlan && !asking && (failing.length === 0 || acceptLoss));
+    const approved = Boolean(report && approvedHash === report.hash);
+    const canMigrate = Boolean(plan && report && approved && !loadingReport && plan.problems.length === 0 && plan.tables.length > 0 && target && name.trim() && !migrating && !outcome && !loadingPlan && !asking && (failing.length === 0 || acceptLoss));
 
     const migrate = useCallback(async () => {
         if (!sourceId || !canMigrate) return;
         setMigrating(true);
         setMigrateError(undefined);
         try {
-            const done = await migrateOracleToPostgres({ sourceConnectionId: sourceId, name: name.trim(), target: target === CLOUD ? { kind: "cloud" } : { kind: "server", connectionId: target }, edits, acceptLoss });
+            const done = await migrateOracleToPostgres({ sourceConnectionId: sourceId, name: name.trim(), target: target === CLOUD ? { kind: "cloud" } : { kind: "server", connectionId: target }, edits, acceptLoss, approval: report ? { reportHash: report.hash } : undefined });
             setOutcome(done);
             setProof(done.verification);
             // the query check starts from the names changed here and a query that reads up to 100 rows
@@ -175,11 +216,14 @@ export function useMigration() {
             rememberDataConnection(done.connection.id);
             if (target === CLOUD) await auth.refresh();
         } catch (error) {
-            setMigrateError(messageOf(error));
+            const text = messageOf(error);
+            setMigrateError(text);
+            // the plan or the data moved since the report was read: read it again, and the approval has to be given again
+            if (text.startsWith("The report changed")) void loadReport(sourceId, edits);
         } finally {
             setMigrating(false);
         }
-    }, [sourceId, canMigrate, name, target, edits, acceptLoss, auth, plan]);
+    }, [sourceId, canMigrate, name, target, edits, acceptLoss, auth, plan, report, loadReport]);
 
     const rerunProof = useCallback(async () => {
         if (!sourceId || !outcome) return;
@@ -194,7 +238,25 @@ export function useMigration() {
         }
     }, [sourceId, outcome, edits]);
 
+    const shownSummary = summary && report && summary.reportHash === report.hash ? summary : undefined;
+    const writeSummary = useCallback(async () => {
+        if (!sourceId || summarizing) return;
+        setSummarizing(true);
+        setSummaryError(undefined);
+        try {
+            const answer = await fetchReportSummary(sourceId, edits);
+            setSummary({ text: answer.summary, model: answer.model, reportHash: answer.reportHash });
+        } catch (error) {
+            setSummaryError(messageOf(error));
+        } finally {
+            setSummarizing(false);
+        }
+    }, [sourceId, summarizing, edits]);
+    const approve = useCallback((on: boolean) => setApprovedHash(on && report ? report.hash : undefined), [report]);
+
     return {
+        report, reportError, loadingReport, reload: () => (sourceId ? loadReport(sourceId, edits) : undefined), approved, approve,
+        summary: shownSummary, summarizing, summaryError, writeSummary,
         oracleDatabases, loadingDatabases, sourceId, setSourceId, source,
         edits, plan, planError, loadingPlan,
         lines, asking, ask, undoAll,

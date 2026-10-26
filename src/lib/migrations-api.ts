@@ -100,8 +100,16 @@ export interface TableVerification {
     proof: TableProof;
 }
 
+/** The approval a migration ran under: when, and the fingerprint of the report that was read. */
+export interface MigrationApproval {
+    reportHash: string;
+    approvedAt: string;
+}
+
 export interface MigrationOutcome {
     connection: SavedConnection;
+    /** Null when the migration was started without a report (not from the page). */
+    approval?: MigrationApproval | null;
     tables: { name: string; rows: number }[];
     verification: TableVerification[];
     statementsRun: number;
@@ -134,7 +142,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 export const planOracleMigration = (sourceConnectionId: string, edits: MigrationEdits = NO_EDITS): Promise<MigrationPlanPreview> => post("/oracle-to-postgres/plan", { sourceConnectionId, edits });
 
 /** Creates the PostgreSQL database, copies the rows, checks every table against Oracle, and saves a connection. Nothing is kept if any of it fails. */
-export const migrateOracleToPostgres = (input: { sourceConnectionId: string; name: string; target: MigrationTarget; edits?: MigrationEdits; acceptLoss?: boolean }): Promise<MigrationOutcome> => post("/oracle-to-postgres", input);
+export const migrateOracleToPostgres = (input: { sourceConnectionId: string; name: string; target: MigrationTarget; edits?: MigrationEdits; acceptLoss?: boolean; approval?: { reportHash: string } }): Promise<MigrationOutcome> => post("/oracle-to-postgres", input);
 
 /** The checks again, by queries on both databases, for an Oracle database and the PostgreSQL database it was migrated into. */
 export const verifyMigration = (input: { sourceConnectionId: string; targetConnectionId: string; edits?: MigrationEdits }): Promise<{ verification: TableVerification[] }> => post("/oracle-to-postgres/verify", input);
@@ -153,3 +161,108 @@ export interface AgentAnswer {
 
 /** Asks the assistant for the changes a message calls for. The server checks and applies them; the plan comes back built again. */
 export const askMigrationAgent = (input: { sourceConnectionId: string; message: string; messages: { role: "user" | "assistant"; text: string }[]; edits: MigrationEdits }): Promise<AgentAnswer> => post("/oracle-to-postgres/agent", input);
+
+// ---- the report a person reads before approving -------------------------------------------------------------------------------------
+
+export type DataChangeEffect = "kept" | "reformatted" | "converted" | "dropped";
+
+export interface DataChange {
+    summary: string;
+    read: string;
+    load: string;
+    effect: DataChangeEffect;
+    status: ConversionStatus;
+    notes: string[];
+}
+
+export interface ColumnFacts {
+    nulls: number;
+    values: number;
+    affected: { label: string; count: number; sql: string }[];
+}
+
+export interface ReportSample {
+    columns: string[];
+    oracle: (string | null)[][];
+    postgres: (string | null)[][];
+    ordered: boolean;
+    sql: string;
+}
+
+export interface ReportColumn {
+    oracleName: string;
+    pgName: string;
+    oracleType: string;
+    pgType: string;
+    nullable: boolean;
+    status: ConversionStatus;
+    note: string;
+    edited: ("name" | "type" | "default")[];
+    oracleDefault: string | null;
+    pgDefault: string | null;
+    dataChange: DataChange;
+    facts?: ColumnFacts;
+    check?: DataCheck;
+}
+
+export interface ReportTable {
+    oracleName: string;
+    pgName: string;
+    renamed: boolean;
+    rows: number;
+    primaryKey: string[];
+    columns: ReportColumn[];
+    sample?: ReportSample;
+}
+
+export interface ReportRename {
+    kind: "table" | "column";
+    table: string;
+    from: string;
+    to: string;
+    by: "case" | "you";
+}
+
+export interface ReportDefault {
+    table: string;
+    column: string;
+    oracleDefault: string;
+    detail: string;
+}
+
+export type ReportVerdict = "ready" | "needs-acceptance" | "blocked";
+
+export interface MigrationReport {
+    generatedAt: string;
+    source: string;
+    verdict: ReportVerdict;
+    summary: {
+        tables: number;
+        columns: number;
+        rows: number;
+        exact: number;
+        changed: number;
+        risk: number;
+        values: Record<DataChangeEffect, number>;
+        changesByYou: number;
+        notCarried: number;
+        problems: number;
+    };
+    renames: ReportRename[];
+    droppedDefaults: ReportDefault[];
+    rewrittenDefaults: ReportDefault[];
+    tables: ReportTable[];
+    notCarried: NotCarried[];
+    behaviour: string[];
+    problems: string[];
+    editProblems: string[];
+    mustAccept: { table: string; column: string; description: string; count: number | null; sql: string; error?: string }[];
+    dataRead: boolean;
+    hash: string;
+}
+
+/** The report for this Oracle database and these changes: built from the plan and from reading the data (read only). No model writes any of it. */
+export const fetchMigrationReport = (sourceConnectionId: string, edits: MigrationEdits = NO_EDITS): Promise<{ report: MigrationReport }> => post("/oracle-to-postgres/report", { sourceConnectionId, edits });
+
+/** The opening paragraph of the report, written by the model from the report's figures. To be shown labelled as AI commentary. */
+export const fetchReportSummary = (sourceConnectionId: string, edits: MigrationEdits = NO_EDITS): Promise<{ summary: string; model: string; reportHash: string }> => post("/oracle-to-postgres/report/summary", { sourceConnectionId, edits });

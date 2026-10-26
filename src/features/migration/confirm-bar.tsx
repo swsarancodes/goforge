@@ -13,7 +13,7 @@ import { CLOUD, type Migration } from "./use-migration";
  * name, and only then lets the migration begin. The server checks the same thing again from the data as it is at that moment.
  */
 export const ConfirmBar: React.FC<{ migration: Migration }> = ({ migration }) => {
-    const { plan, edits, servers, cloudAvailable, target, setTarget, name, setName, failing, acceptLoss, setAcceptLoss, canMigrate, migrating, migrateError, migrate, loadingPlan, asking, outcome } = migration;
+    const { plan, edits, servers, cloudAvailable, target, setTarget, name, setName, failing, acceptLoss, setAcceptLoss, canMigrate, migrating, migrateError, migrate, loadingPlan, asking, outcome, report, reportError, loadingReport, approved, approve, reload } = migration;
     if (!plan || outcome) return null;
     const changes = countEdits(edits);
     const blocked = plan.problems.length > 0;
@@ -48,6 +48,24 @@ export const ConfirmBar: React.FC<{ migration: Migration }> = ({ migration }) =>
                         <span>I have read this and accept that these values change or are lost. Or ask {ASSISTANT_NAME} for a type that keeps them.</span>
                     </label>
                 </div>
+            )}
+
+            {reportError && (
+                <div className="space-y-1 rounded-md border border-destructive/50 p-2" role="alert">
+                    <p className="font-medium text-destructive">The report could not be built, so there is nothing to approve yet.</p>
+                    <p className="whitespace-pre-wrap text-muted-foreground">{reportError}</p>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void reload()}>Try again</Button>
+                </div>
+            )}
+
+            {report && !blocked && (
+                <label htmlFor="approve-report" className="flex cursor-pointer items-start gap-2 rounded-md border p-2">
+                    <Switch id="approve-report" checked={approved} onCheckedChange={approve} disabled={loadingReport} className="mt-0.5" />
+                    <span>
+                        <strong className="block">I have read the report above and approve migrating on it.</strong>
+                        <span className="text-muted-foreground">Nothing is created or copied until you do. The approval is of this report (fingerprint <span className="font-mono">{report.hash.slice(0, 12)}</span>): if you change the plan, or the data moves, you read it and approve again. The approved report goes with the result and can be downloaded.</span>
+                    </span>
+                </label>
             )}
 
             {!blocked && (
