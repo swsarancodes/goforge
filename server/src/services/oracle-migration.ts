@@ -1,6 +1,7 @@
 import type { Client } from "pg";
 import { oracledb } from "./oracle-client.js";
 import { dateText, numberText } from "./oracle-sql.js";
+import { behaviourNotes, conversionNote, findNotCarried, type ConversionNote, type NotCarried } from "./oracle-conversion-notes.js";
 
 /**
  * Oracle schema to PostgreSQL: read the Oracle schema from its dictionary, work out the PostgreSQL schema, copy the rows, add the
@@ -114,6 +115,8 @@ export interface PlannedColumn {
     kind: ColumnKind;
     nullable: boolean;
     pgDefault: string | null;
+    /** What happens to this column's values: kept as they are, kept but behaving differently, or at risk. */
+    note: ConversionNote;
 }
 
 export interface PlannedTable {
@@ -121,6 +124,9 @@ export interface PlannedTable {
     pgName: string;
     columns: PlannedColumn[];
     rows: number;
+    /** The primary key's columns, by their Oracle and PostgreSQL names; empty when the table has none. */
+    oraclePrimaryKey: string[];
+    pgPrimaryKey: string[];
 }
 
 export interface MigrationPlan {
@@ -131,6 +137,10 @@ export interface MigrationPlan {
     createSql: string[];
     /** Adds the foreign keys. Runs after the rows, so no order of tables matters and the data is checked against them. */
     linkSql: string[];
+    /** Objects of the Oracle schema the migration does not create (indexes, CHECK constraints, sequences, views, triggers, programs). */
+    notCarried: NotCarried[];
+    /** What behaves differently in queries on the PostgreSQL side, for this schema. */
+    behaviour: string[];
 }
 
 /** The PostgreSQL type for one Oracle column, or why there is none. */
@@ -199,17 +209,20 @@ export function planMigration(tables: OracleTable[], counts: Map<string, number>
         oracleName: table.name,
         pgName: foldName(table.name),
         rows: counts.get(table.name) ?? 0,
+        oraclePrimaryKey: table.primaryKey?.columns ?? [],
+        pgPrimaryKey: (table.primaryKey?.columns ?? []).map(foldName),
         columns: table.columns.map((column): PlannedColumn => {
             const type = pgTypeOf(column);
             const label = `${table.name}.${column.name}`;
-            const fallback: PlannedColumn = { oracleName: column.name, pgName: foldName(column.name), oracleType: column.type, pgType: "", kind: "other", nullable: column.nullable, pgDefault: null };
+            const fallback: PlannedColumn = { oracleName: column.name, pgName: foldName(column.name), oracleType: column.type, pgType: "", kind: "other", nullable: column.nullable, pgDefault: null, note: { status: "risk", text: "Not migrated." } };
             if (typeof type === "string") {
                 problems.push(`${label}: ${type}.`);
                 return fallback;
             }
             const def = pgDefaultOf(column);
             if (typeof def === "string") problems.push(`${label}: ${def}.`);
-            return { ...fallback, pgType: type.type, kind: type.kind, pgDefault: typeof def === "string" ? null : def.value };
+            const pgDefault = typeof def === "string" ? null : def.value;
+            return { ...fallback, pgType: type.type, kind: type.kind, pgDefault, note: conversionNote(column, type.type, pgDefault) };
         }),
     }));
 
@@ -235,14 +248,14 @@ export function planMigration(tables: OracleTable[], counts: Map<string, number>
         }
     }
     if (planned.length === 0) problems.push("The schema has no tables.");
-    return { tables: planned, problems, createSql, linkSql };
+    return { tables: planned, problems, createSql, linkSql, notCarried: [], behaviour: behaviourNotes(planned) };
 }
 
 export async function planOracleMigration(connection: oracledb.Connection): Promise<MigrationPlan> {
     const tables = await introspectOracle(connection);
     const counts = new Map<string, number>();
     for (const table of tables) counts.set(table.name, Number(((await connection.execute(`SELECT COUNT(*) FROM ${oracleQuote(table.name)}`)).rows as unknown[][])[0][0]));
-    return planMigration(tables, counts);
+    return { ...planMigration(tables, counts), notCarried: await findNotCarried(connection) };
 }
 
 // ---- copying the rows --------------------------------------------------------------------------------------------------------------
@@ -318,14 +331,45 @@ export async function copyTable(oracle: oracledb.Connection, pg: Client, table: 
 
 // ---- checking what arrived ---------------------------------------------------------------------------------------------------------
 
+/** One thing compared between the two databases: the expression run on each side and what each returned. */
+export interface ProofCheck {
+    label: string;
+    oracleExpression: string;
+    postgresExpression: string;
+    oracle: string | null;
+    postgres: string | null;
+    match: boolean;
+}
+
+/** The first rows of a table by primary key, as each database returns them. */
+export interface ProofSample {
+    columns: string[];
+    oracleSql: string;
+    postgresSql: string;
+    oracleRows: (string | null)[][];
+    postgresRows: (string | null)[][];
+    /** Whether the cells that can be compared (numbers, dates, text) are equal; a binary or time-zone cell is shown, not compared. */
+    match: boolean;
+}
+
+export interface TableProof {
+    /** The one statement run on each side for the checks. */
+    oracleSql: string;
+    postgresSql: string;
+    checks: ProofCheck[];
+    /** Absent when the table has no primary key to order a sample by. */
+    sample?: ProofSample;
+}
+
 export interface TableVerification {
     table: string;
     oracleRows: number;
     postgresRows: number;
-    /** How many column checks (sums of numbers, first and last dates, total text length) were compared. */
+    /** How many comparisons were made (the row count, NULLs and sums of numbers, first and last dates, total text length, and the sample rows). */
     checks: number;
     /** What differed, in words; empty when the table matches. */
     mismatches: string[];
+    proof: TableProof;
 }
 
 const sameNumber = (a: string | null, b: string | null): boolean => {
@@ -335,35 +379,72 @@ const sameNumber = (a: string | null, b: string | null): boolean => {
     return Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(x), Math.abs(y));
 };
 
-/** Row counts and, for every column that can have one, a sum (numbers), a first and last value (dates) or a total length (text), on both sides. */
+const SAMPLE_ROWS = 5;
+const asText = (cell: unknown): string | null => (cell === null || cell === undefined ? null : Buffer.isBuffer(cell) ? `\\x${cell.toString("hex")}` : String(cell));
+
+/**
+ * What arrived, compared with what was there, by queries run on both sides: the row count, the NULLs of every column, a sum for each
+ * number, the first and last of each date, the total length of each text, and the first rows by primary key. Every comparison keeps the
+ * expression it ran and both answers, so the result can be shown and repeated.
+ */
 export async function verifyTable(oracle: oracledb.Connection, pg: Client, table: PlannedTable): Promise<TableVerification> {
-    const sums = table.columns.filter((column) => column.kind === "number");
-    const dates = table.columns.filter((column) => column.kind === "date");
-    const texts = table.columns.filter((column) => column.kind === "string");
-    const oracleParts = ["COUNT(*)", ...sums.map((c) => `SUM(${oracleQuote(c.oracleName)})`), ...dates.flatMap((c) => [oracleSelectExpression({ ...c, oracleName: c.oracleName }).replace(oracleQuote(c.oracleName), `MIN(${oracleQuote(c.oracleName)})`), oracleSelectExpression({ ...c, oracleName: c.oracleName }).replace(oracleQuote(c.oracleName), `MAX(${oracleQuote(c.oracleName)})`)]), ...texts.map((c) => `SUM(LENGTH(${oracleQuote(c.oracleName)}))`)];
-    const pgParts = ["count(*)", ...sums.map((c) => `sum(${quote(c.pgName)})::text`), ...dates.flatMap((c) => [`min(${quote(c.pgName)})::text`, `max(${quote(c.pgName)})::text`]), ...texts.map((c) => `sum(length(${quote(c.pgName)}))::text`)];
+    const oq = (column: PlannedColumn) => oracleQuote(column.oracleName);
+    const pq = (column: PlannedColumn) => quote(column.pgName);
+    type Planned = { label: string; oracleExpression: string; postgresExpression: string; how: "number" | "text" };
+    const planned: Planned[] = [{ label: "rows", oracleExpression: "COUNT(*)", postgresExpression: "count(*)", how: "number" }];
+    for (const column of table.columns) planned.push({ label: `NULLs in ${column.pgName}`, oracleExpression: `COUNT(CASE WHEN ${oq(column)} IS NULL THEN 1 END)`, postgresExpression: `count(*) FILTER (WHERE ${pq(column)} IS NULL)`, how: "number" });
+    for (const column of table.columns.filter((c) => c.kind === "number")) planned.push({ label: `sum of ${column.pgName}`, oracleExpression: `SUM(${oq(column)})`, postgresExpression: `sum(${pq(column)})`, how: "number" });
+    for (const column of table.columns.filter((c) => c.kind === "date")) {
+        planned.push({ label: `first ${column.pgName}`, oracleExpression: oracleSelectExpression(column).replace(oq(column), `MIN(${oq(column)})`), postgresExpression: `min(${pq(column)})`, how: "text" });
+        planned.push({ label: `last ${column.pgName}`, oracleExpression: oracleSelectExpression(column).replace(oq(column), `MAX(${oq(column)})`), postgresExpression: `max(${pq(column)})`, how: "text" });
+    }
+    for (const column of table.columns.filter((c) => c.kind === "string")) planned.push({ label: `total length of ${column.pgName}`, oracleExpression: `SUM(LENGTH(${oq(column)}))`, postgresExpression: `sum(length(${pq(column)}))`, how: "number" });
 
-    const o = ((await oracle.execute(`SELECT ${oracleParts.join(", ")} FROM ${oracleQuote(table.oracleName)}`, [], { fetchTypeHandler: migrationFetch })).rows as unknown[][])[0].map((cell) => (cell === null ? null : String(cell)));
-    const p = Object.values((await pg.query({ text: `SELECT ${pgParts.join(", ")} FROM ${quote(table.pgName)}`, rowMode: "array" })).rows[0] as unknown as Record<string, string | null>).map((cell) => (cell === null ? null : String(cell)));
+    const oracleSql = `SELECT ${planned.map((entry) => entry.oracleExpression).join(", ")} FROM ${oracleQuote(table.oracleName)}`;
+    const postgresSql = `SELECT ${planned.map((entry) => `(${entry.postgresExpression})::text`).join(", ")} FROM ${quote(table.pgName)}`;
+    const o = ((await oracle.execute(oracleSql, [], { fetchTypeHandler: migrationFetch })).rows as unknown[][])[0].map(asText);
+    const p = ((await pg.query({ text: postgresSql, rowMode: "array" })).rows[0] as unknown[]).map(asText);
 
-    const mismatches: string[] = [];
-    let at = 1;
-    for (const column of sums) {
-        if (!sameNumber(o[at], p[at])) mismatches.push(`sum of ${column.pgName}: Oracle ${o[at]}, PostgreSQL ${p[at]}`);
-        at++;
+    const checks: ProofCheck[] = planned.map((entry, at) => ({
+        label: entry.label,
+        oracleExpression: entry.oracleExpression,
+        postgresExpression: entry.postgresExpression,
+        oracle: o[at],
+        postgres: p[at],
+        match: entry.how === "number" ? sameNumber(o[at], p[at]) : o[at] === p[at],
+    }));
+    const mismatches = checks.filter((check) => !check.match).map((check) => `${check.label}: Oracle ${check.oracle}, PostgreSQL ${check.postgres}`);
+
+    let sample: ProofSample | undefined;
+    if (table.pgPrimaryKey.length > 0) {
+        const key = table.oraclePrimaryKey.map((name) => table.columns.find((c) => c.oracleName === name)!);
+        // (The PostgreSQL select list is aliased c0, c1, ...: ORDER BY a name that is also an output column sorts by that output, here the text of the number.)
+        // Text keys are ordered by bytes on both sides, so the same rows come first whatever each database's collation is.
+        const oracleOrder = key.map((c) => oq(c)).join(", ");
+        const postgresOrder = key.map((c) => (c.kind === "string" || c.kind === "other" ? `${pq(c)} COLLATE "C"` : pq(c))).join(", ");
+        const sampleOracleSql = `SELECT ${table.columns.map(oracleSelectExpression).join(", ")} FROM ${oracleQuote(table.oracleName)} ORDER BY ${oracleOrder} FETCH FIRST ${SAMPLE_ROWS} ROWS ONLY`;
+        const samplePostgresSql = `SELECT ${table.columns.map((c, at) => `${pq(c)}::text AS ${quote(`c${at}`)}`).join(", ")} FROM ${quote(table.pgName)} ORDER BY ${postgresOrder} LIMIT ${SAMPLE_ROWS}`;
+        const oracleRows = ((await oracle.execute(sampleOracleSql, [], { fetchTypeHandler: migrationFetch })).rows as unknown[][]).map((row) => row.map(asText));
+        const postgresRows = ((await pg.query({ text: samplePostgresSql, rowMode: "array" })).rows as unknown[][]).map((row) => row.map(asText));
+        let same = oracleRows.length === postgresRows.length;
+        if (!same) mismatches.push(`sample: Oracle returned ${oracleRows.length} rows, PostgreSQL ${postgresRows.length}`);
+        else {
+            oracleRows.forEach((row, r) =>
+                table.columns.forEach((column, c) => {
+                    if (column.kind === "other") return;
+                    const equal = column.kind === "number" ? sameNumber(row[c], postgresRows[r][c]) : row[c] === postgresRows[r][c];
+                    if (!equal) {
+                        same = false;
+                        mismatches.push(`sample row ${r + 1}, ${column.pgName}: Oracle ${row[c]}, PostgreSQL ${postgresRows[r][c]}`);
+                    }
+                }),
+            );
+        }
+        sample = { columns: table.columns.map((c) => c.pgName), oracleSql: sampleOracleSql, postgresSql: samplePostgresSql, oracleRows, postgresRows, match: same };
     }
-    for (const column of dates) {
-        if (o[at] !== p[at]) mismatches.push(`first ${column.pgName}: Oracle ${o[at]}, PostgreSQL ${p[at]}`);
-        if (o[at + 1] !== p[at + 1]) mismatches.push(`last ${column.pgName}: Oracle ${o[at + 1]}, PostgreSQL ${p[at + 1]}`);
-        at += 2;
-    }
-    for (const column of texts) {
-        if (!sameNumber(o[at], p[at])) mismatches.push(`total length of ${column.pgName}: Oracle ${o[at]}, PostgreSQL ${p[at]}`);
-        at++;
-    }
+
     const [oracleRows, postgresRows] = [Number(o[0]), Number(p[0])];
-    if (oracleRows !== postgresRows) mismatches.unshift(`rows: Oracle ${oracleRows}, PostgreSQL ${postgresRows}`);
-    return { table: table.pgName, oracleRows, postgresRows, checks: sums.length + dates.length * 2 + texts.length + 1, mismatches };
+    return { table: table.pgName, oracleRows, postgresRows, checks: checks.length + (sample ? 1 : 0), mismatches, proof: { oracleSql, postgresSql, checks, sample } };
 }
 
 export interface MigrationResult {

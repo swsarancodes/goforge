@@ -84,3 +84,25 @@ describe("POST /api/migrations/oracle-to-postgres", () => {
         expect(migrate.status).toBe(502);
     });
 });
+
+describe("POST /api/migrations/oracle-to-postgres/verify", () => {
+    it("needs both databases", async () => {
+        expect((await post("/api/migrations/oracle-to-postgres/verify", {})).status).toBe(400);
+        expect((await post("/api/migrations/oracle-to-postgres/verify", { sourceConnectionId: oracleId })).status).toBe(400);
+    });
+
+    it("does not know a database that is not there, and refuses a PostgreSQL connection as the source", async () => {
+        expect((await post("/api/migrations/oracle-to-postgres/verify", { sourceConnectionId: "no-such-id", targetConnectionId: postgresId })).status).toBe(404);
+        const noTarget = await post("/api/migrations/oracle-to-postgres/verify", { sourceConnectionId: oracleId, targetConnectionId: "no-such-id" });
+        expect(noTarget.status).toBe(404);
+        expect(String(noTarget.body.error)).toContain("PostgreSQL database was not found");
+        const wrongSource = await post("/api/migrations/oracle-to-postgres/verify", { sourceConnectionId: postgresId, targetConnectionId: postgresId });
+        expect(wrongSource.status).toBe(400);
+    });
+
+    it("says so when the two databases cannot be reached, and compares nothing", async () => {
+        const unreachable = await post("/api/migrations/oracle-to-postgres/verify", { sourceConnectionId: oracleId, targetConnectionId: postgresId });
+        expect(unreachable.status).toBe(502);
+        expect(String(unreachable.body.error)).toMatch(/^Could not compare the two databases/);
+    });
+});

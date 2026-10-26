@@ -173,4 +173,55 @@ describe.skipIf(!server || !pgUrl)("Oracle to PostgreSQL migration (real Oracle,
             expect(verified).toMatchObject({ table: "cust_mst", oracleRows: 200, postgresRows: 200, mismatches: [] });
         }));
     }, 120_000);
+
+    it("says what it will not carry over and how each column fares, before anything runs", async () => {
+        const { config } = await oracleWith(
+            `CREATE TABLE notes (id NUMBER(6) PRIMARY KEY, qty NUMBER(3) CHECK (qty > 0), name VARCHAR2(20), f FLOAT, tz TIMESTAMP WITH TIME ZONE, made DATE);
+             CREATE INDEX notes_name_ix ON notes (name);
+             CREATE SEQUENCE notes_seq;
+             CREATE VIEW notes_v AS SELECT id, name FROM notes`,
+            [],
+        );
+        const plan = await withOracle(config, planOracleMigration);
+        expect(plan.problems).toEqual([]);
+        const left = plan.notCarried.map((entry) => `${entry.kind}:${entry.name}`).sort();
+        expect(left).toEqual(["check constraint:" + left.find((l) => l.startsWith("check constraint:"))!.split(":")[1], "index:NOTES_NAME_IX", "sequence:NOTES_SEQ", "view:NOTES_V"].sort());
+        expect(plan.notCarried.find((entry) => entry.kind === "check constraint")?.detail).toMatch(/on NOTES: qty > 0/i);
+        // the primary key's own index is carried, so it is not listed as left behind
+        expect(left.some((entry) => /NOTES_PK|SYS_C/.test(entry) && entry.startsWith("index:"))).toBe(false);
+        const status = (name: string) => plan.tables[0].columns.find((c) => c.oracleName === name)!.note.status;
+        expect([status("ID"), status("F"), status("TZ"), status("MADE")]).toEqual(["exact", "risk", "risk", "changed"]);
+    });
+
+    it("proves a migration by queries on both sides: every comparison with its expression and both answers, and the first rows side by side", async () => {
+        const { config } = await oracleWith(domain("legacy_schema.sql"), [domain("generate_synthetic_data_oracle.sql")]);
+        const plan = await withOracle(config, planOracleMigration);
+        const database = newDatabase();
+        await createDatabaseFromSql(pgAdmin, database, plan.createSql.join(";\n"));
+        const result = await withOracle(config, (oracle) => withPgClient({ ...pgAdmin, database }, (pg) => loadAndVerify(oracle, pg, plan)));
+        const customers = result.verification.find((v) => v.table === "cust_mst")!;
+
+        const rows = customers.proof.checks.find((check) => check.label === "rows")!;
+        expect(rows).toMatchObject({ oracleExpression: "COUNT(*)", oracle: "200", postgres: "200", match: true });
+        expect(customers.proof.checks.map((check) => check.label)).toEqual(expect.arrayContaining(["NULLs in cust_email", "sum of cust_id", "first join_dt", "last join_dt", "total length of cust_nm"]));
+        expect(customers.proof.checks.every((check) => check.match)).toBe(true);
+        expect(customers.proof.oracleSql).toMatch(/^SELECT COUNT\(\*\), COUNT\(CASE WHEN "CUST_ID" IS NULL THEN 1 END\)/);
+        expect(customers.proof.postgresSql).toContain("FROM \"cust_mst\"");
+
+        const sample = customers.proof.sample!;
+        expect(sample.oracleSql).toContain("ORDER BY \"CUST_ID\" FETCH FIRST 5 ROWS ONLY");
+        expect(sample.postgresSql).toContain("ORDER BY \"cust_id\" LIMIT 5");
+        expect(sample.oracleRows).toHaveLength(5);
+        expect(sample.oracleRows.map((row) => row[0])).toEqual(["1", "2", "3", "4", "5"]);
+        expect(sample.postgresRows.map((row) => row[0])).toEqual(["1", "2", "3", "4", "5"]);
+        expect(sample.match).toBe(true);
+        expect(customers.checks).toBe(customers.proof.checks.length + 1);
+
+        // the same proof, run again on its own against the database that now exists
+        await withOracle(config, (oracle) => withPgClient({ ...pgAdmin, database }, async (pg) => {
+            const again = await verifyTable(oracle, pg, plan.tables.find((t) => t.pgName === "cust_mst")!);
+            expect(again.mismatches).toEqual([]);
+            expect(again.proof.checks.map((check) => check.postgres)).toEqual(customers.proof.checks.map((check) => check.postgres));
+        }));
+    }, 180_000);
 });

@@ -6,7 +6,7 @@ import { encryptSecret } from "../crypto/vault.js";
 import { getCloud, getConnectionStore, type ConnectionRow } from "../db/stores.js";
 import { cloudConnectionRow, cloudDatabaseName, dropCloudDatabase, newDatabaseOwner } from "../services/cloud-databases.js";
 import { withOracle } from "../services/oracle-client.js";
-import { loadAndVerify, planOracleMigration, type MigrationPlan, type MigrationResult } from "../services/oracle-migration.js";
+import { loadAndVerify, planOracleMigration, verifyTable, type MigrationPlan, type MigrationResult, type TableVerification } from "../services/oracle-migration.js";
 import { oracleConfigOf } from "../services/oracle-client.js";
 import { CreateDatabaseError, DATABASE_NAME_PATTERN, DatabaseExistsError, createDatabaseFromSql } from "../services/pg-create-database.js";
 import { toConnectionConfig, withPgClient, type ConnectionConfig } from "../services/pg-client.js";
@@ -25,14 +25,25 @@ export const migrationsRouter = Router();
 export interface MigrationDeps {
     plan: typeof planOracleMigration;
     load: (oracle: ConnectionConfig, pg: ConnectionConfig, plan: MigrationPlan) => Promise<MigrationResult>;
+    /** Runs the checks of a migration again, against a database that already exists. */
+    verify: (oracle: ConnectionConfig, pg: ConnectionConfig, plan: MigrationPlan) => Promise<TableVerification[]>;
 }
 
 const realDeps: MigrationDeps = {
     plan: planOracleMigration,
     load: (oracle, pg, plan) => withOracle(oracle, (connection) => withPgClient(pg, (client) => loadAndVerify(connection, client, plan))),
+    verify: (oracle, pg, plan) =>
+        withOracle(oracle, (connection) =>
+            withPgClient(pg, async (client) => {
+                const results: TableVerification[] = [];
+                for (const table of plan.tables) results.push(await verifyTable(connection, client, table));
+                return results;
+            }),
+        ),
 };
 
 const sourceSchema = z.object({ sourceConnectionId: z.string().min(1) });
+const verifySchema = sourceSchema.extend({ targetConnectionId: z.string().min(1) });
 const migrateSchema = sourceSchema.extend({
     /** What the new database is called to its owner. */
     name: z.string().trim().min(1).max(60),
@@ -66,9 +77,26 @@ export function createMigrationsRouter(deps: MigrationDeps = realDeps): Router {
         if (!row) return;
         try {
             const plan = await withOracle(oracleConfigOf(row), deps.plan);
-            res.json({ tables: plan.tables, problems: plan.problems, statements: plan.createSql.length + plan.linkSql.length });
+            res.json({ tables: plan.tables, problems: plan.problems, notCarried: plan.notCarried, behaviour: plan.behaviour, statements: plan.createSql.length + plan.linkSql.length });
         } catch (error) {
             res.status(502).json({ error: `Could not read the Oracle database: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    }));
+
+    /** The checks of a migration, run again by queries on both databases: for an Oracle database and the PostgreSQL database it was migrated into. */
+    router.post("/oracle-to-postgres/verify", handle(async (req, res) => {
+        const parsed = verifySchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: "Say which Oracle database and which PostgreSQL database to compare." });
+        const source = await oracleSource(req, res, parsed.data.sourceConnectionId);
+        if (!source) return;
+        const target = await findConnection(req, parsed.data.targetConnectionId);
+        if (!target) return res.status(404).json({ error: "The PostgreSQL database was not found." });
+        try {
+            const plan = await withOracle(oracleConfigOf(source), deps.plan);
+            const verification = await deps.verify(oracleConfigOf(source), toConnectionConfig(target), plan);
+            res.json({ verification });
+        } catch (error) {
+            res.status(502).json({ error: `Could not compare the two databases: ${error instanceof Error ? error.message : String(error)}` });
         }
     }));
 
