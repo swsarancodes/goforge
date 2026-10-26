@@ -132,7 +132,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     return res.json() as Promise<T>;
 }
 
-/** PostgreSQL connections by default (what every page but the SQL editor works on); `"all"` adds the Oracle ones. */
+/** PostgreSQL connections by default (what most pages work on); `"all"` adds the Oracle ones (the SQL editor and the Data page list them). */
 export function listSavedConnections(engine: "postgres" | "oracle" | "all" = "postgres"): Promise<SavedConnection[]> {
     return request(engine === "postgres" ? "/" : `/?engine=${engine}`);
 }
@@ -206,7 +206,7 @@ export async function getOracleStatus(): Promise<{ configured: boolean; limit?: 
 
 /**
  * Creates an Oracle database (a schema on the GoForge Oracle server) for the account, builds the Oracle script `sql` in it, and saves a
- * connection to it. The connection is listed in the SQL editor; no other page reads Oracle.
+ * connection to it. The connection is listed in the SQL editor and the Data page, which reads its tables and rows.
  */
 export async function createOracleDatabase(input: { name: string; sql: string }): Promise<{ connection: SavedConnection; statementsRun: number }> {
     const response = await fetch("/api/oracle-databases", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) });

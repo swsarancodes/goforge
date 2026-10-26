@@ -4,6 +4,8 @@ import { findConnection } from "./connection-lookup.js";
 import { catalogCache } from "../services/catalog-cache.js";
 import { DataRequestError, fetchTableRows } from "../services/pg-data.js";
 import { withReadClient, type PoolTimings } from "../services/pg-pool.js";
+import { withOracle, oracleConfigOf } from "../services/oracle-client.js";
+import { fetchOracleRows } from "../services/oracle-data.js";
 import type { RelationMeta } from "../services/pg-relations.js";
 
 export const dataRouter = Router();
@@ -23,13 +25,24 @@ const dataQuerySchema = z.object({
 const STALE_CATALOG_CODES = new Set(["42703", "42P01"]);
 
 dataRouter.get("/:id/data", async (req, res) => {
-    const row = await findConnection(req);
+    const row = await findConnection(req, req.params.id, { engine: "any" });
     if (!row) return res.status(404).json({ error: "Connection not found" });
 
     const parsed = dataQuerySchema.safeParse(req.query);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.flatten() });
 
     const { schema, table, limit, offset, sort, dir, count, refresh } = parsed.data;
+
+    if (row.engine === "oracle") {
+        try {
+            res.json(await withOracle(oracleConfigOf(row), (connection) => fetchOracleRows(connection, { schema, table, limit, offset, sort, dir, exactCount: count === "exact" })));
+        } catch (err) {
+            if (err instanceof DataRequestError) return res.status(err.status).json({ error: err.message });
+            res.status(502).json({ error: err instanceof Error ? err.message : String(err) });
+        }
+        return;
+    }
+
     const startedAt = performance.now();
     const timings: PoolTimings = {};
 

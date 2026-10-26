@@ -69,6 +69,7 @@ const RelationList: React.FC<RelationListProps> = ({ browser, onPicked }) => {
                             {browser.connections.map((conn) => (
                                 <SelectItem key={conn.id} value={conn.id} title={connectionAddress(conn)}>
                                     {connectionLabel(conn, browser.connections)}
+                                    {conn.engine === "oracle" && <span className="ml-2 rounded border px-1 py-0.5 text-[10px] font-normal text-muted-foreground">Oracle</span>}
                                 </SelectItem>
                             ))}
                         </SelectContent>

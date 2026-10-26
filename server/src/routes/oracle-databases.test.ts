@@ -91,7 +91,6 @@ describe("/api/oracle-databases", () => {
         // pages that read PostgreSQL treat it as not found, instead of trying to speak PostgreSQL to Oracle
         const pages: [string, string][] = [
             ["GET", `/api/connections/${made.id}/introspect`],
-            ["GET", `/api/connections/${made.id}/data`],
             ["POST", `/api/connections/${made.id}/validate-sql`],
             ["POST", `/api/connections/${made.id}/query-preview`],
             ["GET", `/api/connections/${made.id}/schema-change/catalog`],
@@ -101,6 +100,8 @@ describe("/api/oracle-databases", () => {
             expect(response.status, `${method} ${route}`).toBe(404);
             expect(response.body?.error, `${method} ${route}`).toMatch(/not found/i);
         }
+        // the Data page reads Oracle too: its table list and rows are found (a request with no table is refused for that, not as "not found")
+        expect((await api("GET", `/api/connections/${made.id}/data`)).status).toBe(400);
         // the SQL editor and connection management do know about it
         const status = await api("GET", `/api/connections/${made.id}/sql/sessions/abcdefgh1234`);
         expect(status.status).toBe(200);

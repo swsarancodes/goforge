@@ -281,7 +281,7 @@ export function useDataBrowser() {
     );
 
     useEffect(() => {
-        listSavedConnections()
+        listSavedConnections("all")
             .then((list) => {
                 setConnections(list);
                 const previous = restore.current;
