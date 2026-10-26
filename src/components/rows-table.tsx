@@ -18,11 +18,13 @@ interface RowsTableProps {
     /** When given, column headers become sort buttons. */
     onSort?: (column: string) => void;
     onRowClick?: (rowIndex: number) => void;
+    /** Extra classes for one row, for example to mark the rows that differ from another result. */
+    rowClassName?: (rowIndex: number) => string | undefined;
     emptyText: string;
 }
 
 /** Sticky-header grid for rows of text values: used by the table browser and the SQL editor's results. */
-export const RowsTable: React.FC<RowsTableProps> = ({ columns, rows, firstRowNumber = 1, sort, onSort, onRowClick, emptyText }) => (
+export const RowsTable: React.FC<RowsTableProps> = ({ columns, rows, firstRowNumber = 1, sort, onSort, onRowClick, rowClassName, emptyText }) => (
     <table className="w-max min-w-full text-xs border-separate border-spacing-0">
         <thead>
             <tr>
@@ -63,7 +65,7 @@ export const RowsTable: React.FC<RowsTableProps> = ({ columns, rows, firstRowNum
         </thead>
         <tbody>
             {rows.map((row, rowIndex) => (
-                <tr key={rowIndex} className={cn("hover:bg-accent/50", onRowClick && "cursor-pointer")} onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}>
+                <tr key={rowIndex} className={cn("hover:bg-accent/50", onRowClick && "cursor-pointer", rowClassName?.(rowIndex))} onClick={onRowClick ? () => onRowClick(rowIndex) : undefined}>
                     <td className="border-b px-2 py-1.5 text-right text-muted-foreground tabular-nums">{firstRowNumber + rowIndex}</td>
                     {row.map(({ cell, truncated }, columnIndex) => (
                         <td

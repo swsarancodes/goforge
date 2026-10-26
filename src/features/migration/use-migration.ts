@@ -3,7 +3,9 @@ import { rememberDataConnection } from "@/features/data-browser/use-data-browser
 import { rememberConnectionOnPages } from "@/features/database/live-database";
 import { SavedConnection, listSavedConnections } from "@/lib/live-connection-api";
 import { MigrationEdits, MigrationOutcome, MigrationPlanPreview, NO_EDITS, TableVerification, askMigrationAgent, migrateOracleToPostgres, planOracleMigration, verifyMigration } from "@/lib/migrations-api";
+import { saveCheckContext } from "@/features/query-check/context";
 import { useAuth } from "@/providers/auth-provider/auth-provider";
+import { defaultProofQuery, mappingFromPlan } from "./name-mapping";
 
 export const CLOUD = "cloud";
 
@@ -167,6 +169,8 @@ export function useMigration() {
             const done = await migrateOracleToPostgres({ sourceConnectionId: sourceId, name: name.trim(), target: target === CLOUD ? { kind: "cloud" } : { kind: "server", connectionId: target }, edits, acceptLoss });
             setOutcome(done);
             setProof(done.verification);
+            // the query check starts from the names changed here and a query that reads up to 100 rows
+            if (plan) saveCheckContext(done.connection.id, { mapping: mappingFromPlan(plan), query: defaultProofQuery(plan) });
             rememberConnectionOnPages(done.connection.id);
             rememberDataConnection(done.connection.id);
             if (target === CLOUD) await auth.refresh();
@@ -175,7 +179,7 @@ export function useMigration() {
         } finally {
             setMigrating(false);
         }
-    }, [sourceId, canMigrate, name, target, edits, acceptLoss, auth]);
+    }, [sourceId, canMigrate, name, target, edits, acceptLoss, auth, plan]);
 
     const rerunProof = useCallback(async () => {
         if (!sourceId || !outcome) return;
