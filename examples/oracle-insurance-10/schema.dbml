@@ -1,0 +1,138 @@
+// A legacy Oracle insurer with 10 tables: customers, agents, products, policies, coverages, premium payments, claims, adjusters and
+// claim payments. All names and values are invented.
+// Import it with File > Import Project (.json, .dbml, .drawio), and pick Oracle as the dialect.
+// The first three tables are the same as the small insurance schema (CUST_MST, POLCY_HDR, CLM_DTL, with the same columns),
+// so the Oracle queries written for that one still run; POLCY_HDR and CLM_DTL gain a few keys that point at the new tables.
+
+Project oracle_insurance_10 {
+  database_type: 'Oracle'
+}
+
+Table AGNT_MST {
+  AGNT_ID   number(10)    [pk]
+  AGNT_NM   varchar2(100) [not null]
+  REGN_CD   varchar2(3)   [not null, note: 'NE, SO, EA, WE']
+  HIRE_DT   date          [not null]
+  COMM_PCT  number(5,2)   [not null, note: 'commission, percent of premium']
+  ACTV_FLG  char(1)       [not null, default: 'Y', note: 'Y or N']
+  Note: 'Sales agents'
+}
+
+Table PROD_MST {
+  PROD_ID       number(10)   [pk]
+  PROD_NM       varchar2(80) [not null]
+  POLCY_TYP_CD  varchar2(4)  [not null, note: 'AUTO, HOME, PROP, LIAB']
+  BASE_PREM     number(12,2) [not null]
+  PROD_DESC     clob
+  LNCH_DT       date
+  ACTV_FLG      char(1)      [not null, default: 'Y']
+  Note: 'Products the insurer sells'
+}
+
+Table ADJSTR_MST {
+  ADJSTR_ID  number(10)    [pk]
+  ADJSTR_NM  varchar2(100) [not null]
+  LCNS_NO    varchar2(20)  [not null, unique]
+  REGN_CD    varchar2(3)   [not null]
+  HIRE_DT    date          [not null]
+  Note: 'Claims adjusters'
+}
+
+Table CUST_MST {
+  CUST_ID     number(10)    [pk]
+  CUST_NM     varchar2(100) [not null]
+  CUST_EMAIL  varchar2(120)
+  SEGMT_CD    varchar2(3)   [not null, note: 'COM commercial, RET retail']
+  JOIN_DT     date          [not null]
+  Note: 'Customers'
+}
+
+Table CUST_ADDR {
+  ADDR_ID      number(10)    [pk]
+  CUST_ID      number(10)    [not null, ref: > CUST_MST.CUST_ID]
+  ADDR_TYP_CD  varchar2(2)   [not null, note: 'HM home, BL billing']
+  ADDR_LN1     varchar2(120) [not null]
+  CITY_NM      varchar2(60)  [not null]
+  STATE_CD     char(2)       [not null]
+  PSTL_CD      varchar2(10)  [note: 'text, not a number: it can start with 0']
+  PRIM_FLG     char(1)       [not null, default: 'N']
+  Note: 'Customer addresses, one or two each'
+}
+
+Table POLCY_HDR {
+  POLCY_ID      number(10)   [pk]
+  CUST_ID       number(10)   [not null, ref: > CUST_MST.CUST_ID]
+  POLCY_TYP_CD  varchar2(4)  [not null]
+  EFF_DT        date         [not null]
+  EXP_DT        date         [not null]
+  ANNL_PREM     number(12,2)
+  STAT_CD       varchar2(2)  [not null, note: 'AC active, LP lapsed']
+  AGNT_ID       number(10)   [ref: > AGNT_MST.AGNT_ID, note: 'empty for a policy sold direct']
+  PROD_ID       number(10)   [not null, ref: > PROD_MST.PROD_ID]
+  Note: 'Policies'
+
+  indexes {
+    CUST_ID [name: 'IX_POLCY_CUST']
+    AGNT_ID [name: 'IX_POLCY_AGNT']
+  }
+  checks {
+    `EXP_DT >= EFF_DT` [name: 'CK_POLCY_DATES']
+  }
+}
+
+Table POLCY_COVG {
+  COVG_ID    number(10)   [pk]
+  POLCY_ID   number(10)   [not null, ref: > POLCY_HDR.POLCY_ID]
+  COVG_CD    varchar2(6)  [not null, note: 'LIAB, COLL, COMP, MED, DWLG, PERS, CONT, PROP']
+  COVG_LMT   number(12,2) [not null]
+  DEDCT_AMT  number(10,2)
+  Note: 'What each policy covers'
+
+  indexes {
+    (POLCY_ID, COVG_CD) [name: 'UQ_POLCY_COVG', unique]
+  }
+}
+
+Table PREM_PMT {
+  PMT_ID        number(10)   [pk]
+  POLCY_ID      number(10)   [not null, ref: > POLCY_HDR.POLCY_ID]
+  PMT_DT        date         [not null]
+  PMT_AMT       number(12,2) [not null]
+  PMT_MTHD_CD   varchar2(3)  [not null, note: 'CC card, ACH, CHK cheque']
+  PMT_STAT_CD   varchar2(2)  [not null, note: 'OK paid, FL failed, RF refunded']
+  PMT_TS        timestamp(3) [not null, note: 'when the payment arrived, to the millisecond']
+  Note: 'Premium payments'
+
+  indexes {
+    POLCY_ID [name: 'IX_PMT_POLCY']
+  }
+}
+
+Table CLM_DTL {
+  CLM_ID       number(10)    [pk]
+  POLCY_ID     number(10)    [not null, ref: > POLCY_HDR.POLCY_ID]
+  CLM_DT       date          [not null, note: 'includes the time of day']
+  CLM_AMT      number(12,2)  [not null]
+  CLM_STAT_CD  varchar2(2)   [not null, note: 'OP open, CL closed, DN denied']
+  ADJ_NOTE     varchar2(200)
+  PAID_AMT     number(12,2)
+  ADJSTR_ID    number(10)    [ref: > ADJSTR_MST.ADJSTR_ID, note: 'empty until an adjuster is assigned']
+  Note: 'Claims'
+
+  indexes {
+    POLCY_ID [name: 'IX_CLM_POLCY']
+  }
+  checks {
+    `CLM_AMT >= 0` [name: 'CK_CLM_AMT']
+  }
+}
+
+Table CLM_PYMT {
+  PYMT_ID      number(10)   [pk]
+  CLM_ID       number(10)   [not null, ref: > CLM_DTL.CLM_ID]
+  ADJSTR_ID    number(10)   [ref: > ADJSTR_MST.ADJSTR_ID]
+  PYMT_DT      date         [not null]
+  PYMT_AMT     number(12,2) [not null]
+  PYMT_TYP_CD  varchar2(3)  [not null, note: 'PRT partial, FIN final']
+  Note: 'Payments made on claims'
+}
