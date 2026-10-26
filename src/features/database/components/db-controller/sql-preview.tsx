@@ -1,3 +1,4 @@
+import { linkDiagram } from "../../live-link";
 import { useDatabase, useDatabaseOperations } from "@/providers/database-provider/database-provider";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -293,6 +294,7 @@ const SqlPreview: React.FC<SqlPreviewProps> = ({ tableFilterIds, className, edit
             if (live.active) {
                 const created = await live.create(preparedChange.targetDatabase, data_types);
                 createdDatabase = liveDatabaseCreatedText(created.connection);
+                if (currentDatabase) linkDiagram(currentDatabase.id, created.connection.id);
             }
             const recorded = preparedChange.operations.length > 0 ? await applyRecorded(preparedChange.operations, { name: "SQL editor changes", origin: "sql-editor" }) : undefined;
             const liveNote = createdDatabase ? ` ${createdDatabase}` : "";

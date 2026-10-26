@@ -46,10 +46,11 @@ ensure_containers() {
 start_api() {
   local pgpw orapw
   pgpw=$(env_of "$PG" POSTGRES_PASSWORD); orapw=$(env_of "$ORA" ORACLE_PASSWORD)
-  # variables set here win over server/.env, which only fills in what is not set (the model key, for one)
+  # variables set here win over server/.env, which only fills in what is not set (the model key, for one); a local run allows 20 Oracle
+  # databases per account (a deployed server keeps the default of 5)
   (cd server && PORT=$API_PORT CORS_ORIGIN="http://localhost:$UI_PORT" ALLOW_SIGNUP=true \
     DATABASE_URL="postgres://postgres:$pgpw@127.0.0.1:$PG_PORT/goforge_app" DATABASE_URL_POOLED="" \
-    ORACLE_ADMIN_URL="oracle://system:$orapw@127.0.0.1:1521/FREEPDB1" exec npx tsx src/index.ts)
+    ORACLE_ADMIN_URL="oracle://system:$orapw@127.0.0.1:1521/FREEPDB1" MAX_ORACLE_DATABASES_PER_USER="${MAX_ORACLE_DATABASES_PER_USER:-20}" exec npx tsx src/index.ts)
 }
 start_ui() { GOFORGE_API_URL="http://127.0.0.1:$API_PORT" exec npx vite --port "$UI_PORT" --strictPort; }
 
