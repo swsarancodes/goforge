@@ -2,6 +2,9 @@ import type { Client } from "pg";
 import { oracledb } from "./oracle-client.js";
 import { dateText, numberText } from "./oracle-sql.js";
 import { behaviourNotes, conversionNote, findNotCarried, type ConversionNote, type NotCarried } from "./oracle-conversion-notes.js";
+import { columnKey, dataCheckFor, defaultFitsType, resolveName, resolvePgType, type MigrationEdits, type ParsedPgType } from "./oracle-type-edits.js";
+
+export type { MigrationEdits } from "./oracle-type-edits.js";
 
 /**
  * Oracle schema to PostgreSQL: read the Oracle schema from its dictionary, work out the PostgreSQL schema, copy the rows, add the
@@ -117,6 +120,21 @@ export interface PlannedColumn {
     pgDefault: string | null;
     /** What happens to this column's values: kept as they are, kept but behaving differently, or at risk. */
     note: ConversionNote;
+    /** What the person changed on this column: its name, its type, or dropping its default. */
+    edited: ("name" | "type" | "default")[];
+    /** The default Oracle has, as it stores it; null when there is none. */
+    oracleDefault: string | null;
+    /** A query on the Oracle data that counts the values this type would change or lose, and the answer. Absent when nothing can be lost. */
+    check?: DataCheck;
+}
+
+/** A query run on the Oracle data before anything is migrated, and what it counted. `count` is null when the query itself failed. */
+export interface DataCheck {
+    description: string;
+    sql: string;
+    count: number | null;
+    /** The database's message when the query failed. */
+    error?: string;
 }
 
 export interface PlannedTable {
@@ -124,6 +142,8 @@ export interface PlannedTable {
     pgName: string;
     columns: PlannedColumn[];
     rows: number;
+    /** The person gave the table a name of their own. */
+    renamed: boolean;
     /** The primary key's columns, by their Oracle and PostgreSQL names; empty when the table has none. */
     oraclePrimaryKey: string[];
     pgPrimaryKey: string[];
@@ -133,6 +153,8 @@ export interface MigrationPlan {
     tables: PlannedTable[];
     /** What stops the migration, one line each; empty when it can go ahead. */
     problems: string[];
+    /** Changes the person asked for that could not be made, with the reason. They are not part of the plan. */
+    editProblems: string[];
     /** Creates the tables with their primary keys and unique constraints. Runs before the rows. */
     createSql: string[];
     /** Adds the foreign keys. Runs after the rows, so no order of tables matters and the data is checked against them. */
@@ -202,29 +224,99 @@ export function pgDefaultOf(column: OracleColumn): { value: string | null } | st
     return `its default ${text} is Oracle code`;
 }
 
-/** The migration of the Oracle schema described by `tables`, with the row counts to report. */
-export function planMigration(tables: OracleTable[], counts: Map<string, number>): MigrationPlan {
+const defaultName = (name: string): string => foldName(name);
+
+/** The migration of the Oracle schema described by `tables`, with the row counts to report and the person's `edits` applied. */
+export function planMigration(tables: OracleTable[], counts: Map<string, number>, edits: MigrationEdits = {}): MigrationPlan {
     const problems: string[] = [];
-    const planned: PlannedTable[] = tables.map((table) => ({
-        oracleName: table.name,
-        pgName: foldName(table.name),
-        rows: counts.get(table.name) ?? 0,
-        oraclePrimaryKey: table.primaryKey?.columns ?? [],
-        pgPrimaryKey: (table.primaryKey?.columns ?? []).map(foldName),
-        columns: table.columns.map((column): PlannedColumn => {
-            const type = pgTypeOf(column);
+    const editProblems: string[] = [];
+
+    const planned: PlannedTable[] = tables.map((table) => {
+        const tableEdit = edits.tables?.[table.name];
+        let pgName = defaultName(table.name);
+        let renamed = false;
+        if (tableEdit?.pgName !== undefined) {
+            const name = resolveName(tableEdit.pgName);
+            if (name) {
+                pgName = name;
+                renamed = name !== defaultName(table.name);
+            } else editProblems.push(`${table.name}: "${tableEdit.pgName}" is not a usable PostgreSQL name.`);
+        }
+
+        const columns = table.columns.map((column): PlannedColumn => {
             const label = `${table.name}.${column.name}`;
-            const fallback: PlannedColumn = { oracleName: column.name, pgName: foldName(column.name), oracleType: column.type, pgType: "", kind: "other", nullable: column.nullable, pgDefault: null, note: { status: "risk", text: "Not migrated." } };
+            const edit = edits.columns?.[columnKey(table.name, column.name)];
+            const edited: PlannedColumn["edited"] = [];
+            let columnName = defaultName(column.name);
+            if (edit?.pgName !== undefined) {
+                const name = resolveName(edit.pgName);
+                if (name) {
+                    if (name !== columnName) edited.push("name");
+                    columnName = name;
+                } else editProblems.push(`${label}: "${edit.pgName}" is not a usable PostgreSQL name.`);
+            }
+            const fallback: PlannedColumn = { oracleName: column.name, pgName: columnName, oracleType: column.type, pgType: "", kind: "other", nullable: column.nullable, pgDefault: null, note: { status: "risk", text: "Not migrated." }, edited, oracleDefault: column.defaultValue };
+
+            const base = pgTypeOf(column);
+            let type = base;
+            let parsedType: ParsedPgType | undefined;
+            if (edit?.pgType !== undefined) {
+                const resolved = resolvePgType(column, edit.pgType);
+                if (typeof resolved === "string") editProblems.push(`${label}: ${resolved}`);
+                else {
+                    parsedType = resolved.parsed;
+                    type = { type: resolved.type, kind: resolved.kind };
+                    if (typeof base === "string" || base.type !== resolved.type) edited.push("type");
+                }
+            }
             if (typeof type === "string") {
                 problems.push(`${label}: ${type}.`);
                 return fallback;
             }
-            const def = pgDefaultOf(column);
+
+            let def = pgDefaultOf(column);
+            let droppedBecause: string | undefined;
+            if (edit?.dropDefault && column.defaultValue !== null) {
+                def = { value: null };
+                edited.push("default");
+                droppedBecause = "you dropped it";
+            } else if (typeof def !== "string" && def.value !== null && parsedType && edited.includes("type") && !defaultFitsType(def.value, parsedType)) {
+                droppedBecause = `it does not fit ${type.type}`;
+                def = { value: null };
+            }
             if (typeof def === "string") problems.push(`${label}: ${def}.`);
             const pgDefault = typeof def === "string" ? null : def.value;
-            return { ...fallback, pgType: type.type, kind: type.kind, pgDefault, note: conversionNote(column, type.type, pgDefault) };
-        }),
-    }));
+
+            let note = conversionNote(column, type.type, pgDefault);
+            if (edited.includes("type")) note = { status: note.status === "risk" ? "risk" : "changed", text: `You changed this to ${type.type}. ${note.text}` };
+            if (droppedBecause) note = { ...note, text: `${note.text} Its default ${column.defaultValue} was not carried over: ${droppedBecause}.` };
+            return { ...fallback, pgType: type.type, kind: type.kind, pgDefault, note };
+        });
+
+        return {
+            oracleName: table.name,
+            pgName,
+            renamed,
+            rows: counts.get(table.name) ?? 0,
+            oraclePrimaryKey: table.primaryKey?.columns ?? [],
+            pgPrimaryKey: (table.primaryKey?.columns ?? []).map((name) => columns.find((column) => column.oracleName === name)?.pgName ?? defaultName(name)),
+            columns,
+        };
+    });
+
+    // two tables, or two columns of a table, that would end up with one name
+    const seenTables = new Map<string, string>();
+    for (const table of planned) {
+        const other = seenTables.get(table.pgName);
+        if (other) problems.push(`${other} and ${table.oracleName} would both be called ${table.pgName}.`);
+        else seenTables.set(table.pgName, table.oracleName);
+        const seenColumns = new Map<string, string>();
+        for (const column of table.columns) {
+            const clash = seenColumns.get(column.pgName);
+            if (clash) problems.push(`${table.oracleName}: ${clash} and ${column.oracleName} would both be called ${column.pgName}.`);
+            else seenColumns.set(column.pgName, column.oracleName);
+        }
+    }
 
     const pgNameOf = new Map(planned.map((table) => [table.oracleName, table.pgName]));
     const pgColumn = (table: OracleTable, name: string) => planned.find((candidate) => candidate.oracleName === table.name)?.columns.find((column) => column.oracleName === name)?.pgName ?? foldName(name);
@@ -248,14 +340,46 @@ export function planMigration(tables: OracleTable[], counts: Map<string, number>
         }
     }
     if (planned.length === 0) problems.push("The schema has no tables.");
-    return { tables: planned, problems, createSql, linkSql, notCarried: [], behaviour: behaviourNotes(planned) };
+    return { tables: planned, problems, editProblems, createSql, linkSql, notCarried: [], behaviour: behaviourNotes(planned) };
 }
 
-export async function planOracleMigration(connection: oracledb.Connection): Promise<MigrationPlan> {
+/**
+ * Runs, on the Oracle data, the query that counts the values each column's PostgreSQL type would change or lose, and puts the answer on the
+ * column. Only columns with something to lose have one. A query that fails is recorded as failed (count null), never as zero.
+ */
+export async function runDataChecks(connection: oracledb.Connection, tables: OracleTable[], plan: MigrationPlan): Promise<void> {
+    for (const table of plan.tables) {
+        const source = tables.find((candidate) => candidate.name === table.oracleName);
+        if (!source) continue;
+        for (const column of table.columns) {
+            const oracleColumn = source.columns.find((candidate) => candidate.name === column.oracleName);
+            if (!oracleColumn || column.pgType === "") continue;
+            // Only what can lose something is counted: a type the person changed, and the two defaults that can (a wide FLOAT, a time zone).
+            if (!column.edited.includes("type") && !/^(FLOAT|TIMESTAMP(\(\d\))? WITH TIME ZONE)/i.test(oracleColumn.type)) continue;
+            const query = dataCheckFor(table.oracleName, oracleColumn, column.pgType);
+            if (!query) continue;
+            try {
+                column.check = { description: query.description, sql: query.sql, count: Number(((await connection.execute(query.sql)).rows as unknown[][])[0][0]) };
+            } catch (error) {
+                column.check = { description: query.description, sql: query.sql, count: null, error: error instanceof Error ? error.message.split("\n")[0] : String(error) };
+            }
+            if (column.check.count !== null && column.check.count > 0 && column.note.status !== "risk") column.note = { status: "risk", text: `${column.check.count} value${column.check.count === 1 ? "" : "s"} would be affected (${column.check.description}). ${column.note.text}` };
+            if (column.check.count === null) column.note = { status: "risk", text: `The check on your data could not run (${column.check.error}). ${column.note.text}` };
+        }
+    }
+}
+
+/** The checks that found something, or could not run: what has to be accepted before the migration may go ahead. */
+export const failedChecks = (plan: MigrationPlan): { table: string; column: string; check: DataCheck }[] =>
+    plan.tables.flatMap((table) => table.columns.flatMap((column) => (column.check && (column.check.count === null || column.check.count > 0) ? [{ table: table.pgName, column: column.pgName, check: column.check }] : [])));
+
+export async function planOracleMigration(connection: oracledb.Connection, edits: MigrationEdits = {}): Promise<MigrationPlan> {
     const tables = await introspectOracle(connection);
     const counts = new Map<string, number>();
     for (const table of tables) counts.set(table.name, Number(((await connection.execute(`SELECT COUNT(*) FROM ${oracleQuote(table.name)}`)).rows as unknown[][])[0][0]));
-    return { ...planMigration(tables, counts), notCarried: await findNotCarried(connection) };
+    const plan = { ...planMigration(tables, counts, edits), notCarried: await findNotCarried(connection) };
+    await runDataChecks(connection, tables, plan);
+    return plan;
 }
 
 // ---- copying the rows --------------------------------------------------------------------------------------------------------------
@@ -293,6 +417,8 @@ export function oracleSelectExpression(column: PlannedColumn): string {
     const name = oracleQuote(column.oracleName);
     const type = column.oracleType.toUpperCase();
     const digits = /\((\d+)\)/.exec(type)?.[1] ?? "6";
+    // a date or timestamp that becomes a PostgreSQL date is read as its day, without the time of day
+    if ((type === "DATE" || type.startsWith("TIMESTAMP")) && !type.includes("TIME ZONE") && column.pgType === "date") return `TO_CHAR(TRUNC(${name}), 'YYYY-MM-DD')`;
     if (type === "DATE") return `TO_CHAR(${name}, 'YYYY-MM-DD HH24:MI:SS')`;
     if (type.startsWith("TIMESTAMP") && (type.includes("TIME ZONE"))) return `CASE WHEN ${name} IS NULL THEN NULL ELSE TO_CHAR(SYS_EXTRACT_UTC(${name}), 'YYYY-MM-DD HH24:MI:SS.FF${digits}') || '+00' END`; // (a NULL joined with || is '' in Oracle, hence the CASE)
     if (type.startsWith("TIMESTAMP")) return `TO_CHAR(${name}, 'YYYY-MM-DD HH24:MI:SS.FF${digits}')`;

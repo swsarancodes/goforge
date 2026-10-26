@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { adminConfigFromUrl } from "./cloud-databases.js";
 import { withOracle } from "./oracle-client.js";
-import { copyTable, loadAndVerify, planOracleMigration, verifyTable } from "./oracle-migration.js";
+import { copyTable, failedChecks, loadAndVerify, planOracleMigration, verifyTable, type MigrationEdits } from "./oracle-migration.js";
 import { createOracleSchema, dropOracleSchema, newSchemaPassword, oracleSchemaName, oracleServerFromEnv } from "./oracle-schemas.js";
 import { oracleSql } from "./oracle-sql.js";
 import { oracleConnectionRow } from "./oracle-schemas.js";
@@ -224,4 +224,94 @@ describe.skipIf(!server || !pgUrl)("Oracle to PostgreSQL migration (real Oracle,
             expect(again.proof.checks.map((check) => check.postgres)).toEqual(customers.proof.checks.map((check) => check.postgres));
         }));
     }, 180_000);
+
+    describe("with the person's edits", () => {
+        const DDL = `CREATE TABLE pol (id NUMBER(6) PRIMARY KEY, started DATE NOT NULL, ended DATE, active NUMBER(1) DEFAULT 1, qty VARCHAR2(10), label VARCHAR2(30), price NUMBER(10,2));
+            CREATE TABLE ev (ev_id NUMBER(6) PRIMARY KEY, pol_id NUMBER(6) REFERENCES pol (id), happened TIMESTAMP(3))`;
+        const ROWS = `
+            INSERT INTO pol VALUES (1, DATE '2026-01-01', DATE '2026-12-31', 1, '7', 'alpha', 10.50);
+            INSERT INTO pol VALUES (2, TO_DATE('2026-03-04 09:30:00', 'YYYY-MM-DD HH24:MI:SS'), NULL, 0, '12', NULL, 99.99);
+            INSERT INTO pol VALUES (3, DATE '2026-05-05', DATE '2027-05-05', 1, 'x', 'gamma', 1);
+            INSERT INTO ev VALUES (10, 1, TIMESTAMP '2026-01-02 03:04:05.678');
+            INSERT INTO ev VALUES (11, 3, NULL);
+        `;
+        const edits: MigrationEdits = {
+            tables: { POL: { pgName: "policy" }, EV: { pgName: "event" } },
+            columns: {
+                "POL.ID": { pgName: "policy_id" },
+                "EV.POL_ID": { pgName: "policy_id" },
+                "POL.STARTED": { pgType: "date" },
+                "POL.ENDED": { pgType: "date" },
+                "POL.ACTIVE": { pgType: "boolean" },
+                "POL.QTY": { pgType: "integer" },
+            },
+        };
+
+        it("counts, on the Oracle data, what each change would lose, before anything is migrated", async () => {
+            const { config } = await oracleWith(DDL, [ROWS]);
+            const plan = await withOracle(config, (c) => planOracleMigration(c, edits));
+            expect(plan.problems).toEqual([]);
+            expect(plan.editProblems).toEqual([]);
+            const pol = plan.tables.find((t) => t.oracleName === "POL")!;
+            const counts = Object.fromEntries(pol.columns.flatMap((c) => (c.check ? [[c.oracleName, c.check.count]] : [])));
+            expect(counts).toEqual({ STARTED: 1, ENDED: 0, ACTIVE: 0, QTY: 1 });
+            expect(failedChecks(plan).map((f) => `${f.table}.${f.column}`)).toEqual(["policy.started", "policy.qty"]);
+            const started = pol.columns.find((c) => c.oracleName === "STARTED")!;
+            expect(started.check?.sql).toBe('SELECT COUNT(*) FROM "POL" WHERE "STARTED" <> TRUNC("STARTED")');
+            expect(started.note).toMatchObject({ status: "risk", text: expect.stringContaining("1 value would be affected (values with a time of day, which a date does not keep)") });
+            expect(pol.columns.find((c) => c.oracleName === "ENDED")!.note.status).toBe("changed");
+            // with no edits there is nothing to count here
+            const plain = await withOracle(config, (c) => planOracleMigration(c));
+            expect(failedChecks(plain)).toEqual([]);
+        });
+
+        it("migrates under the new names and types, and the proof still compares every table", async () => {
+            const { config } = await oracleWith(DDL, [ROWS]);
+            const passing: MigrationEdits = { ...edits, columns: { ...edits.columns, "POL.QTY": undefined as never } };
+            delete passing.columns!["POL.QTY"];
+            const plan = await withOracle(config, (c) => planOracleMigration(c, passing));
+            const database = newDatabase();
+            await createDatabaseFromSql(pgAdmin, database, plan.createSql.join(";\n"));
+            const result = await withOracle(config, (oracle) => withPgClient({ ...pgAdmin, database }, (pg) => loadAndVerify(oracle, pg, plan)));
+            expect(result.tables).toEqual([{ name: "event", rows: 2 }, { name: "policy", rows: 3 }]);
+            expect(result.verification.every((v) => v.mismatches.length === 0)).toBe(true);
+
+            const policy = result.verification.find((v) => v.table === "policy")!;
+            // a date column is compared by its day: the Oracle side is cut to the day too
+            const first = policy.proof.checks.find((c) => c.label === "first started")!;
+            expect(first).toMatchObject({ oracle: "2026-01-01", postgres: "2026-01-01", match: true });
+            expect(first.oracleExpression).toBe(`TO_CHAR(TRUNC(MIN("STARTED")), 'YYYY-MM-DD')`);
+            expect(policy.proof.sample?.match).toBe(true);
+
+            await withPgClient({ ...pgAdmin, database }, async (pg) => {
+                const types = (await pg.query("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'policy' ORDER BY ordinal_position")).rows;
+                expect(types).toEqual([
+                    { column_name: "policy_id", data_type: "integer" },
+                    { column_name: "started", data_type: "date" },
+                    { column_name: "ended", data_type: "date" },
+                    { column_name: "active", data_type: "boolean" },
+                    { column_name: "qty", data_type: "character varying" },
+                    { column_name: "label", data_type: "character varying" },
+                    { column_name: "price", data_type: "numeric" },
+                ]);
+                const rows = (await pg.query("SELECT policy_id, started::text AS started, active FROM policy ORDER BY policy_id")).rows;
+                expect(rows).toEqual([{ policy_id: 1, started: "2026-01-01", active: true }, { policy_id: 2, started: "2026-03-04", active: false }, { policy_id: 3, started: "2026-05-05", active: true }]);
+                expect((await pg.query("SELECT conname FROM pg_constraint WHERE contype = 'f'")).rows).toHaveLength(1);
+                await expect(pg.query("INSERT INTO event VALUES (99, 12345, now())")).rejects.toThrow(/foreign key/i);
+            });
+        });
+
+        it("keeps nothing when a change turns out not to fit the data: text that is not a number going into an integer", async () => {
+            const { config } = await oracleWith(DDL, [ROWS]);
+            const plan = await withOracle(config, (c) => planOracleMigration(c, edits));
+            const database = newDatabase();
+            await createDatabaseFromSql(pgAdmin, database, plan.createSql.join(";\n"));
+            await withOracle(config, (oracle) =>
+                withPgClient({ ...pgAdmin, database }, async (pg) => {
+                    await expect(loadAndVerify(oracle, pg, plan)).rejects.toThrow(/invalid input syntax for type integer/);
+                    expect((await pg.query("SELECT (SELECT count(*) FROM policy)::int AS p, (SELECT count(*) FROM event)::int AS e")).rows[0]).toEqual({ p: 0, e: 0 });
+                }),
+            );
+        });
+    });
 });
