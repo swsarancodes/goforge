@@ -19,7 +19,9 @@
     "eval:schema": "server/node_modules/.bin/tsx scripts/schema-change-eval.ts",
     "queryshift": "server/node_modules/.bin/tsx queryshift/run.ts",
     "queryshift:check-model": "server/node_modules/.bin/tsx queryshift/check-model.ts",
-    "queryshift:oracle-check": "server/node_modules/.bin/tsx queryshift/oracle-check.ts"
+    "queryshift:oracle-check": "server/node_modules/.bin/tsx queryshift/oracle-check.ts",
+    "queryshift:measure-model": "server/node_modules/.bin/tsx queryshift/measure-model.ts",
+    "queryshift:summarize-runs": "server/node_modules/.bin/tsx queryshift/summarize-runs.ts"
   },
   "dependencies": {
     "@codemirror/commands": "6.10.3",

@@ -1,0 +1,576 @@
+{
+  "caseId": "case-02",
+  "outcome": "verified",
+  "heldOut": "passed",
+  "findings": [],
+  "reasons": [],
+  "finalSql": "SELECT c.customer_id AS CUST_ID,\n       c.customer_name || ' <' || COALESCE(c.email, '') || '>' AS CONTACT_LABEL,\n       COUNT(cl.claim_id) AS CLM_CNT,\n       COALESCE(SUM(cl.claim_amount), 0) AS TOT_CLAIMED,\n       ROUND(AVG(COALESCE(cl.paid_amount, 0)), 2) AS AVG_PAID,\n       ROUND(COUNT(CASE WHEN cl.claim_status = 'OP' THEN 1 END)::numeric\n             / NULLIF(COUNT(cl.claim_id), 0), 4) AS OPEN_RATIO\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nLEFT JOIN claims cl ON cl.policy_id = p.policy_id\nGROUP BY c.customer_id, c.customer_name, c.email\nORDER BY c.customer_id",
+  "attempts": [
+    {
+      "n": 0,
+      "source": "rule-engine",
+      "sql": "SELECT c.customer_id AS CUST_ID,\n       c.customer_name || ' <' || c.email || '>'                                   AS CONTACT_LABEL,\n       COUNT(cl.claim_id)                                                           AS CLM_CNT,\n       COALESCE(SUM(cl.claim_amount), 0)                                                    AS TOT_CLAIMED,\n       ROUND(AVG(COALESCE(cl.paid_amount, 0)), 2)                                         AS AVG_PAID,\n       ROUND(COUNT(CASE WHEN cl.claim_status = 'OP' THEN 1 END)\n             / NULLIF(COUNT(cl.claim_id), 0), 4)                                    AS OPEN_RATIO\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nLEFT JOIN claims cl ON cl.policy_id = p.policy_id\nGROUP BY c.customer_id, c.customer_name, c.email\nORDER BY c.customer_id",
+      "verdict": "fail",
+      "summary": "4 expected row(s) missing, 4 unexpected row(s) returned.",
+      "findings": [
+        {
+          "id": "null_in_concatenation",
+          "category": "null_type_or_aggregation_semantics",
+          "severity": "warning",
+          "title": "|| with a nullable column",
+          "detail": "c.email can be NULL. Oracle treats NULL as an empty string in ||; in PostgreSQL the whole result becomes NULL. Wrap it in COALESCE(…, '') or use CONCAT."
+        },
+        {
+          "id": "integer_division",
+          "category": "null_type_or_aggregation_semantics",
+          "severity": "warning",
+          "title": "Integer division",
+          "detail": "`COUNT(…) / NULLIF(…)` divides two integers. PostgreSQL truncates the result (1/3 is 0); Oracle's NUMBER division keeps the fraction. Cast one side to numeric."
+        }
+      ],
+      "evidence": {
+        "kind": "mismatch",
+        "message": "4 expected row(s) missing, 4 unexpected row(s) returned.",
+        "expectedColumns": [
+          "cust_id",
+          "contact_label",
+          "clm_cnt",
+          "tot_claimed",
+          "avg_paid",
+          "open_ratio"
+        ],
+        "missingRows": [
+          [
+            "1",
+            "Asha Rao <asha.rao@example.com>",
+            "3",
+            "4400.00",
+            "700.00",
+            "0.3333"
+          ],
+          [
+            "2",
+            "Brightline Logistics <>",
+            "3",
+            "4920.25",
+            "1206.67",
+            "0.3333"
+          ],
+          [
+            "3",
+            "Carlos Mendes <carlos@example.com>",
+            "2",
+            "6400.00",
+            "150.00",
+            "0.5"
+          ],
+          [
+            "4",
+            "Dunmore Foods <accounts@dunmore.example>",
+            "2",
+            "18000.00",
+            "2666.67",
+            "0.5"
+          ]
+        ],
+        "unexpectedRows": [
+          [
+            "1",
+            "Asha Rao <asha.rao@example.com>",
+            "3",
+            "4400.00",
+            "700.00",
+            "0.0000"
+          ],
+          [
+            "2",
+            null,
+            "3",
+            "4920.25",
+            "1206.67",
+            "0.0000"
+          ],
+          [
+            "3",
+            "Carlos Mendes <carlos@example.com>",
+            "2",
+            "6400.00",
+            "150.00",
+            "0.0000"
+          ],
+          [
+            "4",
+            "Dunmore Foods <accounts@dunmore.example>",
+            "2",
+            "18000.00",
+            "2666.67",
+            "0.0000"
+          ]
+        ],
+        "missingCount": 4,
+        "unexpectedCount": 4,
+        "differingColumns": [
+          {
+            "column": "open_ratio",
+            "rows": 4
+          },
+          {
+            "column": "contact_label",
+            "rows": 1
+          }
+        ],
+        "brokenInvariants": [],
+        "staticFindings": [
+          {
+            "id": "null_in_concatenation",
+            "title": "|| with a nullable column",
+            "detail": "c.email can be NULL. Oracle treats NULL as an empty string in ||; in PostgreSQL the whole result becomes NULL. Wrap it in COALESCE(…, '') or use CONCAT."
+          },
+          {
+            "id": "integer_division",
+            "title": "Integer division",
+            "detail": "`COUNT(…) / NULLIF(…)` divides two integers. PostgreSQL truncates the result (1/3 is 0); Oracle's NUMBER division keeps the fraction. Cast one side to numeric."
+          }
+        ]
+      }
+    },
+    {
+      "n": 1,
+      "source": "model",
+      "sql": "SELECT c.customer_id AS CUST_ID,\n       c.customer_name || ' <' || COALESCE(c.email, '') || '>' AS CONTACT_LABEL,\n       COUNT(cl.claim_id) AS CLM_CNT,\n       COALESCE(SUM(cl.claim_amount), 0) AS TOT_CLAIMED,\n       ROUND(AVG(COALESCE(cl.paid_amount, 0)), 2) AS AVG_PAID,\n       ROUND(COUNT(CASE WHEN cl.claim_status = 'OP' THEN 1 END)::numeric\n             / NULLIF(COUNT(cl.claim_id), 0), 4) AS OPEN_RATIO\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nLEFT JOIN claims cl ON cl.policy_id = p.policy_id\nGROUP BY c.customer_id, c.customer_name, c.email\nORDER BY c.customer_id",
+      "verdict": "pass",
+      "summary": "Matches the reference result and all 3 invariant(s) hold.",
+      "findings": [],
+      "proposal": {
+        "explanation": "The measured differences are caused by two PostgreSQL behaviors that differ from Oracle. PostgreSQL propagates NULL through ||, whereas Oracle treats NULL as an empty string, so the nullable email must be wrapped in COALESCE. PostgreSQL performs integer division for the two COUNT expressions, producing 0 for ratios such as 1/3; casting the numerator to numeric preserves Oracle's fractional division before rounding.",
+        "changes": [
+          "Wrapped c.email in COALESCE(c.email, '') for Oracle-compatible concatenation.",
+          "Cast the open-claim COUNT to numeric before division to prevent PostgreSQL integer division."
+        ],
+        "risks": [],
+        "model": "gpt-5.6-luna",
+        "auditId": 1,
+        "usage": {
+          "inputTokens": 2541,
+          "outputTokens": 400
+        },
+        "latencyMs": 5191,
+        "prompt": {
+          "instructions": "You are GoForge's SQL migration engine, in a correction round. An Oracle (or other legacy) query was converted to PostgreSQL, run on a real PostgreSQL database, and compared with the result the ORIGINAL database returns. They differ, or PostgreSQL rejected it.\nThis is correction 1 of at most 3. After the last one the query goes to a human reviewer, so do not guess: change what the evidence points to.\nReturn JSON only, no markdown and no text outside the JSON object.\nThe evidence is a measurement, not an opinion. Missing rows are rows the original returns and the converted query does not. Unexpected rows are rows the converted query returns and the original does not. 'differingColumns' says in which columns a missing row and its closest unexpected row differ. Find the construct whose legacy behaviour differs from PostgreSQL's and explain the difference in the explanation field.\n'staticFindings' are observations about the previous query's text made without any data: each names a construct that commonly differs between the legacy dialect and PostgreSQL. They are suspects, not proof: use them to find the cause when the measured rows agree, and ignore one that does not apply.\nTypical causes: an outer-join predicate that moved from ON to WHERE; NULL versus empty string; integer division; AVG/COUNT over NULL or null-extended rows; DATE that carries a time of day; date arithmetic returning an interval instead of days; ADD_MONTHS and month ends; ROWNUM and ORDER BY; column names and aliases that differ in the result.\nThe result must have exactly the column names of 'expectedColumns', in that order, and the same rows, NULLs and ordering as the original.\nUse only the tables and columns in the supplied schema. 'mapping' says which legacy table and column became which. Never invent tables, columns or data.\nNEVER write the expected rows into the query: no VALUES lists of them, no UNION of constants, no literals copied from the evidence. The query is run against other data as well, and a query that reproduces the evidence is rejected and sent to a human. Fix the logic.\nMake the smallest change that fixes what the evidence shows. Keep every part of the previous query that the evidence does not implicate.\nOne SELECT statement only. Do not write anything that changes data or settings.\nThe JSON object must contain: sql (string), explanation (string), changes (string[]), risks (string[], what you are still unsure about; these are your words and nothing verifies them).",
+          "input": {
+            "originalQuery": "SELECT c.CUST_ID,\n       c.CUST_NM || ' <' || c.CUST_EMAIL || '>'                                   AS CONTACT_LABEL,\n       COUNT(cl.CLM_ID)                                                           AS CLM_CNT,\n       NVL(SUM(cl.CLM_AMT), 0)                                                    AS TOT_CLAIMED,\n       ROUND(AVG(NVL(cl.PAID_AMT, 0)), 2)                                         AS AVG_PAID,\n       ROUND(COUNT(CASE WHEN cl.CLM_STAT_CD = 'OP' THEN 1 END)\n             / NULLIF(COUNT(cl.CLM_ID), 0), 4)                                    AS OPEN_RATIO\nFROM CUST_MST c\nJOIN POLCY_HDR p ON p.CUST_ID = c.CUST_ID\nLEFT JOIN CLM_DTL cl ON cl.POLCY_ID = p.POLCY_ID\nGROUP BY c.CUST_ID, c.CUST_NM, c.CUST_EMAIL\nORDER BY c.CUST_ID\n",
+            "sourceDialect": "oracle",
+            "targetDialect": "postgresql",
+            "businessPurpose": "Claims management wants one line per insured customer with a contact label, how many claims, the amount claimed, the average amount paid (unpaid counts as 0) and the share still open.",
+            "schema": {
+              "tables": [
+                {
+                  "name": "claims",
+                  "columns": [
+                    {
+                      "name": "claim_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "policy_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "claim_date",
+                      "type": "timestamp without time zone",
+                      "nullable": false
+                    },
+                    {
+                      "name": "claim_amount",
+                      "type": "numeric",
+                      "nullable": false
+                    },
+                    {
+                      "name": "claim_status",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "adjuster_note",
+                      "type": "character varying",
+                      "nullable": true
+                    },
+                    {
+                      "name": "paid_amount",
+                      "type": "numeric",
+                      "nullable": true
+                    }
+                  ]
+                },
+                {
+                  "name": "coverages",
+                  "columns": [
+                    {
+                      "name": "coverage_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "policy_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "coverage_type",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "limit_amount",
+                      "type": "numeric",
+                      "nullable": false
+                    }
+                  ]
+                },
+                {
+                  "name": "customers",
+                  "columns": [
+                    {
+                      "name": "customer_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "customer_name",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "email",
+                      "type": "character varying",
+                      "nullable": true
+                    },
+                    {
+                      "name": "segment_code",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "joined_on",
+                      "type": "date",
+                      "nullable": false
+                    }
+                  ]
+                },
+                {
+                  "name": "policies",
+                  "columns": [
+                    {
+                      "name": "policy_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "customer_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "policy_type",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "effective_date",
+                      "type": "date",
+                      "nullable": false
+                    },
+                    {
+                      "name": "expiry_date",
+                      "type": "date",
+                      "nullable": false
+                    },
+                    {
+                      "name": "annual_premium",
+                      "type": "numeric",
+                      "nullable": true
+                    },
+                    {
+                      "name": "status_code",
+                      "type": "character varying",
+                      "nullable": false
+                    }
+                  ]
+                }
+              ]
+            },
+            "mapping": [
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "CUST_ID",
+                "targetTable": "customers",
+                "targetColumn": "customer_id"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "CUST_NM",
+                "targetTable": "customers",
+                "targetColumn": "customer_name"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "CUST_EMAIL",
+                "targetTable": "customers",
+                "targetColumn": "email",
+                "note": "Oracle treats '' as NULL; the load maps '' to NULL"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "SEGMT_CD",
+                "targetTable": "customers",
+                "targetColumn": "segment_code"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "JOIN_DT",
+                "targetTable": "customers",
+                "targetColumn": "joined_on",
+                "note": "DATE with time 00:00:00 -> date"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "POLCY_ID",
+                "targetTable": "policies",
+                "targetColumn": "policy_id"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "CUST_ID",
+                "targetTable": "policies",
+                "targetColumn": "customer_id"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "POLCY_TYP_CD",
+                "targetTable": "policies",
+                "targetColumn": "policy_type"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "EFF_DT",
+                "targetTable": "policies",
+                "targetColumn": "effective_date",
+                "note": "DATE with time 00:00:00 -> date"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "EXP_DT",
+                "targetTable": "policies",
+                "targetColumn": "expiry_date",
+                "note": "DATE with time 00:00:00 -> date"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "ANNL_PREM",
+                "targetTable": "policies",
+                "targetColumn": "annual_premium"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "STAT_CD",
+                "targetTable": "policies",
+                "targetColumn": "status_code"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_ID",
+                "targetTable": "claims",
+                "targetColumn": "claim_id"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "POLCY_ID",
+                "targetTable": "claims",
+                "targetColumn": "policy_id"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_DT",
+                "targetTable": "claims",
+                "targetColumn": "claim_date",
+                "note": "DATE with time of day -> timestamp(0)"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_AMT",
+                "targetTable": "claims",
+                "targetColumn": "claim_amount"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_STAT_CD",
+                "targetTable": "claims",
+                "targetColumn": "claim_status"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "ADJ_NOTE",
+                "targetTable": "claims",
+                "targetColumn": "adjuster_note",
+                "note": "Oracle treats '' as NULL; the load maps '' to NULL"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "PAID_AMT",
+                "targetTable": "claims",
+                "targetColumn": "paid_amount"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "COVR_ID",
+                "targetTable": "coverages",
+                "targetColumn": "coverage_id"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "POLCY_ID",
+                "targetTable": "coverages",
+                "targetColumn": "policy_id"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "COVR_TYP_CD",
+                "targetTable": "coverages",
+                "targetColumn": "coverage_type"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "COVR_LIMIT_AMT",
+                "targetTable": "coverages",
+                "targetColumn": "limit_amount"
+              }
+            ],
+            "previousQuery": "SELECT c.customer_id AS CUST_ID,\n       c.customer_name || ' <' || c.email || '>'                                   AS CONTACT_LABEL,\n       COUNT(cl.claim_id)                                                           AS CLM_CNT,\n       COALESCE(SUM(cl.claim_amount), 0)                                                    AS TOT_CLAIMED,\n       ROUND(AVG(COALESCE(cl.paid_amount, 0)), 2)                                         AS AVG_PAID,\n       ROUND(COUNT(CASE WHEN cl.claim_status = 'OP' THEN 1 END)\n             / NULLIF(COUNT(cl.claim_id), 0), 4)                                    AS OPEN_RATIO\nFROM customers c\nJOIN policies p ON p.customer_id = c.customer_id\nLEFT JOIN claims cl ON cl.policy_id = p.policy_id\nGROUP BY c.customer_id, c.customer_name, c.email\nORDER BY c.customer_id",
+            "evidence": {
+              "kind": "mismatch",
+              "message": "4 expected row(s) missing, 4 unexpected row(s) returned.",
+              "expectedColumns": [
+                "cust_id",
+                "contact_label",
+                "clm_cnt",
+                "tot_claimed",
+                "avg_paid",
+                "open_ratio"
+              ],
+              "missingRows": [
+                [
+                  "1",
+                  "Asha Rao <asha.rao@example.com>",
+                  "3",
+                  "4400.00",
+                  "700.00",
+                  "0.3333"
+                ],
+                [
+                  "2",
+                  "Brightline Logistics <>",
+                  "3",
+                  "4920.25",
+                  "1206.67",
+                  "0.3333"
+                ],
+                [
+                  "3",
+                  "Carlos Mendes <carlos@example.com>",
+                  "2",
+                  "6400.00",
+                  "150.00",
+                  "0.5"
+                ],
+                [
+                  "4",
+                  "Dunmore Foods <accounts@dunmore.example>",
+                  "2",
+                  "18000.00",
+                  "2666.67",
+                  "0.5"
+                ]
+              ],
+              "unexpectedRows": [
+                [
+                  "1",
+                  "Asha Rao <asha.rao@example.com>",
+                  "3",
+                  "4400.00",
+                  "700.00",
+                  "0.0000"
+                ],
+                [
+                  "2",
+                  null,
+                  "3",
+                  "4920.25",
+                  "1206.67",
+                  "0.0000"
+                ],
+                [
+                  "3",
+                  "Carlos Mendes <carlos@example.com>",
+                  "2",
+                  "6400.00",
+                  "150.00",
+                  "0.0000"
+                ],
+                [
+                  "4",
+                  "Dunmore Foods <accounts@dunmore.example>",
+                  "2",
+                  "18000.00",
+                  "2666.67",
+                  "0.0000"
+                ]
+              ],
+              "missingCount": 4,
+              "unexpectedCount": 4,
+              "differingColumns": [
+                {
+                  "column": "open_ratio",
+                  "rows": 4
+                },
+                {
+                  "column": "contact_label",
+                  "rows": 1
+                }
+              ],
+              "brokenInvariants": [],
+              "staticFindings": [
+                {
+                  "id": "null_in_concatenation",
+                  "title": "|| with a nullable column",
+                  "detail": "c.email can be NULL. Oracle treats NULL as an empty string in ||; in PostgreSQL the whole result becomes NULL. Wrap it in COALESCE(…, '') or use CONCAT."
+                },
+                {
+                  "id": "integer_division",
+                  "title": "Integer division",
+                  "detail": "`COUNT(…) / NULLIF(…)` divides two integers. PostgreSQL truncates the result (1/3 is 0); Oracle's NUMBER division keeps the fraction. Cast one side to numeric."
+                }
+              ]
+            },
+            "engineWarnings": [
+              "|| with a NULL gives a different result",
+              "Dividing two integers"
+            ]
+          },
+          "sha256": "84d7b979d0d69b3c3da2200990c68faccdd5241dc44881adea441ff2181f03e2"
+        }
+      },
+      "heldOut": {
+        "verdict": "pass",
+        "summary": "Matches the reference result and all 3 invariant(s) hold."
+      }
+    }
+  ],
+  "maxCorrections": 3,
+  "engineWarnings": [
+    "|| with a NULL gives a different result",
+    "Dividing two integers"
+  ],
+  "proposerRisks": []
+}

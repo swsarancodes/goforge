@@ -1,0 +1,417 @@
+{
+  "caseId": "case-03",
+  "outcome": "verified",
+  "heldOut": "passed",
+  "findings": [],
+  "reasons": [],
+  "finalSql": "SELECT *\nFROM (\n    SELECT cl.claim_id AS clm_id,\n           p.policy_id AS polcy_id,\n           cl.claim_date::date AS clm_day,\n           EXTRACT(EPOCH FROM (cl.claim_date - p.effective_date::timestamp)) / 86400 AS days_to_claim,\n           CASE\n               WHEN p.effective_date = (date_trunc('month', p.effective_date::timestamp) + INTERVAL '1 month - 1 day')::date\n               THEN (date_trunc('month', p.effective_date::timestamp) + INTERVAL '7 months - 1 day')::date\n               ELSE (p.effective_date + INTERVAL '6 months')::date\n           END AS review_dt,\n           cl.claim_amount AS clm_amt\n    FROM claims cl\n    JOIN policies p ON p.policy_id = cl.policy_id\n    WHERE cl.claim_date::date BETWEEN DATE '2026-03-01' AND DATE '2026-03-31'\n    ORDER BY cl.claim_amount DESC, cl.claim_id\n) AS subquery_1\nLIMIT 5",
+  "attempts": [
+    {
+      "n": 0,
+      "source": "rule-engine",
+      "sql": "-- NOT CONVERTED: TRUNC(cl.CLM_DT) (TRUNC(x) cuts a date to midnight or a number to a whole number, and the type of x is not known here)\nSELECT *\nFROM (\n    SELECT cl.claim_id AS CLM_ID,\n           p.policy_id AS POLCY_ID,\n           TRUNC(cl.claim_date)            AS CLM_DAY,\n           cl.claim_date - p.effective_date        AS DAYS_TO_CLAIM, (p.effective_date + INTERVAL '6 months')     AS REVIEW_DT,\n           cl.claim_amount AS CLM_AMT\n    FROM claims cl\n    JOIN policies p ON p.policy_id = cl.policy_id\n    WHERE TRUNC(cl.claim_date) BETWEEN TO_DATE('2026-03-01', 'YYYY-MM-DD')\n                               AND TO_DATE('2026-03-31', 'YYYY-MM-DD')\n    ORDER BY cl.claim_amount DESC, cl.claim_id\n) AS subquery_1\nLIMIT 5",
+      "verdict": "error",
+      "summary": "PostgreSQL rejected it: function trunc(timestamp without time zone) does not exist",
+      "findings": [
+        {
+          "id": "month_arithmetic_without_month_end_rule",
+          "category": "date_or_time_semantics",
+          "severity": "warning",
+          "title": "Month arithmetic without Oracle's month-end rule",
+          "detail": "The legacy query uses ADD_MONTHS, which returns the last day of the target month when the start date is the last day of its month (28 Feb + 6 months is 31 Aug). Adding INTERVAL '6 months' keeps the day number (28 Aug). Nothing in this query handles month ends."
+        }
+      ],
+      "evidence": {
+        "kind": "error",
+        "message": "PostgreSQL rejected it: function trunc(timestamp without time zone) does not exist",
+        "expectedColumns": [
+          "clm_id",
+          "polcy_id",
+          "clm_day",
+          "days_to_claim",
+          "review_dt",
+          "clm_amt"
+        ],
+        "missingRows": [],
+        "unexpectedRows": [],
+        "missingCount": 0,
+        "unexpectedCount": 0,
+        "differingColumns": [],
+        "brokenInvariants": [],
+        "staticFindings": [
+          {
+            "id": "month_arithmetic_without_month_end_rule",
+            "title": "Month arithmetic without Oracle's month-end rule",
+            "detail": "The legacy query uses ADD_MONTHS, which returns the last day of the target month when the start date is the last day of its month (28 Feb + 6 months is 31 Aug). Adding INTERVAL '6 months' keeps the day number (28 Aug). Nothing in this query handles month ends."
+          }
+        ]
+      }
+    },
+    {
+      "n": 1,
+      "source": "model",
+      "sql": "SELECT *\nFROM (\n    SELECT cl.claim_id AS clm_id,\n           p.policy_id AS polcy_id,\n           cl.claim_date::date AS clm_day,\n           EXTRACT(EPOCH FROM (cl.claim_date - p.effective_date::timestamp)) / 86400 AS days_to_claim,\n           CASE\n               WHEN p.effective_date = (date_trunc('month', p.effective_date::timestamp) + INTERVAL '1 month - 1 day')::date\n               THEN (date_trunc('month', p.effective_date::timestamp) + INTERVAL '7 months - 1 day')::date\n               ELSE (p.effective_date + INTERVAL '6 months')::date\n           END AS review_dt,\n           cl.claim_amount AS clm_amt\n    FROM claims cl\n    JOIN policies p ON p.policy_id = cl.policy_id\n    WHERE cl.claim_date::date BETWEEN DATE '2026-03-01' AND DATE '2026-03-31'\n    ORDER BY cl.claim_amount DESC, cl.claim_id\n) AS subquery_1\nLIMIT 5",
+      "verdict": "pass",
+      "summary": "Matches the reference result and all 1 invariant(s) hold.",
+      "findings": [],
+      "proposal": {
+        "explanation": "PostgreSQL does not support TRUNC(timestamp), so the claim timestamp is cast to date for Oracle TRUNC-equivalent day truncation and filtering. Oracle DATE subtraction returns a numeric number of days including any claim time-of-day fraction, so the timestamp difference is converted from seconds to days. ADD_MONTHS has Oracle's month-end rule, which is implemented explicitly for effective dates that are the last day of their month.",
+        "changes": [
+          "Replaced TRUNC(claim_date) with claim_date::date in the selected claim day and date filter.",
+          "Replaced timestamp/date subtraction with an epoch-based day calculation.",
+          "Implemented Oracle ADD_MONTHS month-end behavior for the six-month review date.",
+          "Used PostgreSQL DATE literals for the March 2026 range."
+        ],
+        "risks": [
+          "The review date is returned as a date, matching Oracle ADD_MONTHS on the supplied date-mapped effective_date.",
+          "The epoch-based days_to_claim is numeric and may have a scale or display format that differs from Oracle, while preserving the underlying fractional-day value."
+        ],
+        "model": "gpt-5.6-luna",
+        "auditId": 1,
+        "usage": {
+          "inputTokens": 2316,
+          "outputTokens": 884
+        },
+        "latencyMs": 11389,
+        "prompt": {
+          "instructions": "You are GoForge's SQL migration engine, in a correction round. An Oracle (or other legacy) query was converted to PostgreSQL, run on a real PostgreSQL database, and compared with the result the ORIGINAL database returns. They differ, or PostgreSQL rejected it.\nThis is correction 1 of at most 3. After the last one the query goes to a human reviewer, so do not guess: change what the evidence points to.\nReturn JSON only, no markdown and no text outside the JSON object.\nThe evidence is a measurement, not an opinion. Missing rows are rows the original returns and the converted query does not. Unexpected rows are rows the converted query returns and the original does not. 'differingColumns' says in which columns a missing row and its closest unexpected row differ. Find the construct whose legacy behaviour differs from PostgreSQL's and explain the difference in the explanation field.\n'staticFindings' are observations about the previous query's text made without any data: each names a construct that commonly differs between the legacy dialect and PostgreSQL. They are suspects, not proof: use them to find the cause when the measured rows agree, and ignore one that does not apply.\nTypical causes: an outer-join predicate that moved from ON to WHERE; NULL versus empty string; integer division; AVG/COUNT over NULL or null-extended rows; DATE that carries a time of day; date arithmetic returning an interval instead of days; ADD_MONTHS and month ends; ROWNUM and ORDER BY; column names and aliases that differ in the result.\nThe result must have exactly the column names of 'expectedColumns', in that order, and the same rows, NULLs and ordering as the original.\nUse only the tables and columns in the supplied schema. 'mapping' says which legacy table and column became which. Never invent tables, columns or data.\nNEVER write the expected rows into the query: no VALUES lists of them, no UNION of constants, no literals copied from the evidence. The query is run against other data as well, and a query that reproduces the evidence is rejected and sent to a human. Fix the logic.\nMake the smallest change that fixes what the evidence shows. Keep every part of the previous query that the evidence does not implicate.\nOne SELECT statement only. Do not write anything that changes data or settings.\nThe JSON object must contain: sql (string), explanation (string), changes (string[]), risks (string[], what you are still unsure about; these are your words and nothing verifies them).",
+          "input": {
+            "originalQuery": "SELECT *\nFROM (\n    SELECT cl.CLM_ID,\n           p.POLCY_ID,\n           TRUNC(cl.CLM_DT)            AS CLM_DAY,\n           cl.CLM_DT - p.EFF_DT        AS DAYS_TO_CLAIM,\n           ADD_MONTHS(p.EFF_DT, 6)     AS REVIEW_DT,\n           cl.CLM_AMT\n    FROM CLM_DTL cl\n    JOIN POLCY_HDR p ON p.POLCY_ID = cl.POLCY_ID\n    WHERE TRUNC(cl.CLM_DT) BETWEEN TO_DATE('2026-03-01', 'YYYY-MM-DD')\n                               AND TO_DATE('2026-03-31', 'YYYY-MM-DD')\n    ORDER BY cl.CLM_AMT DESC, cl.CLM_ID\n)\nWHERE ROWNUM <= 5\n",
+            "sourceDialect": "oracle",
+            "targetDialect": "postgresql",
+            "businessPurpose": "Claims leadership wants the five largest claims of March 2026 with the claim day, how many days after the policy started the claim came in, and the policy's six-month review date.",
+            "schema": {
+              "tables": [
+                {
+                  "name": "claims",
+                  "columns": [
+                    {
+                      "name": "claim_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "policy_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "claim_date",
+                      "type": "timestamp without time zone",
+                      "nullable": false
+                    },
+                    {
+                      "name": "claim_amount",
+                      "type": "numeric",
+                      "nullable": false
+                    },
+                    {
+                      "name": "claim_status",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "adjuster_note",
+                      "type": "character varying",
+                      "nullable": true
+                    },
+                    {
+                      "name": "paid_amount",
+                      "type": "numeric",
+                      "nullable": true
+                    }
+                  ]
+                },
+                {
+                  "name": "coverages",
+                  "columns": [
+                    {
+                      "name": "coverage_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "policy_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "coverage_type",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "limit_amount",
+                      "type": "numeric",
+                      "nullable": false
+                    }
+                  ]
+                },
+                {
+                  "name": "customers",
+                  "columns": [
+                    {
+                      "name": "customer_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "customer_name",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "email",
+                      "type": "character varying",
+                      "nullable": true
+                    },
+                    {
+                      "name": "segment_code",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "joined_on",
+                      "type": "date",
+                      "nullable": false
+                    }
+                  ]
+                },
+                {
+                  "name": "policies",
+                  "columns": [
+                    {
+                      "name": "policy_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "customer_id",
+                      "type": "integer",
+                      "nullable": false
+                    },
+                    {
+                      "name": "policy_type",
+                      "type": "character varying",
+                      "nullable": false
+                    },
+                    {
+                      "name": "effective_date",
+                      "type": "date",
+                      "nullable": false
+                    },
+                    {
+                      "name": "expiry_date",
+                      "type": "date",
+                      "nullable": false
+                    },
+                    {
+                      "name": "annual_premium",
+                      "type": "numeric",
+                      "nullable": true
+                    },
+                    {
+                      "name": "status_code",
+                      "type": "character varying",
+                      "nullable": false
+                    }
+                  ]
+                }
+              ]
+            },
+            "mapping": [
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "CUST_ID",
+                "targetTable": "customers",
+                "targetColumn": "customer_id"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "CUST_NM",
+                "targetTable": "customers",
+                "targetColumn": "customer_name"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "CUST_EMAIL",
+                "targetTable": "customers",
+                "targetColumn": "email",
+                "note": "Oracle treats '' as NULL; the load maps '' to NULL"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "SEGMT_CD",
+                "targetTable": "customers",
+                "targetColumn": "segment_code"
+              },
+              {
+                "sourceTable": "CUST_MST",
+                "sourceColumn": "JOIN_DT",
+                "targetTable": "customers",
+                "targetColumn": "joined_on",
+                "note": "DATE with time 00:00:00 -> date"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "POLCY_ID",
+                "targetTable": "policies",
+                "targetColumn": "policy_id"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "CUST_ID",
+                "targetTable": "policies",
+                "targetColumn": "customer_id"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "POLCY_TYP_CD",
+                "targetTable": "policies",
+                "targetColumn": "policy_type"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "EFF_DT",
+                "targetTable": "policies",
+                "targetColumn": "effective_date",
+                "note": "DATE with time 00:00:00 -> date"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "EXP_DT",
+                "targetTable": "policies",
+                "targetColumn": "expiry_date",
+                "note": "DATE with time 00:00:00 -> date"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "ANNL_PREM",
+                "targetTable": "policies",
+                "targetColumn": "annual_premium"
+              },
+              {
+                "sourceTable": "POLCY_HDR",
+                "sourceColumn": "STAT_CD",
+                "targetTable": "policies",
+                "targetColumn": "status_code"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_ID",
+                "targetTable": "claims",
+                "targetColumn": "claim_id"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "POLCY_ID",
+                "targetTable": "claims",
+                "targetColumn": "policy_id"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_DT",
+                "targetTable": "claims",
+                "targetColumn": "claim_date",
+                "note": "DATE with time of day -> timestamp(0)"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_AMT",
+                "targetTable": "claims",
+                "targetColumn": "claim_amount"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "CLM_STAT_CD",
+                "targetTable": "claims",
+                "targetColumn": "claim_status"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "ADJ_NOTE",
+                "targetTable": "claims",
+                "targetColumn": "adjuster_note",
+                "note": "Oracle treats '' as NULL; the load maps '' to NULL"
+              },
+              {
+                "sourceTable": "CLM_DTL",
+                "sourceColumn": "PAID_AMT",
+                "targetTable": "claims",
+                "targetColumn": "paid_amount"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "COVR_ID",
+                "targetTable": "coverages",
+                "targetColumn": "coverage_id"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "POLCY_ID",
+                "targetTable": "coverages",
+                "targetColumn": "policy_id"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "COVR_TYP_CD",
+                "targetTable": "coverages",
+                "targetColumn": "coverage_type"
+              },
+              {
+                "sourceTable": "COVERAGE",
+                "sourceColumn": "COVR_LIMIT_AMT",
+                "targetTable": "coverages",
+                "targetColumn": "limit_amount"
+              }
+            ],
+            "previousQuery": "-- NOT CONVERTED: TRUNC(cl.CLM_DT) (TRUNC(x) cuts a date to midnight or a number to a whole number, and the type of x is not known here)\nSELECT *\nFROM (\n    SELECT cl.claim_id AS CLM_ID,\n           p.policy_id AS POLCY_ID,\n           TRUNC(cl.claim_date)            AS CLM_DAY,\n           cl.claim_date - p.effective_date        AS DAYS_TO_CLAIM, (p.effective_date + INTERVAL '6 months')     AS REVIEW_DT,\n           cl.claim_amount AS CLM_AMT\n    FROM claims cl\n    JOIN policies p ON p.policy_id = cl.policy_id\n    WHERE TRUNC(cl.claim_date) BETWEEN TO_DATE('2026-03-01', 'YYYY-MM-DD')\n                               AND TO_DATE('2026-03-31', 'YYYY-MM-DD')\n    ORDER BY cl.claim_amount DESC, cl.claim_id\n) AS subquery_1\nLIMIT 5",
+            "evidence": {
+              "kind": "error",
+              "message": "PostgreSQL rejected it: function trunc(timestamp without time zone) does not exist",
+              "expectedColumns": [
+                "clm_id",
+                "polcy_id",
+                "clm_day",
+                "days_to_claim",
+                "review_dt",
+                "clm_amt"
+              ],
+              "missingRows": [],
+              "unexpectedRows": [],
+              "missingCount": 0,
+              "unexpectedCount": 0,
+              "differingColumns": [],
+              "brokenInvariants": [],
+              "staticFindings": [
+                {
+                  "id": "month_arithmetic_without_month_end_rule",
+                  "title": "Month arithmetic without Oracle's month-end rule",
+                  "detail": "The legacy query uses ADD_MONTHS, which returns the last day of the target month when the start date is the last day of its month (28 Feb + 6 months is 31 Aug). Adding INTERVAL '6 months' keeps the day number (28 Aug). Nothing in this query handles month ends."
+                }
+              ]
+            },
+            "engineWarnings": [
+              "ADD_MONTHS keeps month-end dates at month end",
+              "Not converted: TRUNC(cl.CLM_DT) (TRUNC(x) cuts a date to midnight or a number to a whole number, and the type of x is not known here)"
+            ]
+          },
+          "sha256": "3a30d7b5c72501a34549a2e0844bccfc250de4f9ee29c48430bbcddb47181184"
+        }
+      },
+      "heldOut": {
+        "verdict": "pass",
+        "summary": "Matches the reference result and all 1 invariant(s) hold."
+      }
+    }
+  ],
+  "maxCorrections": 3,
+  "engineWarnings": [
+    "ADD_MONTHS keeps month-end dates at month end",
+    "Not converted: TRUNC(cl.CLM_DT) (TRUNC(x) cuts a date to midnight or a number to a whole number, and the type of x is not known here)"
+  ],
+  "proposerRisks": [
+    "The review date is returned as a date, matching Oracle ADD_MONTHS on the supplied date-mapped effective_date.",
+    "The epoch-based days_to_claim is numeric and may have a scale or display format that differs from Oracle, while preserving the underlying fractional-day value."
+  ]
+}
