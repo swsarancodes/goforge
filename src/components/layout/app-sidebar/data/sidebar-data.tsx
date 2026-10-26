@@ -5,6 +5,7 @@ import {
     IconDatabase,
     IconTransform,
     IconTerminal2,
+    IconArrowsExchange,
 } from '@tabler/icons-react'
 
 import type { SidebarData } from '../../types';
@@ -44,6 +45,11 @@ export const useSidebarData = () => {
                         title: t("sidebar.modernizer", { defaultValue: "Modernizer" }),
                         url: '/database/modernizer',
                         icon: IconTransform,
+                    },
+                    {
+                        title: t("sidebar.migrate", { defaultValue: "Migrate" }),
+                        url: '/database/migrate',
+                        icon: IconArrowsExchange,
                     },
                     {
                         title: t("sidebar.sql_editor", { defaultValue: "SQL Editor" }),
