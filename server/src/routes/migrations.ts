@@ -6,7 +6,10 @@ import { encryptSecret } from "../crypto/vault.js";
 import { getCloud, getConnectionStore, type ConnectionRow } from "../db/stores.js";
 import { cloudConnectionRow, cloudDatabaseName, dropCloudDatabase, newDatabaseOwner } from "../services/cloud-databases.js";
 import { withOracle } from "../services/oracle-client.js";
-import { loadAndVerify, planOracleMigration, verifyTable, type MigrationPlan, type MigrationResult, type TableVerification } from "../services/oracle-migration.js";
+import { failedChecks, introspectOracle, loadAndVerify, planOracleMigration, verifyTable, type MigrationEdits, type MigrationPlan, type MigrationResult, type OracleTable, type TableVerification } from "../services/oracle-migration.js";
+import { allowedPgTypes, applyOperations } from "../services/oracle-type-edits.js";
+import { AiNotConfiguredError, ModelPolicyError } from "../ai/provider.js";
+import { createMigrationAgentReply, migrationAgentRequestSchema, type AgentState, type MigrationAgentResult } from "../ai/migration-agent.js";
 import { oracleConfigOf } from "../services/oracle-client.js";
 import { CreateDatabaseError, DATABASE_NAME_PATTERN, DatabaseExistsError, createDatabaseFromSql } from "../services/pg-create-database.js";
 import { toConnectionConfig, withPgClient, type ConnectionConfig } from "../services/pg-client.js";
@@ -23,14 +26,20 @@ export const migrationsRouter = Router();
 
 /** What a migration does at its two ends; tests replace these where there is no server to reach. */
 export interface MigrationDeps {
-    plan: typeof planOracleMigration;
+    plan: (connection: import("oracledb").Connection, edits?: MigrationEdits) => Promise<MigrationPlan>;
+    /** The Oracle schema as the dictionary describes it; the assistant's changes are checked against it. */
+    introspect: typeof introspectOracle;
+    /** Asks the model what changes the person's message calls for. */
+    agent: (input: Parameters<typeof createMigrationAgentReply>[0], signal?: AbortSignal) => Promise<{ result: MigrationAgentResult; model: string }>;
     load: (oracle: ConnectionConfig, pg: ConnectionConfig, plan: MigrationPlan) => Promise<MigrationResult>;
     /** Runs the checks of a migration again, against a database that already exists. */
     verify: (oracle: ConnectionConfig, pg: ConnectionConfig, plan: MigrationPlan) => Promise<TableVerification[]>;
 }
 
-const realDeps: MigrationDeps = {
+export const defaultMigrationDeps: MigrationDeps = {
     plan: planOracleMigration,
+    introspect: introspectOracle,
+    agent: createMigrationAgentReply,
     load: (oracle, pg, plan) => withOracle(oracle, (connection) => withPgClient(pg, (client) => loadAndVerify(connection, client, plan))),
     verify: (oracle, pg, plan) =>
         withOracle(oracle, (connection) =>
@@ -42,9 +51,17 @@ const realDeps: MigrationDeps = {
         ),
 };
 
-const sourceSchema = z.object({ sourceConnectionId: z.string().min(1) });
+const editsSchema = z
+    .object({
+        tables: z.record(z.object({ pgName: z.string().max(128).optional() })).default({}),
+        columns: z.record(z.object({ pgName: z.string().max(128).optional(), pgType: z.string().max(60).optional(), dropDefault: z.boolean().optional() })).default({}),
+    })
+    .default({});
+const sourceSchema = z.object({ sourceConnectionId: z.string().min(1), edits: editsSchema });
 const verifySchema = sourceSchema.extend({ targetConnectionId: z.string().min(1) });
 const migrateSchema = sourceSchema.extend({
+    /** The person has read the data a change would lose, and accepts it. */
+    acceptLoss: z.boolean().default(false),
     /** What the new database is called to its owner. */
     name: z.string().trim().min(1).max(60),
     target: z.discriminatedUnion("kind", [
@@ -66,7 +83,42 @@ async function oracleSource(req: import("express").Request, res: import("express
     return row;
 }
 
-export function createMigrationsRouter(deps: MigrationDeps = realDeps): Router {
+/** What the plan page needs of a plan: the tables with their notes and checks, what blocks the migration, what was refused, and what is left behind. */
+export function planResponse(plan: MigrationPlan) {
+    return { tables: plan.tables, problems: plan.problems, editProblems: plan.editProblems, notCarried: plan.notCarried, behaviour: plan.behaviour, statements: plan.createSql.length + plan.linkSql.length };
+}
+
+/** What the model is shown of a plan: names, types, how each column fares, and the counts the checks found. No rows. */
+export function agentState(plan: MigrationPlan, tables: OracleTable[]): AgentState {
+    return {
+        tables: plan.tables.map((table) => ({
+            oracleName: table.oracleName,
+            pgName: table.pgName,
+            rows: table.rows,
+            renamed: table.renamed,
+            columns: table.columns.map((column) => {
+                const source = tables.find((candidate) => candidate.name === table.oracleName)?.columns.find((candidate) => candidate.name === column.oracleName);
+                return {
+                    oracleName: column.oracleName,
+                    pgName: column.pgName,
+                    oracleType: column.oracleType,
+                    pgType: column.pgType,
+                    status: column.note.status,
+                    note: column.note.text,
+                    edited: column.edited,
+                    oracleDefault: column.oracleDefault,
+                    allowedPgTypes: source ? allowedPgTypes(source) : [],
+                    ...(column.check ? { check: { description: column.check.description, count: column.check.count } } : {}),
+                };
+            }),
+        })),
+        problems: plan.problems,
+        editProblems: plan.editProblems,
+        notCarried: plan.notCarried.map((entry) => ({ kind: entry.kind, name: entry.name })),
+    };
+}
+
+export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDeps): Router {
     const router = Router();
 
     /** What a migration would do, without doing it: the tables, how each column becomes PostgreSQL, the rows to copy, and what stops it. */
@@ -76,10 +128,42 @@ export function createMigrationsRouter(deps: MigrationDeps = realDeps): Router {
         const row = await oracleSource(req, res, parsed.data.sourceConnectionId);
         if (!row) return;
         try {
-            const plan = await withOracle(oracleConfigOf(row), deps.plan);
-            res.json({ tables: plan.tables, problems: plan.problems, notCarried: plan.notCarried, behaviour: plan.behaviour, statements: plan.createSql.length + plan.linkSql.length });
+            const plan = await withOracle(oracleConfigOf(row), (connection) => deps.plan(connection, parsed.data.edits));
+            res.json(planResponse(plan));
         } catch (error) {
             res.status(502).json({ error: `Could not read the Oracle database: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    }));
+
+    /**
+     * The assistant. The person's message and the plan go to the model, which answers with a reply and changes in a fixed set of operations;
+     * each change is checked against the rules in `oracle-type-edits` and applied or refused with its reason, and the plan is built again from
+     * the edits that stand. The model never touches the plan itself.
+     */
+    router.post("/oracle-to-postgres/agent", handle(async (req, res) => {
+        const parsed = migrationAgentRequestSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: "Say what you want changed." });
+        const row = await oracleSource(req, res, parsed.data.sourceConnectionId);
+        if (!row) return;
+        const { message, messages, edits } = parsed.data;
+        const config = oracleConfigOf(row);
+
+        const controller = new AbortController();
+        res.once("close", () => {
+            if (!res.writableEnded) controller.abort();
+        });
+        try {
+            const current = await withOracle(config, async (connection) => ({ tables: await deps.introspect(connection), plan: await deps.plan(connection, edits) }));
+            const answer = await deps.agent({ state: agentState(current.plan, current.tables), messages, message, currentEdits: edits }, controller.signal);
+            const changed = applyOperations(current.tables, edits, answer.result.operations);
+            const plan = changed.applied.length === 0 ? current.plan : await withOracle(config, (connection) => deps.plan(connection, changed.edits));
+            if (controller.signal.aborted || res.writableEnded) return;
+            res.json({ reply: answer.result.reply, applied: changed.applied, rejected: changed.rejected, edits: changed.edits, plan: planResponse(plan), model: answer.model });
+        } catch (error) {
+            if (controller.signal.aborted || res.writableEnded) return;
+            const text = error instanceof Error ? error.message : String(error);
+            const status = error instanceof ModelPolicyError ? 403 : error instanceof AiNotConfiguredError ? 503 : 502;
+            res.status(status).json({ error: status === 502 ? `The assistant could not answer: ${text}` : text });
         }
     }));
 
@@ -92,7 +176,7 @@ export function createMigrationsRouter(deps: MigrationDeps = realDeps): Router {
         const target = await findConnection(req, parsed.data.targetConnectionId);
         if (!target) return res.status(404).json({ error: "The PostgreSQL database was not found." });
         try {
-            const plan = await withOracle(oracleConfigOf(source), deps.plan);
+            const plan = await withOracle(oracleConfigOf(source), (connection) => deps.plan(connection, parsed.data.edits));
             const verification = await deps.verify(oracleConfigOf(source), toConnectionConfig(target), plan);
             res.json({ verification });
         } catch (error) {
@@ -103,7 +187,7 @@ export function createMigrationsRouter(deps: MigrationDeps = realDeps): Router {
     router.post("/oracle-to-postgres", handle(async (req, res) => {
         const parsed = migrateSchema.safeParse(req.body);
         if (!parsed.success) return res.status(400).json({ error: parsed.error.issues[0]?.message ?? "Invalid request" });
-        const { sourceConnectionId, name, target } = parsed.data;
+        const { sourceConnectionId, name, target, edits, acceptLoss } = parsed.data;
         const source = await oracleSource(req, res, sourceConnectionId);
         if (!source) return;
 
@@ -112,11 +196,20 @@ export function createMigrationsRouter(deps: MigrationDeps = realDeps): Router {
 
         let plan: MigrationPlan;
         try {
-            plan = await withOracle(oracleConfigOf(source), deps.plan);
+            plan = await withOracle(oracleConfigOf(source), (connection) => deps.plan(connection, edits));
         } catch (error) {
             return res.status(502).json({ error: `Could not read the Oracle database: ${error instanceof Error ? error.message : String(error)}` });
         }
         if (plan.problems.length > 0) return res.status(422).json({ error: `This Oracle database cannot be migrated as it is: ${plan.problems.slice(0, 5).join(" ")}${plan.problems.length > 5 ? ` (and ${plan.problems.length - 5} more)` : ""}`, problems: plan.problems });
+        // what the plan's own queries found on the Oracle data is decided here, from the data as it is now, not from what the page last showed
+        const lossy = failedChecks(plan);
+        if (lossy.length > 0 && !acceptLoss) {
+            return res.status(409).json({
+                code: "data-loss-not-accepted",
+                error: `Some values would change or be lost, and that has not been accepted: ${lossy.slice(0, 5).map((entry) => `${entry.table}.${entry.column} (${entry.check.count === null ? `the check could not run: ${entry.check.error}` : `${entry.check.count} ${entry.check.description}`})`).join("; ")}${lossy.length > 5 ? ` (and ${lossy.length - 5} more)` : ""}.`,
+                checks: lossy.map((entry) => ({ table: entry.table, column: entry.column, ...entry.check })),
+            });
+        }
         const createSql = plan.createSql.join(";\n");
 
         // 1. the new database, with the tables and their keys
