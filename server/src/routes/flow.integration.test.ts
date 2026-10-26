@@ -34,15 +34,19 @@ const { convertQuery } = await import("../../../src/features/query-modernizer/en
 const { createQueryCorrection } = await import("../ai/correct-query.js");
 const { differingColumns } = await import("../../../queryshift/src/diagnose");
 const { compareResults } = await import("../../../queryshift/src/compare");
+const { loadCase } = await import("../../../queryshift/src/case");
 type Category = import("../../../queryshift/src/compare").Category;
 
 const domain = (file: string) => fs.readFileSync(path.resolve(import.meta.dirname, "../../../queryshift/domain", file), "utf8");
 
+/** A QueryShift case's legacy query with the bind values its case.json declares written into it, as the harness itself runs it. */
+const queryshiftCase = (name: string) => loadCase(path.resolve(import.meta.dirname, "../../../queryshift/cases", name)).legacySql;
+
 /** Legacy Oracle queries over the insurance schema, the kind a reporting job has accumulated. */
 const LEGACY_QUERIES: { name: string; sql: string }[] = [
-    { name: "customers and their active 2026 policies, with (+)", sql: fs.readFileSync(path.resolve(import.meta.dirname, "../../../queryshift/cases/case-01-outer-join-active-policies/legacy_query.sql"), "utf8") },
-    { name: "claims summary per customer (NULL and division)", sql: fs.readFileSync(path.resolve(import.meta.dirname, "../../../queryshift/cases/case-02-null-and-aggregation-claims/legacy_query.sql"), "utf8") },
-    { name: "five largest March claims (TRUNC, ROWNUM, ADD_MONTHS)", sql: fs.readFileSync(path.resolve(import.meta.dirname, "../../../queryshift/cases/case-03-date-time-claims-window/legacy_query.sql"), "utf8") },
+    { name: "customers and their active 2026 policies, with (+)", sql: queryshiftCase("case-01-outer-join-active-policies") },
+    { name: "claims summary per customer (NULL and division)", sql: queryshiftCase("case-02-null-and-aggregation-claims") },
+    { name: "five largest March claims (TRUNC, ROWNUM, ADD_MONTHS)", sql: queryshiftCase("case-03-date-time-claims-window") },
     { name: "DECODE", sql: "SELECT segmt_cd, DECODE(segmt_cd, 'COM', 'Commercial', 'RET', 'Retail', 'Other') AS seg_name, COUNT(*) AS n FROM cust_mst GROUP BY segmt_cd ORDER BY 1" },
     { name: "SUBSTR, INSTR, UPPER, LENGTH", sql: "SELECT cust_id, UPPER(SUBSTR(cust_nm, 1, INSTR(cust_nm, ' ') - 1)) AS first_name, LENGTH(cust_nm) AS len FROM cust_mst WHERE cust_id <= 20 ORDER BY cust_id" },
     { name: "TO_CHAR of a date, grouped", sql: "SELECT TO_CHAR(eff_dt, 'YYYY-MM') AS ym, COUNT(*) AS n, SUM(NVL(annl_prem, 0)) AS prem FROM polcy_hdr GROUP BY TO_CHAR(eff_dt, 'YYYY-MM') ORDER BY 1" },
