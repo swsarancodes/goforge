@@ -186,6 +186,4 @@ We welcome all contributions, whether small bug fixes or major feature additions
 - Agree to the [Code of Conduct](./CODE_OF_CONDUCT.md) to ensure a positive and respectful environment.
 - Report bugs and request features via [GitHub Issues](https://github.com/swsarancodes/goforge/issues).
 
-## 📜 License
 
-GoForge is licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](./LICENSE).
