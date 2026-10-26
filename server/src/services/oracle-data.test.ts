@@ -49,6 +49,16 @@ describe("what the Data page asks Oracle for", () => {
         expect(byName.text).toContain(`ORDER BY "NAME" ASC NULLS LAST, "ID" OFFSET`);
     });
 
+    it("reads a CLOB to the 4000 characters SQL allows, and brings its real length along to show a longer one as cut", () => {
+        const withClob = [{ name: "ID", type: "NUMBER" }, { name: "BODY", type: "CLOB" }, { name: "MORE", type: "NCLOB" }];
+        const query = buildOracleRowsQuery({ schema: "S", table: "T", columns: withClob, pkColumns: ["ID"], kind: "table" });
+        expect(query.text).toContain(`DBMS_LOB.SUBSTR("BODY", 4000, 1) AS "C1"`);
+        expect(query.text).toContain(`DBMS_LOB.GETLENGTH("BODY") AS "L1"`);
+        expect(query.text).toContain(`DBMS_LOB.GETLENGTH("MORE") AS "L2"`);
+        expect(query.lengths).toEqual([{ column: 1, position: 3 }, { column: 2, position: 4 }]);
+        expect(buildOracleRowsQuery({ schema: "S", table: "T", columns, pkColumns: [], kind: "table" }).lengths).toEqual([]);
+    });
+
     it("clamps the page size and refuses a sort column the table does not have", () => {
         expect(buildOracleRowsQuery({ schema: "S", table: "T", columns, pkColumns: [], kind: "table", limit: 99999 }).limit).toBe(500);
         expect(buildOracleRowsQuery({ schema: "S", table: "T", columns, pkColumns: [], kind: "table", offset: -5 }).offset).toBe(0);
@@ -79,7 +89,11 @@ describe.skipIf(!server)("the Data page on a real Oracle schema", () => {
              INSERT INTO things VALUES (3, 'gamma', 1000, DATE '2027-01-01', NULL, NULL, NULL);
              CREATE TABLE loose (a VARCHAR2(5));
              INSERT INTO loose VALUES ('x');
-             CREATE VIEW cheap AS SELECT id, price FROM things WHERE price < 100;`,
+             CREATE VIEW cheap AS SELECT id, price FROM things WHERE price < 100;
+             CREATE TABLE longs (id NUMBER(3) PRIMARY KEY, body CLOB);
+             INSERT INTO longs VALUES (1, 'short');
+             INSERT INTO longs VALUES (2, TO_CLOB(RPAD('a', 4000, 'a')));
+             INSERT INTO longs VALUES (3, TO_CLOB(RPAD('b', 3000, 'b')) || TO_CLOB(RPAD('c', 3000, 'c')));`,
         );
     });
     afterAll(async () => {
@@ -88,7 +102,7 @@ describe.skipIf(!server)("the Data page on a real Oracle schema", () => {
 
     it("lists the tables and views with their types, keys and row counts", async () => {
         const relations = await as(loadOracleRelations);
-        expect(relations.map((relation) => `${relation.kind}:${relation.name}`)).toEqual(["table:LOOSE", "table:THINGS", "view:CHEAP"]);
+        expect(relations.map((relation) => `${relation.kind}:${relation.name}`)).toEqual(["table:LONGS", "table:LOOSE", "table:THINGS", "view:CHEAP"]);
         const things = relations.find((relation) => relation.name === "THINGS")!;
         expect(things.schema).toBe(schema);
         expect(things.primaryKey).toEqual(["ID"]);
@@ -114,6 +128,14 @@ describe.skipIf(!server)("the Data page on a real Oracle schema", () => {
         expect(sorted.dir).toBe("desc");
         expect((await as((connection) => fetchOracleRows(connection, { schema, table: "LOOSE" }))).rows).toEqual([["x"]]);
         expect((await as((connection) => fetchOracleRows(connection, { schema, table: "CHEAP" }))).rows).toEqual([["1", "0.5"], ["2", "-12.25"]]);
+    });
+
+    it("reads a CLOB longer than SQL's own 4000 characters without failing, and says which cells were cut", async () => {
+        const page = await as((connection) => fetchOracleRows(connection, { schema, table: "LONGS" }));
+        expect(page.rows.map((row) => [row[0], row[1]?.length])).toEqual([["1", 5], ["2", 4000], ["3", 4000]]);
+        expect(page.rows[2][1]).toBe("b".repeat(3000) + "c".repeat(1000));
+        // the one of exactly 4000 characters is whole; the one of 6000 is cut and says so
+        expect(page.truncatedCells).toEqual([[2, 1]]);
     });
 
     it("refuses a table that is not there, and a name that is only the right table in another case", async () => {

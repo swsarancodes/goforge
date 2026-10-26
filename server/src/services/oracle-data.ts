@@ -24,6 +24,9 @@ export interface OracleRelationMeta extends OracleRelation {
     primaryKey: string[];
 }
 
+/** The longest text SQL itself will hand back: DBMS_LOB.SUBSTR(clob, 4001, 1) in a SELECT fails with ORA-06502. */
+const SQL_TEXT_MAX = 4000;
+
 /** A table with no statistics is counted, up to this many rows; past that the size is left unknown rather than guessed. */
 const COUNT_CAP = 100_000;
 /** Counting is a read of the table, so a schema with many unanalyzed tables is not counted table by table. */
@@ -59,14 +62,15 @@ export function textExpression(column: { name: string; type: string }): string {
     if (type === "DATE") return `TO_CHAR(${id}, 'YYYY-MM-DD HH24:MI:SS')`;
     if (type.startsWith("TIMESTAMP")) return `TO_CHAR(${id}, '${/WITH TIME ZONE/.test(type) ? "YYYY-MM-DD HH24:MI:SS.FF TZR" : "YYYY-MM-DD HH24:MI:SS.FF"}')`;
     if (/^(VARCHAR2|NVARCHAR2|CHAR|NCHAR)$/.test(type)) return `SUBSTR(${id}, 1, ${cap})`;
-    if (type === "CLOB" || type === "NCLOB") return `DBMS_LOB.SUBSTR(${id}, ${cap}, 1)`;
+    // inside SQL a text is at most 4000 characters, so a CLOB is read to that length (a longer one is flagged by its length, see buildOracleRowsQuery)
+    if (type === "CLOB" || type === "NCLOB") return `DBMS_LOB.SUBSTR(${id}, ${SQL_TEXT_MAX}, 1)`;
     if (type === "RAW") return `RAWTOHEX(${id})`;
     if (type === "BLOB") return `CASE WHEN ${id} IS NULL THEN NULL ELSE 'BLOB, ' || DBMS_LOB.GETLENGTH(${id}) || ' bytes' END`;
     if (type === "ROWID" || type === "UROWID" || type.startsWith("INTERVAL")) return `SUBSTR(TO_CHAR(${id}), 1, ${cap})`;
     return `CASE WHEN ${id} IS NULL THEN NULL ELSE '(${type.replace(/'/g, "")} not shown)' END`;
 }
 
-export function buildOracleRowsQuery(input: { schema: string; table: string; columns: { name: string; type: string }[]; pkColumns: string[]; kind: RelationKind; sort?: string; dir?: SortDirection; limit?: number; offset?: number }): { text: string; limit: number; offset: number } {
+export function buildOracleRowsQuery(input: { schema: string; table: string; columns: { name: string; type: string }[]; pkColumns: string[]; kind: RelationKind; sort?: string; dir?: SortDirection; limit?: number; offset?: number }): { text: string; limit: number; offset: number; lengths: { column: number; position: number }[] } {
     const clamp = (value: number | undefined, fallback: number, min: number, max: number) => (value === undefined || !Number.isFinite(value) ? fallback : Math.min(max, Math.max(min, Math.trunc(value))));
     const limit = clamp(input.limit, DEFAULT_LIMIT, 1, MAX_LIMIT);
     const offset = clamp(input.offset, 0, 0, Number.MAX_SAFE_INTEGER);
@@ -74,6 +78,13 @@ export function buildOracleRowsQuery(input: { schema: string; table: string; col
     if (input.sort !== undefined && !input.columns.some((column) => column.name === input.sort)) throw new DataRequestError(`Unknown sort column "${input.sort}"`);
 
     const select = input.columns.map((column, index) => `${textExpression(column)} AS "C${index}"`);
+    // a CLOB is read to 4000 characters, so its real length comes with the row: that is how a longer value is shown as cut
+    const lengths: { column: number; position: number }[] = [];
+    input.columns.forEach((column, index) => {
+        if (!/^N?CLOB$/i.test(column.type)) return;
+        lengths.push({ column: index, position: select.length });
+        select.push(`DBMS_LOB.GETLENGTH(${quoteOracleIdent(column.name)}) AS "L${index}"`);
+    });
     const order: string[] = [];
     if (input.sort !== undefined) order.push(`${quoteOracleIdent(input.sort)} ${input.dir === "desc" ? "DESC" : "ASC"} NULLS LAST`);
     // Paging needs a stable order: the primary key, else the physical row id (a table has one, a view does not).
@@ -81,7 +92,7 @@ export function buildOracleRowsQuery(input: { schema: string; table: string; col
     for (const tieBreaker of tieBreakers) if (input.sort === undefined || tieBreaker !== quoteOracleIdent(input.sort)) order.push(tieBreaker);
 
     const text = [`SELECT ${select.join(", ")}`, `FROM ${quoteOracleIdent(input.schema)}.${quoteOracleIdent(input.table)}`, order.length > 0 ? `ORDER BY ${order.join(", ")}` : "", `OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`].filter(Boolean).join(" ");
-    return { text, limit, offset };
+    return { text, limit, offset, lengths };
 }
 
 /** Every table and view of the connection's own schema, with columns and primary key. */
@@ -143,11 +154,13 @@ export async function fetchOracleRows(
 
     const result = await connection.execute(query.text, [], { outFormat: driver.OUT_FORMAT_ARRAY, maxRows: query.limit });
     const truncatedCells: [number, number][] = [];
-    const rows = ((result.rows ?? []) as (string | null)[][]).map((row, rowIndex) =>
-        row.map((cell, columnIndex) => {
+    const rows = ((result.rows ?? []) as (string | number | null)[][]).map((row, rowIndex) =>
+        columns.map((_, columnIndex) => {
+            const cell = row[columnIndex];
             if (cell === null || cell === undefined) return null;
             const { value, truncated } = truncateCell(String(cell));
-            if (truncated) truncatedCells.push([rowIndex, columnIndex]);
+            const length = query.lengths.find((entry) => entry.column === columnIndex);
+            if (truncated || (length !== undefined && Number(row[length.position]) > CELL_MAX_CHARS)) truncatedCells.push([rowIndex, columnIndex]);
             return value;
         }),
     );
