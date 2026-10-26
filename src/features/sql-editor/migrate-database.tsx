@@ -5,10 +5,12 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SavedConnection, connectionLabel, listSavedConnections } from "@/lib/live-connection-api";
-import { MigrationOutcome, MigrationPlanPreview, migrateOracleToPostgres, planOracleMigration } from "@/lib/migrations-api";
+import { MigrationOutcome, MigrationPlanPreview, TableVerification, migrateOracleToPostgres, planOracleMigration, verifyMigration } from "@/lib/migrations-api";
 import { useAuth } from "@/providers/auth-provider/auth-provider";
 import { rememberDataConnection } from "@/features/data-browser/use-data-browser";
 import { rememberConnectionOnPages } from "@/features/database/live-database";
+import { MigrationChecklist } from "./migration-checklist";
+import { MigrationProof } from "./migration-proof";
 import type { SqlEditor } from "./use-sql-editor";
 
 const CLOUD = "cloud";
@@ -29,6 +31,9 @@ export const MigrateDatabase: React.FC<{ editor: SqlEditor }> = ({ editor }) => 
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | undefined>(undefined);
     const [done, setDone] = useState<MigrationOutcome | undefined>(undefined);
+    /** The proof on show: the migration's own, or the one from running the checks again. */
+    const [proof, setProof] = useState<TableVerification[] | undefined>(undefined);
+    const [rerunning, setRerunning] = useState(false);
     const cloudAvailable = auth.cloudDatabases !== undefined;
 
     useEffect(() => {
@@ -37,6 +42,7 @@ export const MigrateDatabase: React.FC<{ editor: SqlEditor }> = ({ editor }) => 
         setPlan(undefined);
         setError(undefined);
         setDone(undefined);
+        setProof(undefined);
         setName(`${connection.name} postgres`.slice(0, 60));
         planOracleMigration(connection.id)
             .then((result) => current && setPlan(result))
@@ -65,6 +71,7 @@ export const MigrateDatabase: React.FC<{ editor: SqlEditor }> = ({ editor }) => 
         try {
             const outcome = await migrateOracleToPostgres({ sourceConnectionId: connection.id, name: name.trim(), target: target === CLOUD ? { kind: "cloud" } : { kind: "server", connectionId: target } });
             setDone(outcome);
+            setProof(outcome.verification);
             rememberConnectionOnPages(outcome.connection.id);
             rememberDataConnection(outcome.connection.id);
             if (target === CLOUD) await auth.refresh();
@@ -76,6 +83,19 @@ export const MigrateDatabase: React.FC<{ editor: SqlEditor }> = ({ editor }) => 
         }
     };
 
+    const rerunProof = async () => {
+        if (!done) return;
+        setRerunning(true);
+        setError(undefined);
+        try {
+            setProof((await verifyMigration({ sourceConnectionId: connection.id, targetConnectionId: done.connection.id })).verification);
+        } catch (caught) {
+            setError(caught instanceof Error ? caught.message : String(caught));
+        } finally {
+            setRerunning(false);
+        }
+    };
+
     const rowsTotal = plan?.tables.reduce((sum, table) => sum + table.rows, 0) ?? 0;
 
     return (
@@ -84,34 +104,18 @@ export const MigrateDatabase: React.FC<{ editor: SqlEditor }> = ({ editor }) => 
                 <ArrowRightLeft className="size-3.5" /> Migrate to PostgreSQL
             </Button>
             <Dialog open={open} onOpenChange={(next) => !busy && setOpen(next)}>
-                <DialogContent className="max-w-xl">
+                <DialogContent className="max-h-[90vh] max-w-4xl overflow-y-auto">
                     <DialogHeader>
                         <DialogTitle>Migrate “{connection.name}” to PostgreSQL</DialogTitle>
-                        <DialogDescription>Creates a new PostgreSQL database with the same tables and keys, copies every row, and checks each table against Oracle. Nothing is kept if any of it fails. The Oracle database is not changed.</DialogDescription>
+                        <DialogDescription>Creates a new PostgreSQL database with the same tables and keys, copies every row, and checks each table against Oracle with queries on both sides. Nothing is kept if any of it fails. The Oracle database is not changed.</DialogDescription>
                     </DialogHeader>
 
                     {!plan && !error && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-3.5 animate-spin" /> Reading the Oracle database…</p>}
 
                     {plan && (
-                        <div className="space-y-3 text-xs">
-                            <div className="max-h-48 overflow-auto rounded-md border">
-                                <table className="w-full text-left">
-                                    <thead className="bg-muted/50 text-muted-foreground">
-                                        <tr><th className="px-2 py-1 font-medium">Oracle table</th><th className="px-2 py-1 font-medium">PostgreSQL table</th><th className="px-2 py-1 text-right font-medium">Columns</th><th className="px-2 py-1 text-right font-medium">Rows</th></tr>
-                                    </thead>
-                                    <tbody>
-                                        {plan.tables.map((table) => (
-                                            <tr key={table.oracleName} className="border-t">
-                                                <td className="px-2 py-1 font-mono">{table.oracleName}</td>
-                                                <td className="px-2 py-1 font-mono">{table.pgName}</td>
-                                                <td className="px-2 py-1 text-right">{table.columns.length}</td>
-                                                <td className="px-2 py-1 text-right">{table.rows.toLocaleString()}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                            <p className="text-muted-foreground">{plan.tables.length} table{plan.tables.length === 1 ? "" : "s"}, {rowsTotal.toLocaleString()} rows. Upper-case names become lower-case; NUMBER becomes integer, bigint or numeric by its precision; DATE becomes timestamp.</p>
+                        <div className="min-w-0 space-y-3 text-xs">
+                            <p className="text-muted-foreground">{plan.tables.length} table{plan.tables.length === 1 ? "" : "s"}, {rowsTotal.toLocaleString()} rows. Read this before you migrate: it says what every column becomes, what can be lost, and what is left behind.</p>
+                            <MigrationChecklist plan={plan} />
                             {plan.problems.length > 0 && (
                                 <div className="rounded-md border border-destructive/50 p-2 text-destructive" role="alert">
                                     <p className="font-medium">This database cannot be migrated as it is:</p>
@@ -141,11 +145,9 @@ export const MigrateDatabase: React.FC<{ editor: SqlEditor }> = ({ editor }) => 
                     )}
 
                     {done && (
-                        <div className="space-y-2 text-xs" role="status">
+                        <div className="min-w-0 space-y-2 text-xs" role="status">
                             <p className="flex items-center gap-1.5 font-medium text-emerald-600 dark:text-emerald-400"><Check className="size-3.5" /> “{done.connection.name}” is a PostgreSQL database now, and every table matches Oracle.</p>
-                            <ul className="text-muted-foreground">
-                                {done.verification.map((entry) => <li key={entry.table}><span className="font-mono text-foreground">{entry.table}</span>: {entry.postgresRows.toLocaleString()} rows, {entry.checks} checks against Oracle</li>)}
-                            </ul>
+                            {proof && <MigrationProof verification={proof} onRerun={() => void rerunProof()} rerunning={rerunning} />}
                             <p className="text-muted-foreground">Open it under Data, Modernizer, Schema Change and SQL. In the Modernizer, an Oracle query can be run on the Oracle database and compared with its PostgreSQL conversion.</p>
                         </div>
                     )}
