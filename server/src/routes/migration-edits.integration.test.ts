@@ -24,6 +24,7 @@ const { oracleSql } = await import("../services/oracle-sql.js");
 const { adminConfigFromUrl } = await import("../services/cloud-databases.js");
 const { withPgClient } = await import("../services/pg-client.js");
 const { AiNotConfiguredError } = await import("../ai/provider.js");
+const { withOracle } = await import("../services/oracle-client.js");
 
 const DDL = `CREATE TABLE pol (id NUMBER(6) PRIMARY KEY, started DATE NOT NULL, ended DATE, active NUMBER(1) DEFAULT 1, qty VARCHAR2(10));
     CREATE TABLE ev (ev_id NUMBER(6) PRIMARY KEY, pol_id NUMBER(6) REFERENCES pol (id), happened TIMESTAMP(3))`;
@@ -36,12 +37,15 @@ const ROWS = `
 
 let stubbed: { reply: string; operations: unknown[] } | Error = { reply: "", operations: [] };
 const asked: unknown[] = [];
+let summaryStub: { summary: string } | Error = { summary: "" };
+const summaryAsked: unknown[] = [];
 
 describe.skipIf(!oracleUrl || !pgUrl)("the migration page over HTTP (real Oracle, real PostgreSQL)", () => {
     const admin = oracleServerFromEnv({ ORACLE_ADMIN_URL: oracleUrl } as NodeJS.ProcessEnv)?.admin as NonNullable<ReturnType<typeof oracleServerFromEnv>>["admin"];
     let server: ReturnType<ReturnType<typeof createApp>["listen"]>;
     let base = "";
     let schema = "";
+    let schemaPassword = "";
     let oracleId = "";
     let pgServerId = "";
     const databases: string[] = [];
@@ -53,6 +57,7 @@ describe.skipIf(!oracleUrl || !pgUrl)("the migration page over HTTP (real Oracle
 
     beforeAll(async () => {
         const password = newSchemaPassword();
+        schemaPassword = password;
         schema = oracleSchemaName("0a1b2c3d-0000-0000-0000-000000000001", `edits_${Math.random().toString(36).slice(2, 6)}`);
         await createOracleSchema(admin, schema, password, DDL);
         const row = oracleConnectionRow(admin, schema, "edits", password);
@@ -64,6 +69,11 @@ describe.skipIf(!oracleUrl || !pgUrl)("the migration page over HTTP (real Oracle
         server = createApp({
             migrations: {
                 ...defaultMigrationDeps,
+                summary: async (input) => {
+                    summaryAsked.push(input);
+                    if (summaryStub instanceof Error) throw summaryStub;
+                    return { result: summaryStub as { summary: string }, model: "stand-in" };
+                },
                 agent: async (input) => {
                     asked.push(input);
                     if (stubbed instanceof Error) throw stubbed;
@@ -181,5 +191,77 @@ describe.skipIf(!oracleUrl || !pgUrl)("the migration page over HTTP (real Oracle
         // without the edits the names do not line up, and the comparison says it cannot be made rather than passing
         const wrong = await post("/api/migrations/oracle-to-postgres/verify", { sourceConnectionId: oracleId, targetConnectionId: done.body.connection.id });
         expect(wrong.status).toBe(502);
+    }, 180_000);
+
+    it("builds the report from the plan and the data, with samples, and the same fingerprint every time", async () => {
+        const first = await post("/api/migrations/oracle-to-postgres/report", { sourceConnectionId: oracleId });
+        expect(first.status).toBe(200);
+        const { report } = first.body;
+        expect(report).toMatchObject({ source: "edits", dataRead: true, verdict: "ready", summary: { tables: 2, columns: 8, rows: 4 } });
+        expect(report.hash).toMatch(/^[0-9a-f]{64}$/);
+        const pol = report.tables.find((t: any) => t.oracleName === "POL");
+        expect(pol.sample).toMatchObject({ ordered: true, columns: ["id", "started", "ended", "active", "qty"] });
+        expect(pol.sample.oracle).toHaveLength(3);
+        expect(pol.columns.find((c: any) => c.oracleName === "STARTED")).toMatchObject({ facts: { nulls: 0, values: 3, affected: [{ count: 1 }] }, dataChange: { effect: "kept" } });
+        const again = await post("/api/migrations/oracle-to-postgres/report", { sourceConnectionId: oracleId });
+        expect(again.body.report.hash).toBe(report.hash);
+        // an edit is a different report
+        const edited = await post("/api/migrations/oracle-to-postgres/report", { sourceConnectionId: oracleId, edits: { tables: {}, columns: { "POL.STARTED": { pgType: "date" } } } });
+        expect(edited.body.report.hash).not.toBe(report.hash);
+        expect(edited.body.report).toMatchObject({ verdict: "needs-acceptance", mustAccept: [{ table: "pol", column: "started", count: 1 }], summary: { changesByYou: 1 } });
+    });
+
+    it("has the model write the opening paragraph from the figures alone, and hands it back to be labelled", async () => {
+        summaryStub = { summary: "Two tables move; nothing blocks them." };
+        const answer = await post("/api/migrations/oracle-to-postgres/report/summary", { sourceConnectionId: oracleId });
+        expect(answer.status).toBe(200);
+        expect(answer.body).toMatchObject({ summary: "Two tables move; nothing blocks them.", model: "stand-in" });
+        const report = (await post("/api/migrations/oracle-to-postgres/report", { sourceConnectionId: oracleId })).body.report;
+        expect(answer.body.reportHash).toBe(report.hash);
+        // the model was shown names, counts and notes: never a row
+        const seen = JSON.stringify(summaryAsked.at(-1));
+        expect(seen).toContain("columnsToRead");
+        expect(seen).not.toContain("2026-03-04");
+        expect(seen).not.toContain("SELECT COUNT");
+        summaryStub = new AiNotConfiguredError("No OpenAI API key is set.");
+        const unset = await post("/api/migrations/oracle-to-postgres/report/summary", { sourceConnectionId: oracleId });
+        expect([unset.status, unset.body.error]).toEqual([503, "No OpenAI API key is set."]);
+        summaryStub = new Error("boom");
+        expect((await post("/api/migrations/oracle-to-postgres/report/summary", { sourceConnectionId: oracleId })).status).toBe(502);
+    });
+
+    it("migrates only the report that was approved: a stale fingerprint is refused, and nothing is created", async () => {
+        const database = `approve_test_${Math.random().toString(36).slice(2, 8)}`;
+        databases.push(database);
+        const target = { kind: "server", connectionId: pgServerId, database };
+        const report = (await post("/api/migrations/oracle-to-postgres/report", { sourceConnectionId: oracleId })).body.report;
+
+        const wrong = await post("/api/migrations/oracle-to-postgres", { sourceConnectionId: oracleId, name: "approve", target, approval: { reportHash: "0".repeat(64) } });
+        expect(wrong.status).toBe(409);
+        expect(wrong.body.code).toBe("report-changed");
+        const exists = async () => withPgClient(adminConfigFromUrl(pgUrl!), async (client) => (await client.query("SELECT 1 FROM pg_database WHERE datname = $1", [database])).rowCount);
+        expect(await exists()).toBe(0);
+
+        // the data moves after the report was read: the approval no longer fits
+        await withOracle({ ...admin, user: schema, password: schemaPassword }, async (c) => {
+            await c.execute("INSERT INTO pol VALUES (4, DATE '2026-07-07', NULL, 1, '5')", [], { autoCommit: true });
+        });
+        const moved = await post("/api/migrations/oracle-to-postgres", { sourceConnectionId: oracleId, name: "approve", target, approval: { reportHash: report.hash } });
+        expect(moved.status).toBe(409);
+        expect(await exists()).toBe(0);
+
+        const fresh = (await post("/api/migrations/oracle-to-postgres/report", { sourceConnectionId: oracleId })).body.report;
+        expect(fresh.hash).not.toBe(report.hash);
+        const done = await post("/api/migrations/oracle-to-postgres", { sourceConnectionId: oracleId, name: "approve", target, approval: { reportHash: fresh.hash } });
+        expect(done.status).toBe(201);
+        expect(done.body.approval).toEqual({ reportHash: fresh.hash, approvedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) });
+        expect(done.body.verification.every((v: any) => v.mismatches.length === 0)).toBe(true);
+
+        // without an approval the migration still runs (the page always sends one)
+        const database2 = `approve_test_${Math.random().toString(36).slice(2, 8)}`;
+        databases.push(database2);
+        const plain = await post("/api/migrations/oracle-to-postgres", { sourceConnectionId: oracleId, name: "plain", target: { kind: "server", connectionId: pgServerId, database: database2 } });
+        expect(plain.status).toBe(201);
+        expect(plain.body.approval).toBeNull();
     }, 180_000);
 });

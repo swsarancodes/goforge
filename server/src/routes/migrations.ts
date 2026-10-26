@@ -10,6 +10,9 @@ import { failedChecks, introspectOracle, loadAndVerify, planOracleMigration, ver
 import { allowedPgTypes, applyOperations } from "../services/oracle-type-edits.js";
 import { AiNotConfiguredError, ModelPolicyError } from "../ai/provider.js";
 import { createMigrationAgentReply, migrationAgentRequestSchema, type AgentState, type MigrationAgentResult } from "../ai/migration-agent.js";
+import { createMigrationSummary } from "../ai/migration-summary.js";
+import { buildReport, digestForSummary, type DataFacts, type MigrationReport, type ReportSample } from "../services/migration-report.js";
+import { readDataFacts, readSamples } from "../services/oracle-report-data.js";
 import { oracleConfigOf } from "../services/oracle-client.js";
 import { CreateDatabaseError, DATABASE_NAME_PATTERN, DatabaseExistsError, createDatabaseFromSql } from "../services/pg-create-database.js";
 import { toConnectionConfig, withPgClient, type ConnectionConfig } from "../services/pg-client.js";
@@ -32,6 +35,10 @@ export interface MigrationDeps {
     /** Asks the model what changes the person's message calls for. */
     agent: (input: Parameters<typeof createMigrationAgentReply>[0], signal?: AbortSignal) => Promise<{ result: MigrationAgentResult; model: string }>;
     load: (oracle: ConnectionConfig, pg: ConnectionConfig, plan: MigrationPlan) => Promise<MigrationResult>;
+    /** Reads the Oracle data the report is made from: counts of NULLs and of values the copy changes, and a few rows of every table. */
+    readData: (connection: import("oracledb").Connection, plan: MigrationPlan, options: { samples: boolean }) => Promise<{ facts: DataFacts; samples?: Record<string, ReportSample> }>;
+    /** Asks the model for the opening paragraph of the report, from the report's figures. */
+    summary: (input: Parameters<typeof createMigrationSummary>[0], signal?: AbortSignal) => Promise<{ result: { summary: string }; model: string }>;
     /** Runs the checks of a migration again, against a database that already exists. */
     verify: (oracle: ConnectionConfig, pg: ConnectionConfig, plan: MigrationPlan) => Promise<TableVerification[]>;
 }
@@ -40,6 +47,8 @@ export const defaultMigrationDeps: MigrationDeps = {
     plan: planOracleMigration,
     introspect: introspectOracle,
     agent: createMigrationAgentReply,
+    readData: async (connection, plan, options) => ({ facts: await readDataFacts(connection, plan), ...(options.samples ? { samples: await readSamples(connection, plan) } : {}) }),
+    summary: createMigrationSummary,
     load: (oracle, pg, plan) => withOracle(oracle, (connection) => withPgClient(pg, (client) => loadAndVerify(connection, client, plan))),
     verify: (oracle, pg, plan) =>
         withOracle(oracle, (connection) =>
@@ -62,6 +71,8 @@ const verifySchema = sourceSchema.extend({ targetConnectionId: z.string().min(1)
 const migrateSchema = sourceSchema.extend({
     /** The person has read the data a change would lose, and accepts it. */
     acceptLoss: z.boolean().default(false),
+    /** The report the person read and approved: the fingerprint of it. The migration refuses to start if the report is no longer this one. */
+    approval: z.object({ reportHash: z.string().regex(/^[0-9a-f]{64}$/) }).optional(),
     /** What the new database is called to its owner. */
     name: z.string().trim().min(1).max(60),
     target: z.discriminatedUnion("kind", [
@@ -82,6 +93,9 @@ async function oracleSource(req: import("express").Request, res: import("express
     }
     return row;
 }
+
+/** How many things the person has changed in the plan. */
+export const editCount = (edits: MigrationEdits): number => Object.keys(edits.tables ?? {}).length + Object.keys(edits.columns ?? {}).length;
 
 /** What the plan page needs of a plan: the tables with their notes and checks, what blocks the migration, what was refused, and what is left behind. */
 export function planResponse(plan: MigrationPlan) {
@@ -132,6 +146,54 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
             res.json(planResponse(plan));
         } catch (error) {
             res.status(502).json({ error: `Could not read the Oracle database: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    }));
+
+    /**
+     * The report a person reads before approving: what changes in the schema and in the data, from the plan and from reading the Oracle data
+     * (read only), with a few sample rows per table. No model writes any of it.
+     */
+    router.post("/oracle-to-postgres/report", handle(async (req, res) => {
+        const parsed = sourceSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: "Say which Oracle database to report on." });
+        const row = await oracleSource(req, res, parsed.data.sourceConnectionId);
+        if (!row) return;
+        try {
+            const report = await withOracle(oracleConfigOf(row), async (connection) => {
+                const plan = await deps.plan(connection, parsed.data.edits);
+                const data = await deps.readData(connection, plan, { samples: true });
+                return buildReport(plan, { source: row.name, facts: data.facts, samples: data.samples, edits: editCount(parsed.data.edits) });
+            });
+            res.json({ report });
+        } catch (error) {
+            res.status(502).json({ error: `Could not build the report: ${error instanceof Error ? error.message : String(error)}` });
+        }
+    }));
+
+    /** The opening paragraph of the report, written by the model from the report's figures (never from row values) and sent back to be shown as AI commentary. */
+    router.post("/oracle-to-postgres/report/summary", handle(async (req, res) => {
+        const parsed = sourceSchema.safeParse(req.body);
+        if (!parsed.success) return res.status(400).json({ error: "Say which Oracle database to summarize." });
+        const row = await oracleSource(req, res, parsed.data.sourceConnectionId);
+        if (!row) return;
+        const controller = new AbortController();
+        res.once("close", () => {
+            if (!res.writableEnded) controller.abort();
+        });
+        try {
+            const report = await withOracle(oracleConfigOf(row), async (connection) => {
+                const plan = await deps.plan(connection, parsed.data.edits);
+                const data = await deps.readData(connection, plan, { samples: false });
+                return buildReport(plan, { source: row.name, facts: data.facts, edits: editCount(parsed.data.edits) });
+            });
+            const answer = await deps.summary({ digest: digestForSummary(report) }, controller.signal);
+            if (controller.signal.aborted || res.writableEnded) return;
+            res.json({ summary: answer.result.summary, model: answer.model, reportHash: report.hash });
+        } catch (error) {
+            if (controller.signal.aborted || res.writableEnded) return;
+            const text = error instanceof Error ? error.message : String(error);
+            const status = error instanceof ModelPolicyError ? 403 : error instanceof AiNotConfiguredError ? 503 : 502;
+            res.status(status).json({ error: status === 502 ? `CosmicQuery could not write the summary: ${text}` : text });
         }
     }));
 
@@ -201,6 +263,18 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
             return res.status(502).json({ error: `Could not read the Oracle database: ${error instanceof Error ? error.message : String(error)}` });
         }
         if (plan.problems.length > 0) return res.status(422).json({ error: `This Oracle database cannot be migrated as it is: ${plan.problems.slice(0, 5).join(" ")}${plan.problems.length > 5 ? ` (and ${plan.problems.length - 5} more)` : ""}`, problems: plan.problems });
+        // an approval is of one report: if what the person read is not what would run now (an edit, or the data moved), it is refused
+        let approval: { reportHash: string; approvedAt: string } | undefined;
+        if (parsed.data.approval) {
+            let current: MigrationReport;
+            try {
+                current = await withOracle(oracleConfigOf(source), async (connection) => buildReport(plan, { source: source.name, facts: (await deps.readData(connection, plan, { samples: false })).facts, edits: editCount(edits) }));
+            } catch (error) {
+                return res.status(502).json({ error: `Could not check the report you approved: ${error instanceof Error ? error.message : String(error)}` });
+            }
+            if (current.hash !== parsed.data.approval.reportHash) return res.status(409).json({ code: "report-changed", error: "The report changed since you approved it (the plan or the data is not what you read). Read the new report and approve it again." });
+            approval = { reportHash: current.hash, approvedAt: new Date().toISOString() };
+        }
         // what the plan's own queries found on the Oracle data is decided here, from the data as it is now, not from what the page last showed
         const lossy = failedChecks(plan);
         if (lossy.length > 0 && !acceptLoss) {
@@ -258,7 +332,7 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
             const cleanup = await drop().then(() => "", (dropError) => ` The new database could not be removed again (${dropError instanceof Error ? dropError.message : String(dropError)}); drop it by hand.`);
             return res.status(502).json({ error: `The migration did not complete and nothing was kept. ${error instanceof Error ? error.message : String(error)}${cleanup}` });
         }
-        res.status(201).json({ connection: toPublicConnection(row), tables: result.tables, verification: result.verification, statementsRun: plan.createSql.length + plan.linkSql.length });
+        res.status(201).json({ connection: toPublicConnection(row), tables: result.tables, verification: result.verification, statementsRun: plan.createSql.length + plan.linkSql.length, approval: approval ?? null });
     }));
 
     return router;

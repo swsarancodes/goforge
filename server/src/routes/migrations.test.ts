@@ -106,3 +106,26 @@ describe("POST /api/migrations/oracle-to-postgres/verify", () => {
         expect(String(unreachable.body.error)).toMatch(/^Could not compare the two databases/);
     });
 });
+
+describe("the report routes", () => {
+    it("need an Oracle database to report on", async () => {
+        for (const url of ["/api/migrations/oracle-to-postgres/report", "/api/migrations/oracle-to-postgres/report/summary"]) {
+            expect((await post(url, {})).status, url).toBe(400);
+            expect((await post(url, { sourceConnectionId: "no-such-id" })).status, url).toBe(404);
+            const wrong = await post(url, { sourceConnectionId: postgresId });
+            expect(wrong.status, url).toBe(400);
+            expect(String(wrong.body.error), url).toContain("not an Oracle database");
+        }
+    });
+
+    it("say so when the Oracle database cannot be reached", async () => {
+        const report = await post("/api/migrations/oracle-to-postgres/report", { sourceConnectionId: oracleId });
+        expect(report.status).toBe(502);
+        expect(String(report.body.error)).toMatch(/^Could not build the report/);
+    });
+
+    it("refuse an approval that is not a fingerprint of a report", async () => {
+        const bad = await post("/api/migrations/oracle-to-postgres", { sourceConnectionId: oracleId, name: "x", target: { kind: "cloud" }, approval: { reportHash: "not a hash" } });
+        expect(bad.status).toBe(400);
+    });
+});
