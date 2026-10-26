@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { foldName, pgDefaultOf, pgTypeOf, planMigration, type OracleColumn, type OracleTable } from "./oracle-migration.js";
+import { foldName, pgDefaultOf, pgTypeOf, planMigration, sameDateText, type OracleColumn, type OracleTable } from "./oracle-migration.js";
 
 const col = (name: string, type: string, extra: Partial<OracleColumn> = {}): OracleColumn => ({ name, type, charLength: null, dataLength: null, precision: null, scale: null, nullable: true, defaultValue: null, ...extra });
 
@@ -123,5 +123,22 @@ describe("planMigration", () => {
 
     it("says an empty schema is a problem", () => {
         expect(planMigration([], new Map()).problems).toEqual(["The schema has no tables."]);
+    });
+});
+
+describe("comparing a date or timestamp written by Oracle with one written by PostgreSQL", () => {
+    it("treats the same instant as the same, whatever trailing zeros each writes", () => {
+        expect(sameDateText("2024-01-04 14:19:27.460", "2024-01-04 14:19:27.46")).toBe(true);
+        expect(sameDateText("2024-01-04 14:19:27.000", "2024-01-04 14:19:27")).toBe(true);
+        expect(sameDateText("2024-01-04 14:19:27.100", "2024-01-04 14:19:27.1")).toBe(true);
+        expect(sameDateText("2024-01-04 14:19:27", "2024-01-04 14:19:27")).toBe(true);
+        expect(sameDateText("2024-01-04", "2024-01-04")).toBe(true);
+        expect(sameDateText(null, null)).toBe(true);
+    });
+    it("still tells different instants apart", () => {
+        expect(sameDateText("2024-01-04 14:19:27.460", "2024-01-04 14:19:27.47")).toBe(false);
+        expect(sameDateText("2024-01-04 14:19:27.005", "2024-01-04 14:19:27.05")).toBe(false);
+        expect(sameDateText("2024-01-04 14:19:27.500", "2024-01-04 14:19:27")).toBe(false);
+        expect(sameDateText("2024-01-04 14:19:27", null)).toBe(false);
     });
 });

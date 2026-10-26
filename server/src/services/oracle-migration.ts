@@ -505,6 +505,13 @@ const sameNumber = (a: string | null, b: string | null): boolean => {
     return Math.abs(x - y) <= 1e-9 * Math.max(1, Math.abs(x), Math.abs(y));
 };
 
+/** Two renderings of the same instant or day: Oracle writes the fraction of a second to its full precision (27.460), PostgreSQL drops trailing zeros (27.46) and a whole second has no fraction at all. */
+export const sameDateText = (a: string | null, b: string | null): boolean => {
+    if (a === null || b === null) return a === b;
+    const trim = (text: string) => text.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+    return trim(a) === trim(b);
+};
+
 const SAMPLE_ROWS = 5;
 const asText = (cell: unknown): string | null => (cell === null || cell === undefined ? null : Buffer.isBuffer(cell) ? `\\x${cell.toString("hex")}` : String(cell));
 
@@ -537,7 +544,7 @@ export async function verifyTable(oracle: oracledb.Connection, pg: Client, table
         postgresExpression: entry.postgresExpression,
         oracle: o[at],
         postgres: p[at],
-        match: entry.how === "number" ? sameNumber(o[at], p[at]) : o[at] === p[at],
+        match: entry.how === "number" ? sameNumber(o[at], p[at]) : sameDateText(o[at], p[at]),
     }));
     const mismatches = checks.filter((check) => !check.match).map((check) => `${check.label}: Oracle ${check.oracle}, PostgreSQL ${check.postgres}`);
 
@@ -558,7 +565,7 @@ export async function verifyTable(oracle: oracledb.Connection, pg: Client, table
             oracleRows.forEach((row, r) =>
                 table.columns.forEach((column, c) => {
                     if (column.kind === "other") return;
-                    const equal = column.kind === "number" ? sameNumber(row[c], postgresRows[r][c]) : row[c] === postgresRows[r][c];
+                    const equal = column.kind === "number" ? sameNumber(row[c], postgresRows[r][c]) : column.kind === "date" ? sameDateText(row[c], postgresRows[r][c]) : row[c] === postgresRows[r][c];
                     if (!equal) {
                         same = false;
                         mismatches.push(`sample row ${r + 1}, ${column.pgName}: Oracle ${row[c]}, PostgreSQL ${postgresRows[r][c]}`);
