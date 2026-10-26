@@ -1,82 +1,66 @@
-# QueryShift demo runbook (10 minutes)
+# QueryShift demo runbook (Tue 27 Oct, 10 minutes)
 
-Every command below was run for this document on 25 Oct 2026 from a clone of `main` (Node 24, macOS). The outputs quoted are the real ones. Nothing here needs a database server: the target is PostgreSQL running in the process. The only things that need more are the model (a key in `server/.env`) and, for one optional step, Docker.
+Everything below runs from the repository root. The deterministic commands need no key and no network. The two live-model commands need `OPENAI_API_KEY` in `server/.env`.
 
-## Before you start (2 minutes, not on the clock)
+## The day before
 
-```bash
-git clone https://github.com/swsarancodes/goforge && cd goforge
-npm install && npm install --prefix server
-npm run queryshift            # exits 0: "Every candidate was judged as its case says"
-```
+1. Check out the tagged commit in a fresh folder and run `npm install && npm install --prefix server` once (about 70 s).
+2. Put the organizers' key in `server/.env`, then `npm run queryshift:check-model`. It must end with "The model answered in the shape the loop needs." Do not show `server/.env` on screen.
+3. Run each live command in the table below once, with `--out` pointing at a scratch folder. Note the real timings. Without a model, every command here takes 4 to 8 s on the author's machine.
+4. Open these in tabs, ready to switch to: `docs/queryshift-architecture.svg`, `queryshift/reports/case-02.report.md`, `queryshift/reports/case-03.report.md`.
+5. Optional, for the 30-second Oracle step below: `docker start goforge-oracle-dev` (or `docker run -d --name goforge-oracle -p 127.0.0.1:1521:1521 -e ORACLE_PASSWORD=<choose one> gvenzl/oracle-free:23-slim-faststart` and wait about a minute).
+6. Record the whole run (screen and voice) as the backup, and link it from `SUBMISSION.md`.
 
-- Model key in `server/.env` (`OPENAI_API_KEY=...`), then `npm run queryshift:check-model` should answer. If the organizers' endpoint or model differs, set `OPENAI_BASE_URL` / `OPENAI_MODEL` and say so in the demo.
-- Open `docs/queryshift-architecture.svg` and `queryshift/cases/case-01-outer-join-active-policies/legacy_query.sql` in two tabs.
-- Optional (step 5): `docker start goforge-oracle-dev` or `docker run -d --name goforge-oracle -p 127.0.0.1:1521:1521 -e ORACLE_PASSWORD=choose-one gvenzl/oracle-free:23-slim-faststart` and wait about a minute.
-- If the model or the network fails on the day, everything except step 4b still runs, and `queryshift/reports/*.loop.json` holds the traces of the real-model run.
+**Never point a demo run's `--out` at `queryshift/reports`.** That folder holds the recordings that `--proposer replay` plays back and that the submission cites. A live run that fails (network, quota) would overwrite a good recording with a `proposer_failed` trace. Use `/tmp/qs-demo` for the demo. Write to `queryshift/reports` only when re-recording on purpose, and review the diff before committing.
 
-## 1. The problem and why it matters (1 minute)
+## The ten minutes
 
-Show `legacy_query.sql` of case 1 (an Oracle `(+)` outer join with a date test on the outer table). Say: the translation that merely *runs* is the dangerous one. Moving the date test from the join into `WHERE` still executes, and silently drops every customer without a recent policy: **7 customers expected, 4 returned.** "The expensive bug is not the query that fails. It is the query that succeeds and gives the wrong number."
+| Time | Show | Command | What to point at |
+|---|---|---|---|
+| 0:00 | The problem | `npm run queryshift -- --engine --case queryshift/cases/case-02-null-and-aggregation-claims` | GoForge's own rule engine converts the Oracle query, PostgreSQL runs it, and it is wrong: "4 expected row(s) missing, 4 unexpected". It warned about both causes and fixed neither. Running without error is not correctness. |
+| 1:00 | Architecture | `docs/queryshift-architecture.svg` | One model decision (propose a correction). Everything that decides (guard, read-only run, comparison, held-out data, static checks, budget) is deterministic. |
+| 2:00 | A modernization that works | `npm run queryshift -- --loop --proposer model --case queryshift/cases/case-03-date-time-claims-window --out /tmp/qs-demo` | Attempt 0: PostgreSQL rejects `TRUNC` on a timestamp. Attempt 1 (model): passes the primary data, then the held-out data. Open `/tmp/qs-demo/case-03.report.md`. The model call took 12.6 s in the recorded run, on top of the start-up. |
+| 5:00 | The silent failure and its recovery | `npm run queryshift -- --loop --proposer model --case queryshift/cases/case-02-null-and-aggregation-claims --out /tmp/qs-demo` | Attempt 0 runs and returns six plausible rows. The comparator says which columns differ (`open_ratio`, `contact_label`). The static checks flagged both constructs from the query text alone. One correction, then both datasets match. The model call took 5.0 s in the recorded run. |
+| 6:30 | Wrong answers are caught | `npm run queryshift` | 19 candidates, each judged as its case says: the correct translation passes, the silent ones (`silent_where_filter`, `silent_concat_null`, `silent_between_without_trunc`) and the reversed-order ones fail, and the `overfit_*` ones pass the first dataset and fail the held-out one. |
+| 7:30 | When it does not know | `npm run queryshift -- --loop` | With no model, cases 2 and 3 end in `NEEDS HUMAN REVIEW` with the reason and the evidence. This is the outcome the system gives instead of guessing. |
+| 8:30 | Questions | | See below. |
 
-## 2. Architecture (1 minute)
-
-Show the diagram. Say: legacy SQL and a column mapping go in; GoForge's rule engine converts what it can and reports what it cannot; every candidate runs **read-only** in PostgreSQL itself (PGlite) under a wall-clock limit; the answer is compared with a reference result by a deterministic comparator (multiset, NULL equals only NULL, numbers to 6 decimals, timestamps keep their time of day); nine static checks read the SQL for known traps; a bounded loop (at most 3 corrections) feeds the *measured difference* back to a model, and ends in `verified` or `needs_human_review`. The model proposes; nothing it says counts as proof.
-
-## 3. A successful modernization (3 minutes)
-
-```bash
-npm run queryshift -- --engine --show-sql      # what the rule engine alone makes of each legacy query
-```
-
-For case 1 it prints the converted query and `PASS    rule engine: Matches the reference result and all 3 invariant(s) hold.` The `(+)` join became a `LEFT JOIN` with the date and status tests **in the `ON` clause**, `NVL` became `COALESCE`. Point at the three invariants (one row per customer, policy count conserved, premium conserved): they are separate SQL written independently of the translation.
+**Optional, 30 seconds, if Oracle is running (put it after the 6:30 step):**
 
 ```bash
-npm run queryshift -- --loop                   # no model: the rule engine, mapping, measurement
+ORACLE_ADMIN_URL=oracle://system:<password>@127.0.0.1:1521/FREEPDB1 npm run queryshift:oracle-check
 ```
 
-Case 1: `VERIFIED (primary and held-out data)`. Say what held-out means: a second dataset with its own reference that no model ever sees evidence from, so a query fitted to the visible rows fails there.
+It runs the three legacy queries on a real Oracle Database with the same data and compares the answer with the reference results: `6 of 6 references confirmed by Oracle 23.26.3.0.0; disagreements: 0` (the saved result is `queryshift/reports/oracle-check.json`). The references were first written by hand; this takes the single author's reading of Oracle out of the proof.
 
-## 4. The silent failure and the recovery (2 minutes)
+What you will see for case 2 (a live run differs only in the label: `attempt 1 (model)`):
 
-**a. The failure.**
-
-```bash
-npm run queryshift -- --case queryshift/cases/case-01-outer-join-active-policies \
-  --candidate queryshift/cases/case-01-outer-join-active-policies/candidates/silent_where_filter.sql
+```
+case-02  Claims summary per customer (NULL, type and aggregation semantics)
+  VERIFIED (primary and held-out data)
+    attempt 0 (rule-engine): FAIL    4 expected row(s) missing, 4 unexpected row(s) returned.
+      static (warning): null_in_concatenation: || with a nullable column
+      static (warning): integer_division: Integer division
+    attempt 1 (model): PASS    Matches the reference result and all 3 invariant(s) hold.
+      held-out data: PASS    Matches the reference result and all 3 invariant(s) hold.
 ```
 
-Output: `FAIL primary data: 3 expected row(s) missing ... Invariant broken: one row per customer (4 row(s) returned, 7 expected)`, with the missing rows listed (`Eli Park`, `Farah Khan`, `Gita Nair`). It executed without error. Only the comparison and the invariant caught it.
+## If something goes wrong
 
-**b. The recovery, with the model** (the same loop on all three cases, 22 s on the author's machine):
-
-```bash
-npm run queryshift -- --loop --proposer model
-```
-
-Last real run: case 1 verified at attempt 0; **case 2** (NULL in `||`, integer division) and **case 3** (`TRUNC` on a date, month-end arithmetic) fail at attempt 0 (a wrong result and a PostgreSQL error), the model is shown the *measured* difference, and attempt 1 passes on both datasets: `Every case was verified.` Without a model the same command ends `NEEDS HUMAN REVIEW` with `[no_proposer]` and exits 1, which is the other half of the story: it never claims what it cannot prove.
-
-## 5. Evidence, safety and limits (1 minute)
-
-- `queryshift/reports/*.loop.json`: every attempt with its SQL, verdict, evidence, static findings, held-out result and model usage. Synthetic values only.
-- `SUBMISSION.md`: the claims, each pointing at evidence, and what was **not** demonstrated.
-- Safety, in one breath: one `SELECT` only (a guard), read-only execution, a wall-clock limit that terminates a runaway query, at most 3 corrections, synthetic data only, the key never leaves `server/.env`.
-- **Optional, 30 seconds, if Oracle is running:** `ORACLE_ADMIN_URL=oracle://system:<password>@127.0.0.1:1521/FREEPDB1 npm run queryshift:oracle-check`. It runs the three legacy queries on a **real Oracle Database** with the same data and compares with the references: `6 of 6 references confirmed by Oracle 23.26.3.0.0; disagreements: 0`. The references were first written by hand; this is what takes the single author's reading of Oracle out of the proof.
-
-## 6. Questions (2 minutes): honest answers
-
-- *Is the reference result proof?* It is the agreed baseline, derived by hand and then confirmed against Oracle Database 23.26 Free on both datasets. It is not proof for all data: two small datasets can miss a case.
-- *Does it work on other queries?* Three cases, one three-table schema, single `SELECT`s, Oracle to PostgreSQL. The rule engine has more dialects (SQL Server, MySQL, DB2) and a 351-query corpus checked against PostgreSQL, but only Oracle is demonstrated here.
-- *How many model runs?* One real run of the three cases (22 s). It is not a statistic. Models vary; the loop's guarantee is that a result is only `verified` if the comparator and invariants say so.
-- *What did you build during the event?* `queryshift/`, the correction call and these documents. GoForge, its rule engine and corpus existed before (see "Reused components" in `SUBMISSION.md`); the repository also holds other work from the event (Oracle databases in the app, Schema Change) that this entry does not use.
-- *What if the model fits the answer to the visible rows?* The held-out dataset exists for that, and each case has an `overfit_*` candidate that only the held-out data catches. A literal fitted into the SQL is also flagged by a static check.
-- *What about the model's confidence?* There is none: no score from the model is used.
-
-## If something goes wrong on the day
-
-| Problem | Do this |
+| What happens | Do this |
 |---|---|
-| Model or network down | Skip 4b. Say the loop ends in `needs_human_review` without a proposer, and show `queryshift/reports/case-02.loop.json` for the real run. |
-| `npm run queryshift` fails | `npx vitest run queryshift` shows which part; the fresh-clone result is in `SUBMISSION.md`. |
-| Oracle not running | Skip the optional step; show `queryshift/reports/oracle-check.json`. |
-| Over time | Cut section 3's `--engine` run; keep `--loop`, the failing candidate and the model run. |
+| The model call fails (network, key, quota) | Say so, then run the same command with `--proposer replay` instead of `--proposer model`. It plays back the answers recorded in `queryshift/reports` and runs every query again live. The output says `replay of the recorded gpt-5.6-luna, not a live call`. **Say that it is a replay.** |
+| The model gives a different answer than in the recording | Show it. If it is wrong, the loop either corrects it again or ends in `NEEDS HUMAN REVIEW` with the evidence, which is the point of the design. Do not re-run until it passes without saying you did. |
+| A command is quiet for a few seconds | Each command starts PostgreSQL (WebAssembly) in the process and builds the databases before the first line appears. Say what is happening while it loads. |
+| Oracle is not running | Skip the optional step and show `queryshift/reports/oracle-check.json`. |
+| Nothing works | Play the backup recording. `queryshift/reports/case-0N.report.md` shows the same run as text. |
+
+## Questions to expect
+
+- **How do you know the reference result is right?** It was derived by hand from documented Oracle behaviour, then checked against a real Oracle Database 23.26 Free: the same data, the three legacy queries, compared with the harness's own comparator, 6 of 6 identical (`npm run queryshift:oracle-check`, result in `queryshift/reports/oracle-check.json`). That is Oracle 23ai, not an older release, on two small datasets, and it needs Docker, so it is not in the default run. The correct translations, written separately, had reproduced all six references on the first run.
+- **Is "verified" a proof?** No. It means the query matched the reference result on two datasets (row order included when the case says so), every invariant held, and no blocking static finding remained. Two small datasets can still miss a case.
+- **What stops the model from fitting the query to the evidence?** Held-out data it is never shown, a check that refuses a query that reproduces the evidence, and a blocking static finding for a comparison with a value the legacy query never contained. Each case ships a fitted query that only the held-out data catches.
+- **What does the model see?** The legacy query, table and column names and types, the mapping, the previous query and the measured evidence (synthetic rows). The exact prompt is in each new trace and in the report (`<details>` block).
+- **What happens with bind variables?** If the case declares their values (`bindValues` in `case.json`), they are written into the query and it is verified like any other. If it does not, the case goes to a human (`bind_parameters`); no model is asked.
+- **Other databases?** The checks and the references are Oracle-specific. A case that names another source dialect is refused with an explanation. The rule engine itself handles SQL Server, MySQL and DB2, but nothing here proves those.
+- **What existed before the event?** GoForge, its rule engine and its AI layer. See "Reused components" in `SUBMISSION.md`. The repository also holds other work from the event (Oracle databases in the app, Schema Change) that this entry does not use; `SUBMISSION.md` lists it.

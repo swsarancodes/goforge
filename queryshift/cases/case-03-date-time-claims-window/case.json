@@ -53,6 +53,13 @@
       ]
     },
     {
+      "file": "candidates/reversed_order.sql",
+      "expect": "fail",
+      "why": "The same five claims in the opposite order: the outer ORDER BY is reversed after the top-5 is taken. Same multiset of rows, so only the row-order check sees it.",
+      "catchBy": "primary",
+      "flags": []
+    },
+    {
       "file": "candidates/overfit_special_cased_review_date.sql",
       "expect": "fail",
       "catchBy": "heldout",

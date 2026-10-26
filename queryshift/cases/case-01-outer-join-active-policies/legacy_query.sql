@@ -5,7 +5,7 @@ SELECT c.CUST_ID,
 FROM CUST_MST c,
      POLCY_HDR p
 WHERE c.CUST_ID = p.CUST_ID(+)
-  AND p.EFF_DT(+) >= TO_DATE('2026-01-01', 'YYYY-MM-DD')
+  AND p.EFF_DT(+) >= :cutoff
   AND p.STAT_CD(+) = 'AC'
 GROUP BY c.CUST_ID, c.CUST_NM
 ORDER BY c.CUST_ID

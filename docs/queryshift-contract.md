@@ -78,6 +78,15 @@ The GoForge application (diagram studio, SQL editor, Query Modernizer rule engin
 
 The smallest end-to-end flow, working now: `npm run queryshift -- --loop` converts each legacy query with the rule engine, renames it to the target tables from the mapping, runs it read-only, and either verifies it or ends in `needs_human_review` with the measured evidence (a query is verified only if it also matches on the held-out data) (today, without a model: case 1 verified on both datasets; cases 2 and 3 need a human, and the evidence points at the exact columns and constructs). With a model configured the corrections run through GoForge's AI layer. And `npm run queryshift` loads the synthetic insurance database, runs every known candidate for the three cases read-only, and prints a verdict per candidate with the missing and unexpected rows and the broken invariants; the correct translation of each case passes and every silent failure is caught. `npm run queryshift -- --engine` judges GoForge's own rule engine the same way (today: case 1 passes, case 2 fails, case 3 errors), which is the baseline the agent loop has to improve.
 
+## Changes after the contract (25 Oct 2026)
+
+Made while hardening the proof. None widens the scope above; the text above is left as it was written.
+
+- **Row order is compared in all three cases** (`orderSensitive`; each legacy query ends in a total `ORDER BY`), and every case has a candidate that returns the right rows in the wrong order and must fail. The comparison method above is unchanged: order is ignored unless a case says otherwise.
+- **Bind variables.** A case may declare the values its reference result was produced with (`bindValues`); they are written into the legacy query before anything reads it, and case 1 now uses `:cutoff` that way. A legacy query with a bind variable the case gives no value for still goes to human review (`bind_parameters`), and no model is asked.
+- **Source dialect.** A case that names a source dialect other than Oracle is refused when it is loaded: the static checks and the reference results only cover Oracle.
+- **Evidence.** Traces keep the exact prompt that was sent to the model; recorded corrections can be played back offline, labelled as a replay (`--proposer replay`); each case gets a Markdown validation report.
+
 ## Organizer decision
 
 - Status: Pending

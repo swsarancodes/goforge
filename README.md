@@ -1,5 +1,7 @@
 # Welcome to GoForge ⚡
 
+> **QueryShift hackathon submission (October 2026).** The submitted work is the validation harness in [`queryshift/`](queryshift/README.md). It converts an Oracle query to PostgreSQL, runs the result read-only on synthetic data, compares it with a reference result on two datasets, and either calls the query verified or hands it to a person with the evidence. Start with [SUBMISSION.md](SUBMISSION.md). To run it without a database server or a model key: `npm install && npm install --prefix server && npm run queryshift`. The rest of this README describes GoForge, the application the harness is built on.
+
 GoForge is a **free, open-source database schema diagram generator** — design your database visually and export it as production-ready SQL DDL in your preferred dialect: **MySQL, PostgreSQL, MariaDB, SQLite, Oracle, or SQL Server**.
 
 ## Main features

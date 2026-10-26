@@ -1,10 +1,18 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { parseBindValues, substituteBinds, type BindValues } from "./binds";
 import { compareResults, parseExpected, type Category, type Comparison, type ExpectedTable } from "./compare";
 import { analyzeCandidate, type Finding } from "./semantic";
 import { CandidateRefused, CandidateTimeout, createDatabase, describeSchema, executeCandidate, scalar, type Database } from "./database";
 
 export const RISK_CATEGORIES = ["date_or_time_semantics", "null_type_or_aggregation_semantics", "join_semantics", "silent_executable_failure"] as const;
+
+/**
+ * The one source dialect the harness reads end to end. The rule engine also converts mssql, mysql and db2, but the static checks
+ * (semantic.ts) describe Oracle's behaviour (|| and NULL, (+), NVL, TRUNC, ADD_MONTHS). A case in another dialect would be judged by
+ * checks that do not apply to it and could still come out "verified", so it is refused when the case is read.
+ */
+export const SUPPORTED_DIALECTS = ["oracle"] as const;
 
 export type Invariant =
     | { name: string; kind: "row_count_equals"; sql: string }
@@ -16,11 +24,14 @@ export interface CaseDefinition {
     businessPurpose: string;
     difficulty: "easy" | "medium" | "hard";
     risks: (typeof RISK_CATEGORIES)[number][];
-    legacyDialect: string;
+    legacyDialect: (typeof SUPPORTED_DIALECTS)[number];
     legacyQuery: string;
     expected: string;
     domain: string;
+    /** Compare the order of the rows too, not just the set. True when the legacy query's ORDER BY fully determines the order. */
     orderSensitive: boolean;
+    /** The values the reference result was produced with, for the bind variables the legacy query has (`{}` when it has none). */
+    bindValues: BindValues;
     invariants: Invariant[];
     /** Reference result on the held-out data (domain/seed_heldout.sql). Absent: the case has no held-out check. */
     heldOutExpected?: string;
@@ -41,6 +52,9 @@ export function parseCaseDefinition(raw: unknown, where = "case.json"): CaseDefi
     if (!["easy", "medium", "hard"].includes(difficulty)) fail(`"difficulty" must be easy, medium or hard`);
     const risks = list("risks");
     if (risks.length === 0 || !risks.every((risk) => (RISK_CATEGORIES as readonly string[]).includes(risk as string))) fail(`"risks" must be a non-empty list of: ${RISK_CATEGORIES.join(", ")}`);
+    const legacyDialect = text("legacyDialect");
+    if (!(SUPPORTED_DIALECTS as readonly string[]).includes(legacyDialect))
+        fail(`"legacyDialect" is "${legacyDialect}", but this harness supports only: ${SUPPORTED_DIALECTS.join(", ")}. The static checks describe Oracle's behaviour, so a verified result for another dialect would rest on fewer checks than it appears to.`);
 
     const invariants = list("invariants").map((item, index): Invariant => {
         const entry = item as Record<string, unknown>;
@@ -65,11 +79,12 @@ export function parseCaseDefinition(raw: unknown, where = "case.json"): CaseDefi
         businessPurpose: text("businessPurpose"),
         difficulty: difficulty as CaseDefinition["difficulty"],
         risks: risks as CaseDefinition["risks"],
-        legacyDialect: text("legacyDialect"),
+        legacyDialect: legacyDialect as CaseDefinition["legacyDialect"],
         legacyQuery: text("legacyQuery"),
         expected: text("expected"),
         domain: typeof value.domain === "string" ? value.domain : "../../domain",
         orderSensitive: value.orderSensitive === true,
+        bindValues: parseBindValues(value.bindValues, fail),
         heldOutExpected: typeof value.heldOutExpected === "string" ? value.heldOutExpected : undefined,
         invariants,
         candidates,
@@ -79,7 +94,10 @@ export function parseCaseDefinition(raw: unknown, where = "case.json"): CaseDefi
 export interface LoadedCase {
     dir: string;
     definition: CaseDefinition;
+    /** The legacy query with the case's bind values written in as literals: what the rule engine converts, the static checks read and the model is shown. */
     legacySql: string;
+    /** The legacy query as its file has it, bind variables and all. Equal to `legacySql` when the case declares none. */
+    legacyTemplate: string;
     expected: ExpectedTable;
     schemaSql: string;
     seedSql: string;
@@ -91,10 +109,14 @@ export function loadCase(dir: string): LoadedCase {
     const root = resolve(dir);
     const definition = parseCaseDefinition(JSON.parse(readFileSync(resolve(root, "case.json"), "utf8")), `${dir}/case.json`);
     const domain = resolve(root, definition.domain);
+    const legacyTemplate = readFileSync(resolve(root, definition.legacyQuery), "utf8");
+    const bound = substituteBinds(legacyTemplate, definition.bindValues);
+    if (bound.unused.length > 0) throw new Error(`${dir}/case.json: bindValues declares ${bound.unused.map((name) => `:${name}`).join(", ")}, which ${definition.legacyQuery} never uses`);
     return {
         dir: root,
         definition,
-        legacySql: readFileSync(resolve(root, definition.legacyQuery), "utf8"),
+        legacySql: bound.sql,
+        legacyTemplate,
         expected: parseExpected(readFileSync(resolve(root, definition.expected), "utf8")),
         schemaSql: readFileSync(resolve(domain, "target_schema.sql"), "utf8"),
         seedSql: readFileSync(resolve(domain, "seed_target.sql"), "utf8"),

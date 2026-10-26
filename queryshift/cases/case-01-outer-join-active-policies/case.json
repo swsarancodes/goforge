@@ -11,7 +11,13 @@
   "legacyDialect": "oracle",
   "legacyQuery": "legacy_query.sql",
   "expected": "expected_result.csv",
-  "orderSensitive": false,
+  "orderSensitive": true,
+  "bindValues": {
+    "cutoff": {
+      "type": "date",
+      "value": "2026-01-01"
+    }
+  },
   "invariants": [
     {
       "name": "one row per customer",
@@ -64,6 +70,13 @@
       "flags": [
         "outer_join_filtered_in_where"
       ]
+    },
+    {
+      "file": "candidates/reversed_order.sql",
+      "expect": "fail",
+      "why": "The right rows in the wrong order: ORDER BY customer_id DESC where the legacy query sorts ascending. Same multiset of rows, so only the row-order check sees it.",
+      "catchBy": "primary",
+      "flags": []
     },
     {
       "file": "candidates/overfit_hardcoded_customers.sql",

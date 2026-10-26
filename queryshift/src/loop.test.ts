@@ -1,13 +1,17 @@
-import { readFileSync, readdirSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { relative, resolve } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { installOpenAiBackend } from "../../server/src/ai/openai";
 import { DEFAULT_SETTINGS } from "../../server/src/ai/policy";
 import { getAuditStore, installAiStores } from "../../server/src/ai/provider";
+import { substituteBinds } from "./binds";
 import { databaseFor, databasesFor, loadCase, type LoadedCase } from "./case";
 import type { Database } from "./database";
 import { hardCodingSuspicion, runLoop, type ProposalInput, type Proposer } from "./loop";
 import { modelProposer } from "./model-proposer";
+import { readTrace, replayProposer, traceFile } from "./replay-proposer";
+import { renderCaseReport } from "./report";
 
 // Each of these starts PostgreSQL workers (a few hundred ms to a second or two each, more when the whole suite runs in parallel).
 vi.setConfig({ testTimeout: 60_000, hookTimeout: 60_000 });
@@ -301,6 +305,41 @@ describe("the wall-clock limit in the loop", () => {
     });
 });
 
+describe("bind variables", () => {
+    // Case 1's file says `>= :cutoff`; case.json says the reference result was produced with 2026-01-01.
+    it("reads a declared bind variable as the value the case gives it, and verifies without a model (case 1)", async () => {
+        expect(case1.legacyTemplate).toContain(":cutoff");
+        expect(case1.legacySql).not.toContain(":cutoff");
+        const result = await run(case1, d1);
+        expect(result.outcome).toBe("verified");
+        expect(result.reasons).toEqual([]);
+        expect(result.attempts).toHaveLength(1);
+        expect(result.attempts[0].sql).toContain("TO_DATE('2026-01-01', 'YYYY-MM-DD')");
+    });
+
+    it("sends a bind variable the case gives no value for to a human, and asks no model", async () => {
+        const proposer = scripted([candidate(case1, "correct.sql")]);
+        const result = await run({ ...case1, legacySql: case1.legacyTemplate }, d1, { proposer });
+        expect(result.outcome).toBe("needs_human_review");
+        expect(result.reasons.map((reason) => reason.code)).toEqual(["bind_parameters"]);
+        expect(result.reasons[0].message).toContain(":cutoff");
+        expect(result.reasons[0].message).toContain("bindValues");
+        // PostgreSQL cannot run `:cutoff`, and the loop does not pretend otherwise or try to correct around it
+        expect(result.attempts).toHaveLength(1);
+        expect(result.attempts[0].verdict).toBe("error");
+        expect(proposer.asked).toHaveLength(0);
+    });
+
+    it("measures against the declared value: another value gives another result, which is not the reference", async () => {
+        const june = { type: "date" as const, value: "2026-06-01" };
+        const result = await run({ ...case1, legacySql: substituteBinds(case1.legacyTemplate, { cutoff: june }).sql }, d1);
+        expect(result.outcome).toBe("needs_human_review");
+        expect(result.reasons.map((reason) => reason.code)).toEqual(["no_proposer"]);
+        expect(result.attempts[0].verdict).toBe("fail");
+        expect(result.attempts[0].sql).toContain("2026-06-01");
+    });
+});
+
 describe("hardCodingSuspicion", () => {
     const schema = [{ name: "customers", columns: [{ name: "customer_name", type: "text", nullable: false }] }];
     const evidence = { kind: "mismatch" as const, message: "", expectedColumns: ["a"], missingRows: [["Asha"], ["Brightline"], ["Carlos"], ["Dunmore"]], unexpectedRows: [], missingCount: 4, unexpectedCount: 0, differingColumns: [], brokenInvariants: [], staticFindings: [] };
@@ -361,6 +400,19 @@ describe("through the real model path (stand-in OpenAI)", () => {
         expect(result.attempts[1].proposal?.auditId).toBeGreaterThan(0);
     });
 
+    it("keeps the prompt itself in the trace: the same instructions and input the provider received", async () => {
+        stub(candidate(case2, "correct.sql"));
+        const result = await run(case2, d2, { proposer: modelProposer() });
+        const recorded = JSON.parse(JSON.stringify(result)).attempts[1].proposal.prompt;
+        expect(recorded.instructions).toBe(sent[0].instructions);
+        expect(recorded.input).toEqual(JSON.parse(sent[0].input));
+        expect(recorded.sha256).toMatch(/^[0-9a-f]{64}$/);
+        // what is recorded is no more than what was sent: nothing held out, and no credential
+        const everything = JSON.stringify(recorded);
+        for (const name of ["Ines Alvarez", "Jonas Weber", "Olga Petrov"]) expect(everything).not.toContain(name);
+        expect(everything).not.toMatch(/sk-[A-Za-z0-9]|OPENAI_API_KEY/);
+    });
+
     it("sends the model's invalid answer to a human, not into the database", async () => {
         installOpenAiBackend({
             credentials: async () => ({ found: true, source: "OPENAI_API_KEY" }),
@@ -377,6 +429,53 @@ describe("through the real model path (stand-in OpenAI)", () => {
         const result = await run(case2, d2, { proposer: modelProposer() });
         expect(result.reasons[0]).toMatchObject({ code: "proposer_failed" });
         expect(result.reasons[0].message).toMatch(/OPENAI_API_KEY/);
+    });
+});
+
+describe("replaying the committed recordings", () => {
+    const reports = resolve(import.meta.dirname, "../reports");
+
+    // Cases 2 and 3 are the ones whose recording holds a correction. Which databases they use is looked up when the test runs, after beforeAll.
+    for (const [loaded, dbsOf] of [[case2, () => d2], [case3, () => d3]] as const) {
+        const id = loaded.definition.id;
+
+        it(`judges the recorded answer for ${id} again, live, and reaches the recorded outcome`, async () => {
+            const recorded = readTrace(traceFile(reports, id));
+            const result = await run(loaded, dbsOf(), { proposer: replayProposer(reports, id) });
+            expect(result.outcome).toBe(recorded.outcome);
+            expect(result.heldOut).toBe(recorded.heldOut);
+            expect(result.attempts.map((attempt) => [attempt.n, attempt.verdict])).toEqual(recorded.attempts.map((attempt) => [attempt.n, attempt.verdict]));
+            expect(result.finalSql).toBe(recorded.finalSql);
+        });
+
+        it(`says on every replayed attempt of ${id} that it is a replay, and it shows in the report`, async () => {
+            const recorded = readTrace(traceFile(reports, id));
+            const result = await run(loaded, dbsOf(), { proposer: replayProposer(reports, id) });
+            const replayedAttempts = result.attempts.filter((attempt) => attempt.n > 0);
+            expect(replayedAttempts.length).toBeGreaterThan(0);
+            for (const attempt of replayedAttempts) {
+                expect(attempt.source).toBe("replay");
+                expect(attempt.proposal?.replayedFrom).toBe(relative(process.cwd(), traceFile(reports, id)));
+                expect(attempt.proposal?.model, "the model of the recorded request").toBe(recorded.attempts.find((a) => a.n === attempt.n)?.proposal?.model);
+            }
+            const report = renderCaseReport(loaded, result);
+            expect(report).toContain("(no model was called in this run)");
+            expect(report).toContain("the recording shows what a model gave, not that it gives it today");
+        });
+    }
+
+    it("sends the case to a human, with the reason, when the recording cannot be read, and makes no answer up", async () => {
+        const dir = mkdtempSync(resolve(tmpdir(), "queryshift-replay-"));
+        try {
+            writeFileSync(traceFile(dir, "case-02"), "not json");
+            const result = await run(case2, d2, { proposer: replayProposer(dir, "case-02") });
+            expect(result.outcome).toBe("needs_human_review");
+            expect(result.reasons[0]).toMatchObject({ code: "proposer_failed" });
+            expect(result.reasons[0].message).toMatch(/cannot be read as a trace/);
+            expect(result.attempts).toHaveLength(1);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
     });
 });
 

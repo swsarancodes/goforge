@@ -1,32 +1,35 @@
 
- RUN  v2.1.9 /Users/saran/Downloads/experiments/goforge
+ RUN  v2.1.9 <repository root>
 
  ✓ queryshift/src/compare.test.ts (17 tests) 8ms
- ✓ queryshift/src/semantic.test.ts (19 tests) 96ms
- ✓ server/src/ai/governance.test.ts (17 tests) 350ms
+ ✓ queryshift/src/report.test.ts (12 tests) 5ms
+ ✓ queryshift/src/semantic.test.ts (19 tests) 69ms
+ ✓ server/src/ai/governance.test.ts (17 tests) 16ms
+ ✓ server/src/ai/modernize-query.test.ts (7 tests) 14ms
+ ✓ server/src/ai/structured.test.ts (13 tests) 20ms
 stderr | server/src/ai/openai.test.ts > the Responses call > answers in JSON mode again, once, when the model does not take a schema, and for no other kind of refusal
 OpenAI does not take a JSON schema for gpt-5.6-luna; answering in JSON mode instead.
 
- ✓ server/src/ai/openai.test.ts (18 tests) 779ms
-   ✓ the Responses call > turns what OpenAI refuses with into words that say what to do 362ms
- ✓ server/src/ai/modernize-query.test.ts (7 tests) 142ms
- ✓ server/src/ai/correct-query.test.ts (5 tests) 99ms
- ✓ queryshift/src/sql-guard.test.ts (38 tests) 23ms
- ✓ server/src/ai/structured.test.ts (13 tests) 72ms
- ✓ queryshift/src/mapping-apply.test.ts (6 tests) 6ms
- ✓ queryshift/src/loop.test.ts (31 tests) 9097ms
-   ✓ held-out data > builds the held-out database itself when none is given, and reports none for a case without held-out data 1568ms
-   ✓ the wall-clock limit in the loop > stops a runaway candidate, reports it as an error with evidence, and goes on to the next correction 1743ms
- ✓ queryshift/src/database.test.ts (9 tests) 9634ms
-   ✓ the wall-clock limit > stops a runaway query, quickly, and says so 405ms
-   ✓ the wall-clock limit > carries on with a fresh worker that has the same data, and anything set up through exec 4226ms
+ ✓ server/src/ai/openai.test.ts (18 tests) 171ms
+ ✓ queryshift/src/binds.test.ts (15 tests) 7ms
+ ✓ queryshift/src/replay-proposer.test.ts (6 tests) 4ms
+ ✓ queryshift/src/mapping-apply.test.ts (6 tests) 3ms
+ ✓ server/src/ai/plan-normalize.test.ts (2 tests) 5ms
+ ✓ queryshift/src/sql-guard.test.ts (38 tests) 14ms
+ ✓ queryshift/src/legacy-seed.test.ts (3 tests) 2ms
+ ✓ server/src/ai/correct-query.test.ts (5 tests) 7ms
+ ✓ queryshift/src/database.test.ts (9 tests) 8557ms
+   ✓ the wall-clock limit > stops a runaway query, quickly, and says so 413ms
+   ✓ the wall-clock limit > carries on with a fresh worker that has the same data, and anything set up through exec 4162ms
    ✓ the wall-clock limit > applies to the author's own invariant queries too 301ms
-   ✓ read-only execution > refuses to write even when the guard is bypassed, and leaves nothing behind 1508ms
- ✓ queryshift/src/cases.test.ts (37 tests) 13191ms
-   ✓ 'case-01': 'Customers and their active 2026 polic…' > judges every known candidate as the case says: the correct one passes, the wrong ones do not 315ms
+   ✓ read-only execution > refuses to write even when the guard is bypassed, and leaves nothing behind 1246ms
+ ✓ queryshift/src/loop.test.ts (40 tests) 8568ms
+   ✓ held-out data > builds the held-out database itself when none is given, and reports none for a case without held-out data 1488ms
+   ✓ the wall-clock limit in the loop > stops a runaway candidate, reports it as an error with evidence, and goes on to the next correction 1548ms
+ ✓ queryshift/src/cases.test.ts (45 tests) 11218ms
 
- Test Files  12 passed (12)
-      Tests  217 passed (217)
-   Start at  22:42:06
-   Duration  13.52s (transform 1.30s, setup 0ms, collect 6.04s, tests 33.50s, environment 2ms, prepare 1.61s)
+ Test Files  17 passed (17)
+      Tests  272 passed (272)
+   Start at  11:45:54
+   Duration  11.52s (transform 628ms, setup 0ms, collect 2.64s, tests 28.69s, environment 2ms, prepare 806ms)
 
