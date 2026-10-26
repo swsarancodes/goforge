@@ -124,6 +124,8 @@ export interface PlannedColumn {
     edited: ("name" | "type" | "default")[];
     /** The default Oracle has, as it stores it; null when there is none. */
     oracleDefault: string | null;
+    /** Why the default was not carried over, when it was dropped on purpose; absent otherwise. */
+    defaultDropped?: string;
     /** A query on the Oracle data that counts the values this type would change or lose, and the answer. Absent when nothing can be lost. */
     check?: DataCheck;
 }
@@ -290,7 +292,7 @@ export function planMigration(tables: OracleTable[], counts: Map<string, number>
             let note = conversionNote(column, type.type, pgDefault);
             if (edited.includes("type")) note = { status: note.status === "risk" ? "risk" : "changed", text: `You changed this to ${type.type}. ${note.text}` };
             if (droppedBecause) note = { ...note, text: `${note.text} Its default ${column.defaultValue} was not carried over: ${droppedBecause}.` };
-            return { ...fallback, pgType: type.type, kind: type.kind, pgDefault, note };
+            return { ...fallback, pgType: type.type, kind: type.kind, pgDefault, note, ...(droppedBecause ? { defaultDropped: droppedBecause } : {}) };
         });
 
         return {
@@ -387,7 +389,7 @@ export async function planOracleMigration(connection: oracledb.Connection, edits
 type FetchTypeHandler = NonNullable<oracledb.ExecuteOptions["fetchTypeHandler"]>;
 
 /** Rows as text PostgreSQL parses (numbers without a leading-dot form, dates as wall-clock text, instants as ISO), with binary as Buffers. */
-const migrationFetch: FetchTypeHandler = (metaData) => {
+export const migrationFetch: FetchTypeHandler = (metaData) => {
     switch (metaData.dbType) {
         case oracledb.DB_TYPE_NUMBER:
         case oracledb.DB_TYPE_BINARY_DOUBLE:
@@ -413,7 +415,7 @@ const migrationFetch: FetchTypeHandler = (metaData) => {
  * How a column is read from Oracle. Dates and timestamps are read as text made by Oracle itself: the driver hands them over as JavaScript
  * dates, and those turn the year 0001 into 1901 and depend on the server's time zone. Instants (WITH TIME ZONE) are read in UTC with an offset.
  */
-export function oracleSelectExpression(column: PlannedColumn): string {
+export function oracleSelectExpression(column: Pick<PlannedColumn, "oracleName" | "oracleType" | "pgType">): string {
     const name = oracleQuote(column.oracleName);
     const type = column.oracleType.toUpperCase();
     const digits = /\((\d+)\)/.exec(type)?.[1] ?? "6";
