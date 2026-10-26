@@ -5,6 +5,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { connectionLabel } from "@/lib/live-connection-api";
 import { countEdits } from "@/lib/migrations-api";
+import { ASSISTANT_NAME } from "./assistant";
 import { CLOUD, type Migration } from "./use-migration";
 
 /**
@@ -28,7 +29,7 @@ export const ConfirmBar: React.FC<{ migration: Migration }> = ({ migration }) =>
                 <div className="rounded-md border border-destructive/50 p-2 text-destructive" role="alert">
                     <p className="font-medium">This cannot be migrated as it stands:</p>
                     <ul className="list-disc pl-4">{plan.problems.map((problem) => <li key={problem}>{problem}</li>)}</ul>
-                    <p className="mt-1 text-muted-foreground">Ask the assistant to fix it, for example by dropping a default Oracle code cannot become.</p>
+                    <p className="mt-1 text-muted-foreground">Ask {ASSISTANT_NAME} to fix it, for example by dropping a default Oracle code cannot become.</p>
                 </div>
             )}
 
@@ -44,7 +45,7 @@ export const ConfirmBar: React.FC<{ migration: Migration }> = ({ migration }) =>
                     </ul>
                     <label htmlFor="accept-loss" className="flex cursor-pointer items-start gap-2">
                         <Switch id="accept-loss" checked={acceptLoss} onCheckedChange={setAcceptLoss} className="mt-0.5" />
-                        <span>I have read this and accept that these values change or are lost. Or ask the assistant for a type that keeps them.</span>
+                        <span>I have read this and accept that these values change or are lost. Or ask {ASSISTANT_NAME} for a type that keeps them.</span>
                     </label>
                 </div>
             )}

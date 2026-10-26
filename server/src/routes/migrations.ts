@@ -136,7 +136,7 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
     }));
 
     /**
-     * The assistant. The person's message and the plan go to the model, which answers with a reply and changes in a fixed set of operations;
+     * CosmicQuery, the assistant. The person's message and the plan go to the model, which answers with a reply and changes in a fixed set of operations;
      * each change is checked against the rules in `oracle-type-edits` and applied or refused with its reason, and the plan is built again from
      * the edits that stand. The model never touches the plan itself.
      */
@@ -163,7 +163,7 @@ export function createMigrationsRouter(deps: MigrationDeps = defaultMigrationDep
             if (controller.signal.aborted || res.writableEnded) return;
             const text = error instanceof Error ? error.message : String(error);
             const status = error instanceof ModelPolicyError ? 403 : error instanceof AiNotConfiguredError ? 503 : 502;
-            res.status(status).json({ error: status === 502 ? `The assistant could not answer: ${text}` : text });
+            res.status(status).json({ error: status === 502 ? `CosmicQuery could not answer: ${text}` : text });
         }
     }));
 

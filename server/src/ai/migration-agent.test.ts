@@ -54,7 +54,7 @@ describe("what the assistant may answer with", () => {
 
     it("tells the model the rules that keep it inside the plan", () => {
         const text = buildMigrationAgentInstructions();
-        for (const phrase of ["allowedPgTypes", "Never invent", "only that", "reset_column", "no access to the data"]) expect(text).toContain(phrase);
+        for (const phrase of ["allowedPgTypes", "Never invent", "only that", "reset_column", "no access to the data", "You are CosmicQuery"]) expect(text).toContain(phrase);
     });
 });
 

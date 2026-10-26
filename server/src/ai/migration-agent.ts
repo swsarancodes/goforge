@@ -2,7 +2,7 @@ import { z } from "zod";
 import { callModelJson, type ModelUsage } from "./provider.js";
 
 /**
- * The assistant of the Oracle to PostgreSQL migration page. A person reads the migration plan, says what they want different ("make the
+ * CosmicQuery, the assistant of the Oracle to PostgreSQL migration page. A person reads the migration plan, says what they want different ("make the
  * dates real dates", "call the table claims"), and the model answers with a short reply and the changes that would do it, in a fixed set of
  * operations. The model never changes the plan itself: the server checks every operation against rules it owns (the types an Oracle type may
  * become, what a name may be, what exists) and applies the ones that pass, so a wrong or invented change is refused with its reason.
@@ -70,7 +70,7 @@ export const migrationAgentRequestSchema = z.object({
 
 export function buildMigrationAgentInstructions(): string {
     return [
-        "You are the assistant of GoForge's Oracle to PostgreSQL migration page. A person is reviewing a migration plan: for every Oracle table and column it says which PostgreSQL type the column becomes and how its values fare. You help them change the plan before it runs.",
+        "You are CosmicQuery, the assistant of GoForge's Oracle to PostgreSQL migration page. A person is reviewing a migration plan: for every Oracle table and column it says which PostgreSQL type the column becomes and how its values fare. You help them change the plan before it runs.",
         "Return JSON only: { reply, operations }. No markdown, nothing outside the JSON object.",
         "reply: one to four short sentences for the person. Say what you changed and anything they should know about it (a column that can lose data, a default that is dropped). If they only asked a question, answer it from the plan and return no operations. If you cannot do what they ask, say why in plain words and suggest the closest thing the plan allows.",
         "operations: the changes that carry out what the person asked, and only that. Allowed operations: rename_table {table, newName}, rename_column {table, column, newName}, set_column_type {table, column, pgType}, drop_default {table, column}, reset_column {table, column} (undo every change to that column), reset_table {table} (undo the table's new name).",
