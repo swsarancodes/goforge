@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from "react";
-import { Check, Copy, Loader2, Play, Terminal } from "lucide-react";
+import { Check, Columns2, Copy, Loader2, Play, Terminal } from "lucide-react";
 import { toast } from "sonner";
 import CodeEditor from "@/components/code-editor";
 import { RowsTable } from "@/components/rows-table";
@@ -34,9 +34,14 @@ interface ResultPanelProps {
     previewBlocker: string | undefined;
     onPreview: () => void;
     onShowChecks: () => void;
+    /** Run the original on Oracle and the conversion on PostgreSQL together, and show the two outputs side by side. */
+    onRunBoth: () => void;
+    /** Why that cannot run yet; undefined when it can. */
+    bothBlocker: string | undefined;
+    bothRunning: boolean;
 }
 
-export const ResultPanel: React.FC<ResultPanelProps> = ({ outcome, preview, previewBlocker, onPreview, onShowChecks }) => {
+export const ResultPanel: React.FC<ResultPanelProps> = ({ outcome, preview, previewBlocker, onPreview, onShowChecks, onRunBoth, bothBlocker, bothRunning }) => {
     const openInSqlEditor = useOpenInSqlEditor();
     const [copied, setCopied] = useState(false);
     const { tone, title, detail } = verdict(outcome);
@@ -79,7 +84,11 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ outcome, preview, prev
                     {preview.status === "running" ? <Loader2 className="size-3.5 animate-spin" /> : <Play className="size-3.5" />}
                     Run on PostgreSQL
                 </Button>
-                {previewBlocker && <span className="text-[11px] text-muted-foreground">{previewBlocker}</span>}
+                <Button size="sm" onClick={onRunBoth} disabled={Boolean(bothBlocker) || bothRunning} title={bothBlocker ?? "Run the original on Oracle and the conversion on PostgreSQL at the same time, and compare what they return"} className="h-8 gap-1.5 text-xs">
+                    {bothRunning ? <Loader2 className="size-3.5 animate-spin" /> : <Columns2 className="size-3.5" />}
+                    Run both and compare
+                </Button>
+                {(bothBlocker ?? previewBlocker) && <span className="text-[11px] text-muted-foreground">{bothBlocker ?? previewBlocker}</span>}
             </div>
 
             <div className={cn("min-h-[160px]", preview.status === "idle" ? "flex-1" : "h-48 shrink-0")}>
@@ -104,7 +113,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ outcome, preview, prev
                         <RowsTable columns={preview.response.result.columns} rows={formatted} emptyText="The query returned no rows." />
                     </div>
                 </div>
-                <OutputCheck result={preview.response.result} dialectLabel={LEGACY_DIALECTS.find((candidate) => candidate.value === outcome.dialect)?.label ?? outcome.dialect} originalSql={outcome.original} dialect={outcome.dialect} />
+                <OutputCheck result={preview.response.result} dialectLabel={LEGACY_DIALECTS.find((candidate) => candidate.value === outcome.dialect)?.label ?? outcome.dialect} />
                 </>
             )}
         </div>

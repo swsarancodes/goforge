@@ -32,7 +32,7 @@ export const numberText = (value: string): string => value.replace(/^(-?)\./, "$
 
 type FetchTypeHandler = NonNullable<oracledb.ExecuteOptions["fetchTypeHandler"]>;
 
-const fetchTypeHandler: FetchTypeHandler = (metaData) => {
+export const fetchTypeHandler: FetchTypeHandler = (metaData) => {
     switch (metaData.dbType) {
         // numbers as Oracle prints them, so nothing is lost to a JavaScript double
         case oracledb.DB_TYPE_NUMBER:
@@ -64,6 +64,29 @@ const commandOf = (sql: string): string => {
     const word = stripped.match(/^[A-Za-z]+/)?.[0].toUpperCase() ?? "";
     return word === "WITH" ? "SELECT" : word;
 };
+
+/** What the driver returned for one statement, in the shape the pages show: columns, every cell as text (a long one cut), at most `cap` rows. */
+export function shapeResult(result: { metaData?: unknown[]; rows?: unknown[]; rowsAffected?: number }, statementText: string, cap: number): StatementResult {
+    const columns: ResultColumn[] = ((result.metaData ?? []) as { name: string; dbTypeName?: string }[]).map((column) => ({ name: column.name, dataType: column.dbTypeName ?? "unknown" }));
+    const raw = (result.rows ?? []) as unknown[][];
+    const truncatedCells: [number, number][] = [];
+    const rows = raw.slice(0, cap).map((cells, rowIndex) =>
+        cells.map((cell, columnIndex) => {
+            if (cell === null || cell === undefined) return null;
+            const { value, truncated } = truncateCell(String(cell));
+            if (truncated) truncatedCells.push([rowIndex, columnIndex]);
+            return value;
+        }),
+    );
+    return {
+        command: commandOf(statementText),
+        rowCount: columns.length > 0 ? Math.min(raw.length, cap) : (result.rowsAffected ?? null),
+        columns,
+        rows,
+        truncated: raw.length > cap,
+        truncatedCells,
+    };
+}
 
 /** The ORA- code and where in the script the error is, for the editor to mark. */
 export function mapOracleError(error: unknown, statement: OracleStatement, scriptLength: number): RunError {
@@ -115,25 +138,7 @@ export const oracleSql = {
                 for (const statement of statements) {
                     current = statement;
                     const result = await connection.execute(statement.text, [], { autoCommit: true, maxRows: ROW_CAP + 1, fetchTypeHandler });
-                    const columns: ResultColumn[] = (result.metaData ?? []).map((column: { name: string; dbTypeName?: string }) => ({ name: column.name, dataType: column.dbTypeName ?? "unknown" }));
-                    const raw = (result.rows ?? []) as unknown[][];
-                    const truncatedCells: [number, number][] = [];
-                    const rows = raw.slice(0, ROW_CAP).map((cells, rowIndex) =>
-                        cells.map((cell, columnIndex) => {
-                            if (cell === null || cell === undefined) return null;
-                            const { value, truncated } = truncateCell(String(cell));
-                            if (truncated) truncatedCells.push([rowIndex, columnIndex]);
-                            return value;
-                        }),
-                    );
-                    results.push({
-                        command: commandOf(statement.text),
-                        rowCount: columns.length > 0 ? Math.min(raw.length, ROW_CAP) : (result.rowsAffected ?? null),
-                        columns,
-                        rows,
-                        truncated: raw.length > ROW_CAP,
-                        truncatedCells,
-                    });
+                    results.push(shapeResult(result, statement.text, ROW_CAP));
                 }
                 return { ok: true as const, results, elapsedMs: Math.round(performance.now() - startedAt), transaction: CLOSED };
             } catch (error) {

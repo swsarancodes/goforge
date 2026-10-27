@@ -9,6 +9,7 @@ import { neutralizeParameters } from "./engine/convert";
 import { buildExampleQuery } from "./example-query";
 import { takeQueryHandoff } from "./query-handoff";
 import { ModernizeOutcome, modernize } from "./modernize";
+import { defaultIgnoreOrder, isSelectQuery, runBoth, runBothBlocker, type BothState } from "./run-both";
 import { schemaFromDatabase } from "./schema-context";
 import type { LegacyDialect } from "./types";
 
@@ -16,6 +17,7 @@ const USE_AI_KEY = "goforge.modernizer.ai";
 const MODE_KEY = "goforge.modernizer.mode";
 const CONNECTION_KEY = "goforge.modernizer.connection";
 const SQL_EDITOR_CONNECTION_KEY = "goforge.sql.connection";
+const ORACLE_KEY = "goforge.modernizer.oracle";
 
 const read = (key: string): string | null => {
     try {
@@ -71,6 +73,11 @@ export function useModernizer() {
 
     const [connections, setConnections] = useState<SavedConnection[]>([]);
     const [connectionId, setConnectionId] = useState<string | undefined>(undefined);
+    // The Oracle database the original query is run on, to see what it returns next to the conversion.
+    const [oracleDatabases, setOracleDatabases] = useState<SavedConnection[]>([]);
+    const [oracleId, setOracleId] = useState<string | undefined>(undefined);
+    const [both, setBoth] = useState<BothState>({ status: "idle" });
+    const [ignoreOrder, setIgnoreOrder] = useState(true);
     const [aiStatus, setAiStatus] = useState<AiStatus | undefined>(undefined);
     const [chosenMode, setChosenMode] = useState<ModernizeMode>(initialMode);
 
@@ -94,10 +101,19 @@ export function useModernizer() {
                 if (pick) setConnectionId(pick.id);
             })
             .catch(() => setConnections([]));
+        listSavedConnections("oracle")
+            .then((list) => {
+                setOracleDatabases(list);
+                const remembered = read(ORACLE_KEY);
+                const pick = list.find((candidate) => candidate.id === remembered) ?? (list.length === 1 ? list[0] : undefined);
+                if (pick) setOracleId(pick.id);
+            })
+            .catch(() => setOracleDatabases([]));
         return () => controller.abort();
     }, []);
 
     const connection = connections.find((candidate) => candidate.id === connectionId);
+    const oracleConnection = oracleDatabases.find((candidate) => candidate.id === oracleId);
     const aiConfigured = aiStatus?.configured === true;
     // The model modes need a model. Without one the rules do everything, whatever was chosen.
     const mode: ModernizeMode = aiConfigured ? chosenMode : "rules";
@@ -107,6 +123,11 @@ export function useModernizer() {
     const changeConnection = useCallback((id: string | undefined) => {
         setConnectionId(id);
         write(CONNECTION_KEY, id ?? "none");
+    }, []);
+
+    const changeOracle = useCallback((id: string) => {
+        setOracleId(id);
+        write(ORACLE_KEY, id);
     }, []);
 
     const changeMode = useCallback((value: ModernizeMode) => {
@@ -120,6 +141,8 @@ export function useModernizer() {
         abortRef.current = controller;
         setRunning(true);
         setPreview({ status: "idle" });
+        setBoth({ status: "idle" });
+        setIgnoreOrder(defaultIgnoreOrder(sql));
         setStage("Converting with the rules");
         try {
             const result = await modernize(
@@ -167,5 +190,21 @@ export function useModernizer() {
         }
     }, [connection, previewSql, previewBlocker]);
 
-    return { dialect, setDialect, sql, setSql, outcome, tab, setTab, running, stage, run, stop, connections, connection, changeConnection, aiStatus, aiConfigured, mode, chosenMode, changeMode, ghostText, schema, preview, runPreview, previewBlocker };
+    const bothBlocker = outcome
+        ? runBothBlocker({ dialect: outcome.dialect, oracleDatabases: oracleDatabases.length, oracleChosen: Boolean(oracleConnection), originalIsSelect: isSelectQuery(outcome.original), bindsInOriginal: neutralizeParameters(outcome.original, outcome.dialect) !== outcome.original, previewBlocker })
+        : "Convert a query first.";
+
+    /** The original on Oracle and the conversion on PostgreSQL, started together; each a read-only preview of the first rows. */
+    const runBothQueries = useCallback(async () => {
+        if (!outcome || !connection || !oracleConnection || bothBlocker || both.status === "running") return;
+        setBoth({ status: "running" });
+        setTab("output");
+        const result = await runBoth(
+            () => previewQueryOnConnection(oracleConnection.id, outcome.original),
+            () => previewQueryOnConnection(connection.id, outcome.sql),
+        );
+        setBoth({ status: "done", ...result });
+    }, [outcome, connection, oracleConnection, bothBlocker, both.status]);
+
+    return { dialect, setDialect, sql, setSql, outcome, tab, setTab, running, stage, run, stop, connections, connection, changeConnection, aiStatus, aiConfigured, mode, chosenMode, changeMode, ghostText, schema, preview, runPreview, previewBlocker, oracleDatabases, oracleConnection, changeOracle, both, bothBlocker, runBothQueries, ignoreOrder, setIgnoreOrder };
 }

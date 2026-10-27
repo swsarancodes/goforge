@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { compareOutput, type OutputComparison } from "@/features/query-modernizer/compare-output";
+import { compareResultRows, type OutputComparison } from "@/features/query-modernizer/compare-output";
 import { checkPostgresSyntax } from "@/features/query-modernizer/engine/checks";
 import { applyMapping, type MappingRow } from "@/features/query-modernizer/engine/mapping-apply";
 import { modernize } from "@/features/query-modernizer/modernize";
@@ -88,8 +88,7 @@ export function useQueryCheck() {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [postgresId]);
 
-    const compare = (oracle: Rows, postgres: Rows, ignore: boolean) =>
-        compareOutput({ columns: oracle.columns.map((column) => column.name), rows: oracle.rows.map((row) => row.map((cell) => cell ?? "")) }, { columns: postgres.columns.map((column) => column.name), rows: postgres.rows, truncated: postgres.truncated }, { ignoreOrder: ignore });
+    const compare = (oracle: Rows, postgres: Rows, ignore: boolean) => compareResultRows(oracle, postgres, { ignoreOrder: ignore });
 
     const runOnPostgres = async (sql: string, oracle: Rows) => {
         if (!postgresId) return;

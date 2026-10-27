@@ -1,6 +1,4 @@
-import { useMemo } from "react";
 import { Loader2 } from "lucide-react";
-import { RowsTable } from "@/components/rows-table";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -9,25 +7,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { ComparisonSummary } from "@/features/query-modernizer/components/comparison-summary";
 import { connectionLabel } from "@/lib/live-connection-api";
 import { cn } from "@/lib/utils";
-import { formatRows } from "@/utils/data-view/format-rows";
-import { useQueryCheck, type Rows } from "./use-query-check";
-
-const Result: React.FC<{ title: string; rows: Rows | undefined; marked: Set<number> | undefined; waiting: boolean }> = ({ title, rows, marked, waiting }) => {
-    const formatted = useMemo(() => (rows ? formatRows(rows.columns, rows.rows) : []), [rows]);
-    return (
-        <section className="flex min-h-0 min-w-0 flex-col rounded-lg border bg-card" aria-label={`${title} result`}>
-            <header className="flex items-center justify-between gap-2 border-b px-3 py-2 text-xs">
-                <p className="font-medium">{title}</p>
-                <p className="text-muted-foreground" data-testid={`${title.toLowerCase()}-count`}>
-                    {rows ? `${rows.rows.length.toLocaleString()}${rows.truncated ? "+" : ""} row${rows.rows.length === 1 ? "" : "s"}, ${rows.columns.length} column${rows.columns.length === 1 ? "" : "s"}` : waiting ? "Running…" : "Not run yet"}
-                </p>
-            </header>
-            <div className="max-h-[60vh] min-h-48 overflow-auto">
-                {rows ? <RowsTable columns={rows.columns} rows={formatted} emptyText="No rows returned." rowClassName={(index) => (marked?.has(index) ? "bg-destructive/10" : undefined)} /> : <p className="p-4 text-xs text-muted-foreground">{waiting ? "Waiting for the database…" : "Run the query to see the rows here."}</p>}
-            </div>
-        </section>
-    );
-};
+import { ResultGrid } from "./result-grid";
+import { useQueryCheck } from "./use-query-check";
 
 /**
  * The query check: one question asked of both databases. An Oracle query runs on the Oracle database, is converted, and the conversion runs
@@ -110,8 +91,8 @@ const QueryCheckPage: React.FC = () => {
                 {marked && (marked.left.size > 0 || marked.right.size > 0) && <p className={cn("text-xs text-muted-foreground")}>Rows marked in red have no equal row on the other side.</p>}
 
                 <div className="grid gap-3 lg:grid-cols-2">
-                    <Result title="Oracle" rows={oracleRows} marked={marked?.left} waiting={Boolean(busy)} />
-                    <Result title="PostgreSQL" rows={pgRows} marked={marked?.right} waiting={Boolean(busy) && Boolean(oracleRows)} />
+                    <ResultGrid title="Oracle" rows={oracleRows} marked={marked?.left} waiting={Boolean(busy)} />
+                    <ResultGrid title="PostgreSQL" rows={pgRows} marked={marked?.right} waiting={Boolean(busy) && Boolean(oracleRows)} />
                 </div>
             </div>
         </div>

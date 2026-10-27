@@ -13,6 +13,8 @@ import { ChecksPanel } from "./components/checks-panel";
 import { CompareView } from "./components/compare-view";
 import { IndexRecommendations } from "./components/index-recommendations";
 import { ResultPanel } from "./components/result-panel";
+import { RunBothPanel } from "./components/run-both-panel";
+import { connectionLabel } from "@/lib/live-connection-api";
 import { ModernizeMode, useModernizer } from "./use-modernizer";
 import { LEGACY_DIALECTS, LegacyDialect } from "./types";
 
@@ -78,6 +80,23 @@ const SingleQueryView: React.FC = () => {
                                 </SelectContent>
                             </Select>
                         </label>
+                        {m.dialect === "oracle" && (
+                            <div className="flex min-w-0 max-w-full items-center gap-2 text-xs text-muted-foreground">
+                                <span className="shrink-0" title="The Oracle database the original query is run on, to compare what it returns with the conversion">Original on</span>
+                                <Select value={m.oracleConnection?.id} onValueChange={m.changeOracle} disabled={m.oracleDatabases.length === 0}>
+                                    <SelectTrigger size="sm" className="h-8 w-56 min-w-0 max-w-full text-xs" aria-label="Original on" title={m.oracleConnection?.name}>
+                                        <SelectValue placeholder={m.oracleDatabases.length === 0 ? "No Oracle database" : "Choose a database"} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        {m.oracleDatabases.map((connection) => (
+                                            <SelectItem key={connection.id} value={connection.id}>
+                                                {connectionLabel(connection, m.oracleDatabases)}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </div>
+                        )}
                         <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground" title={m.aiConfigured ? undefined : (m.aiStatus?.problem ?? "Set OPENAI_API_KEY in server/.env (and pick a model under Schema Change → AI settings) to turn the model on")}>
                             <span id="modernize-mode-label" className="shrink-0">Converted by</span>
                             <ToggleGroup
@@ -140,6 +159,9 @@ const SingleQueryView: React.FC = () => {
                                     <TabsTrigger value="result" className="text-xs px-2.5">
                                         Result
                                     </TabsTrigger>
+                                    <TabsTrigger value="output" className="text-xs px-2.5">
+                                        Output
+                                    </TabsTrigger>
                                     <TabsTrigger value="checks" className="text-xs px-2.5">
                                         Checks
                                         {outcome && checkCount > 0 && <span className="ml-1 text-muted-foreground">{checkCount}</span>}
@@ -163,7 +185,10 @@ const SingleQueryView: React.FC = () => {
                                 {outcome ? (
                                     <>
                                         <TabsContent value="result" className="m-0 h-full">
-                                            <ResultPanel outcome={outcome} preview={m.preview} previewBlocker={m.previewBlocker} onPreview={m.runPreview} onShowChecks={() => m.setTab("checks")} />
+                                            <ResultPanel outcome={outcome} preview={m.preview} previewBlocker={m.previewBlocker} onPreview={m.runPreview} onShowChecks={() => m.setTab("checks")} bothBlocker={m.bothBlocker} bothRunning={m.both.status === "running"} onRunBoth={() => void m.runBothQueries()} />
+                                        </TabsContent>
+                                        <TabsContent value="output" className="m-0">
+                                            <RunBothPanel state={m.both} oracleName={m.oracleConnection?.name} postgresName={m.connection?.name} originalSql={outcome.original} blocker={m.bothBlocker} onRun={() => void m.runBothQueries()} ignoreOrder={m.ignoreOrder} onIgnoreOrderChange={m.setIgnoreOrder} />
                                         </TabsContent>
                                         <TabsContent value="checks" className="m-0">
                                             <ChecksPanel outcome={outcome} hasTables={hasTables} />

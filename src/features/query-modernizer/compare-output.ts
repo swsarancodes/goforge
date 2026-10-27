@@ -183,3 +183,16 @@ export function compareOutput(expected: ExpectedOutput, actual: ActualOutput, op
     result.matches = !rowsDiffer && (actual.truncated ? true : expected.rows.length === actual.rows.length);
     return result;
 }
+
+/** The rows an old database and PostgreSQL each returned for the same question, compared by value. The old side's NULL is the same cell as an empty string, as it is in Oracle. */
+export function compareResultRows(
+    original: { columns: { name: string }[]; rows: (string | null)[][] },
+    converted: { columns: { name: string }[]; rows: (string | null)[][]; truncated: boolean },
+    options: { ignoreOrder: boolean },
+): OutputComparison {
+    return compareOutput(
+        { columns: original.columns.map((column) => column.name), rows: original.rows.map((row) => row.map((cell) => cell ?? "")) },
+        { columns: converted.columns.map((column) => column.name), rows: converted.rows, truncated: converted.truncated },
+        options,
+    );
+}

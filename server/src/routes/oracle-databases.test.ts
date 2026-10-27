@@ -92,13 +92,19 @@ describe("/api/oracle-databases", () => {
         const pages: [string, string][] = [
             ["GET", `/api/connections/${made.id}/introspect`],
             ["POST", `/api/connections/${made.id}/validate-sql`],
-            ["POST", `/api/connections/${made.id}/query-preview`],
             ["GET", `/api/connections/${made.id}/schema-change/catalog`],
         ];
         for (const [method, route] of pages) {
             const response = await api(method, route, method === "POST" ? { sql: "SELECT 1" } : undefined);
             expect(response.status, `${method} ${route}`).toBe(404);
             expect(response.body?.error, `${method} ${route}`).toMatch(/not found/i);
+        }
+        // the Modernizer's preview reads Oracle too (the original query, next to the conversion), but only ever one SELECT: anything else is
+        // refused before the database is touched
+        for (const sql of ["DELETE FROM a", "UPDATE a SET id = 1", "SELECT 1 FROM dual; DELETE FROM a", "BEGIN NULL; END;"]) {
+            const response = await api("POST", `/api/connections/${made.id}/query-preview`, { sql });
+            expect(response.status, sql).toBe(400);
+            expect(response.body?.error, sql).toMatch(/one SELECT at a time/i);
         }
         // the Data page reads Oracle too: its table list and rows are found (a request with no table is refused for that, not as "not found")
         expect((await api("GET", `/api/connections/${made.id}/data`)).status).toBe(400);
